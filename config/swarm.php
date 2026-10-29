@@ -901,6 +901,26 @@ return [
              * (the default).
              */
             'stale_warning_threshold_seconds' => (int) env('SWARM_DURABLE_RELAY_STALE_WARNING_THRESHOLD_SECONDS', 0),
+
+            /*
+             * Adaptive idle sleep for `swarm:relay --daemon`, the long-lived relay
+             * process (see docs/maintenance.md, "Daemon relay"). After a cycle that
+             * moved durable or callback rows the daemon sleeps min_sleep_ms; after
+             * a cycle that did not (idle, audit-only, transient failures, or a held
+             * lane) the sleep grows by backoff_multiplier up to max_sleep_ms. So
+             * max_sleep_ms is the longest a new row waits for the next idle cycle
+             * to start, and roughly how long a `queue:restart` takes to be noticed.
+             *
+             * The daemon validates these once at start and fails loud on a bad
+             * value: whole milliseconds, 1 <= min_sleep_ms <= max_sleep_ms <=
+             * 60000, and a multiplier from 1 to 10. Restart the daemon to apply a
+             * change. Scheduled (non-daemon) runs ignore this block.
+             */
+            'daemon' => [
+                'min_sleep_ms' => env('SWARM_DURABLE_RELAY_DAEMON_MIN_SLEEP_MS', 100),
+                'max_sleep_ms' => env('SWARM_DURABLE_RELAY_DAEMON_MAX_SLEEP_MS', 3000),
+                'backoff_multiplier' => env('SWARM_DURABLE_RELAY_DAEMON_BACKOFF_MULTIPLIER', 2.0),
+            ],
         ],
         'webhooks' => [
             'enabled' => env('SWARM_WEBHOOKS_ENABLED', false),
