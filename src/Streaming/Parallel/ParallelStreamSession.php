@@ -341,7 +341,8 @@ final class ParallelStreamSession
 
         if ($cancel) {
             foreach ($this->processes as $process) {
-                if ($process->running()) {
+                // Older framework releases' FakeInvokedProcess has no stop().
+                if ($process->running() && method_exists($process, 'stop')) {
                     $process->stop($this->cancelGraceMilliseconds / 1000);
                 }
             }

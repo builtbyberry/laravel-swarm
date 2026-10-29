@@ -70,7 +70,10 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   widened `PendingProcess::start()` to return `InvokedProcess|FakeInvokedProcess`,
   and the parallel stream session's internal process list was typed as real
   processes only, so `composer analyse` failed on the stable-latest and 13.x-dev
-  lanes. The type now names both. Nothing changes at runtime.
+  lanes. The type now names both. Older 13.x releases' `FakeInvokedProcess` has
+  no `stop()`, so cancelling a session now skips stopping a faked process that
+  lacks it, where it used to fail with an undefined-method error. Real processes
+  are stopped exactly as before.
 
 ## v0.28.1 - 2026-10-10
 
