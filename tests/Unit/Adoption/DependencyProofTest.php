@@ -131,7 +131,9 @@ it('parses the actual nightly workflow and requires hard gates after verified mo
     $commands = implode("\n", $runs);
     expect($job['name'])->toBe('PHP 8.5 - Laravel 13.x-dev / AI stable');
     expect($commands)->toContain('"laravel/framework:13.x-dev#${SWARM_FRAMEWORK_DEV_REF}"', 'verify-adoption-dependencies.php moving-dev')
-        ->not->toContain('laravel/ai:', 'SWARM_AI_DEV_REF', '1.x-dev', '0.x-dev', '|| true');
+        // One needle per call: a negated multi-needle toContain passes when any needle is absent.
+        ->not->toContain('laravel/ai:')->not->toContain('SWARM_AI_DEV_REF')->not->toContain('1.x-dev')
+        ->not->toContain('0.x-dev')->not->toContain('|| true');
     $verify = strpos($commands, 'verify-adoption-dependencies.php moving-dev');
     foreach (['composer test:ci', 'composer test:process-concurrency:ci', 'composer analyse', 'composer test:compliance', 'composer lint'] as $gate) {
         expect($runs)->toContain($gate);
@@ -365,12 +367,12 @@ it('captures official branch refs before pinning and restores manifests before v
         expect($capture['shell'])->toBe('bash');
         expect($capture)->not->toHaveKey('continue-on-error');
         expect($capture['run'])->toContain('git ls-remote --exit-code', 'https://github.com/laravel/framework.git refs/heads/13.x SWARM_FRAMEWORK_DEV_REF', 'date -u')
-            ->not->toContain('laravel/ai.git', 'SWARM_AI_DEV_REF');
+            ->not->toContain('laravel/ai.git')->not->toContain('SWARM_AI_DEV_REF');
         $runs = array_values(array_filter(array_column($job['steps'], 'run')));
         $commands = implode("\n", $runs);
         expect(strpos($commands, '"laravel/framework:13.x-dev#${SWARM_FRAMEWORK_DEV_REF}"'))->toBeGreaterThan(strpos($commands, 'git ls-remote --exit-code'));
         // The moving lanes take laravel/ai's latest stable release, never its development branch.
-        expect($commands)->not->toContain('laravel/ai:', 'SWARM_AI_DEV_REF', '1.x-dev');
+        expect($commands)->not->toContain('laravel/ai:')->not->toContain('SWARM_AI_DEV_REF')->not->toContain('1.x-dev');
         $restore = strpos($commands, 'cp /tmp/swarm-production-composer.json composer.json');
         $verify = strpos($commands, 'php .github/workflows/verify-adoption-dependencies.php');
         expect($restore)->toBeGreaterThan(strpos($commands, 'composer update'));
