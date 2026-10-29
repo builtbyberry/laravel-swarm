@@ -44,6 +44,25 @@ single bare `swarm:relay` schedule entry, but monitoring may:
   [Command overlap leases](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/maintenance.md#command-overlap-leases) for the
   split-cadence schedule and the health thresholds a slower lane needs.
 
+### Resuming a run that was paused while waiting
+
+`resume()` on a durable run paused in a signal or child-swarm wait now returns it
+to `waiting` instead of `pending`, and no step is queued. Code that resumed such a
+run and expected its next step to run must now let the wait be released: deliver
+the signal, let the child finish, or let `swarm:recover` time the wait out.
+`DurableResumeResult::$status` is `DurableLifecycleStatus::Waiting` for these
+runs.
+
+- A signal delivered while the run was paused is recorded, not accepted. Re-send
+  it after the run resumes, with a **new** idempotency key; the old key returns
+  the earlier delivery as a duplicate.
+- An application transaction that already holds the run (for example one that
+  paused it) and then resumes it can deadlock with a worker releasing one of the
+  run's waits at that moment. The database aborts one side and rolls it back;
+  retry it.
+- During a rolling deploy, workers still on the old code keep the old behaviour
+  until they are replaced.
+
 ## Upgrading to v0.28.1
 
 This patch deliberately departs from the additive-only patch policy stated
