@@ -105,6 +105,12 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   the exact 13.16.0 release that proves the declared floor. The package's
   requirements and advisory policy are unchanged, and any other advisory against
   13.16.0 still fails the lane.
+- CI's moving-development lanes (the PR/nightly lane and the moving-dev rows of
+  the real-database jobs) now run Laravel `13.x-dev` with the latest stable
+  `laravel/ai` 1.x release, instead of `laravel/ai`'s unreleased `1.x` branch.
+  That branch's head (laravel/ai#1191, which returns tool failures to the model
+  instead of rethrowing them) failed four native-capability tests on every pull
+  request. The package's requirements are unchanged (#603).
 - Static analysis passes again on Laravel 13.39.0 and later. That release
   widened `PendingProcess::start()` to return `InvokedProcess|FakeInvokedProcess`,
   and the parallel stream session's internal process list was typed as real

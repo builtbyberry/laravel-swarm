@@ -91,9 +91,10 @@ suite without collecting coverage. PHPStan retains its separate existing
 `--memory-limit=2G` setting.
 
 **Moving development proof** — PR/nightly and real-database canaries resolve
-official Laravel AI `1.x-dev` and Laravel `13.x-dev`. Capture official branch
-heads at resolution time, temporarily pin those source refs, and verify installed
-and lock identities against the captured refs. Matching two arbitrary SHAs is not
+official Laravel `13.x-dev` with the latest stable Laravel AI 1.x release.
+Capture the official framework branch head at resolution time, temporarily pin
+that source ref, and verify installed and lock identities against the captured
+ref; Laravel AI must resolve a stable 1.x release from its official source. Matching two arbitrary SHAs is not
 official provenance. Restore the production manifest before package-contract
 tests. The separate post-main moving-development run remains a shipping gate.
 

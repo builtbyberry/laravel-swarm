@@ -792,14 +792,16 @@ pre-tag proof. The daily mutation workflow is informational and uses
 `continue-on-error: true`. The maintainer reviews both weekly as part of
 release-readiness and again before tagging any release.
 
-### Nightly Laravel 13.x and Laravel AI 1.x moving branches
+### Nightly Laravel 13.x moving branch
 
 `.github/workflows/nightly.yml`
 
-- **Purpose.** Canary against the exact official branch heads of
-  `laravel/framework:13.x-dev` and `laravel/ai:1.x-dev`. Surfaces breaking
-  upstream changes before a tagged release reaches the package's supported
-  version matrix.
+- **Purpose.** Canary against the exact official branch head of
+  `laravel/framework:13.x-dev`, with the latest stable `laravel/ai` 1.x
+  release. Surfaces breaking framework changes before a tagged Laravel release
+  reaches the package's supported version matrix. Laravel AI's unreleased 1.x
+  branch is not tested, so a `laravel/ai` change first shows up on the
+  stable-latest lanes once it is tagged.
 - **What it runs.** `composer test:ci` (the Unit, Feature, and Installer suites
   across four concurrent ParaTest workers, with a fresh worker for every
   parallel test-file assignment, followed by the database-heavy `ci-serial`
@@ -818,9 +820,9 @@ release-readiness and again before tagging any release.
   from the failed test, analysis, compliance, or lint gate. Re-run once when
   the evidence points to transient network or package-source failure. If the
   failure reproduces, file an issue tagged `laravel-canary` with the pinned
-  Laravel or Laravel AI commit, the failing gate, and the affected package
-  code, then keep the release gate closed until the incompatibility or workflow
-  defect is resolved.
+  Laravel commit and resolved Laravel AI release, the failing gate, and the
+  affected package code, then keep the release gate closed until the
+  incompatibility or workflow defect is resolved.
 
   Per-file worker startup is intentionally slower than persistent workers. It
   prevents suite growth or file-order changes from carrying accumulated process

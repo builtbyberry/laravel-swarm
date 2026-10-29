@@ -52,12 +52,13 @@ function adoptionDependencyErrors(array $manifest, array $lock, array $installed
             if (! preg_match('/^v?4\.\d+\.\d+$/D', $version) || version_compare(ltrim($version, 'v'), $name === 'pestphp/pest' ? '4.7.0' : '4.1.0', '<')) {
                 $errors[] = $name.' compatibility lane must execute the supported Pest 4 toolchain.';
             }
-        } elseif ($lane === 'moving-dev') {
+        } elseif ($lane === 'moving-dev' && $name === 'laravel/framework') {
+            // Only the framework moves: laravel/ai resolves its latest stable release in every lane.
             $expected = $expectedRefs[$name] ?? '';
             if (! is_string($expected) || ! preg_match('/^[a-f0-9]{40}$/D', $expected) || $ref !== $expected) {
                 $errors[] = $name.' must match the captured official branch reference.';
             }
-            if ($version !== ($name === 'laravel/ai' ? '1.x-dev' : '13.x-dev')) {
+            if ($version !== '13.x-dev') {
                 $errors[] = $name.' did not resolve the exact compatible moving development branch.';
             }
         } elseif ($name === 'laravel/ai') {
@@ -89,7 +90,6 @@ if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === __FILE__) {
         $read = fn (string $path): array => json_decode(file_get_contents($path), true, flags: JSON_THROW_ON_ERROR);
         $lock = $read($root.'/composer.lock');
         $errors = adoptionDependencyErrors($read($manifestPath), $lock, $read($root.'/vendor/composer/installed.json'), $lane, [
-            'laravel/ai' => getenv('SWARM_AI_DEV_REF'),
             'laravel/framework' => getenv('SWARM_FRAMEWORK_DEV_REF'),
         ]);
         foreach (array_merge($lock['packages'] ?? [], $lock['packages-dev'] ?? []) as $p) {
