@@ -621,6 +621,27 @@ parent run back to `pending` and dispatches the join step. Cancelling a waiting
 run marks non-terminal branches cancelled so stale branch workers become inert
 when they try to checkpoint.
 
+A run waiting on a signal or a child swarm keeps that wait open while it is
+paused. Resuming it returns it to `waiting` (`$resume->isWaiting()` is `true`)
+rather than queuing its next step, so it continues only when the signal arrives,
+the child finishes, or `swarm:recover` releases the wait as timed out:
+
+- `swarm:recover` does not select timed-out waits of a paused run. Once the run
+  is resumed they are eligible again, so a timeout that passed during the pause
+  is released by the next recovery pass.
+- A child that finished while its parent was paused is honoured on resume: the
+  parent resumes straight to `pending` with the child's outcome recorded.
+- A paused run stays paused while its waits change; only resume moves it.
+- A signal delivered while the run is paused is recorded but not accepted.
+  Re-send it after the run resumes, with a new idempotency key (the original key
+  returns the earlier delivery as a `duplicate`). This is interim behaviour:
+  [#601](https://github.com/builtbyberry/laravel-swarm/issues/601) will accept the paused-time delivery on resume.
+- Resume decides from a locked read of the run's open waits, so a wait released
+  at the same moment cannot leave the run waiting on nothing. If your application
+  calls `resume()` inside a transaction that already holds the run (for example
+  one that also paused it), a worker releasing one of its waits at that moment
+  can deadlock with it; the database aborts one side, and retrying it is safe.
+
 `swarm:recover` is the safety net for stranded durable runs. Schedule it
 frequently:
 

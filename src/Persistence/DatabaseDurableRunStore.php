@@ -1121,23 +1121,45 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStep
 
     public function resume(string $runId): bool
     {
-        $run = $this->find($runId);
-        $nodeId = is_string($run['current_node_id'] ?? null) ? $run['current_node_id'] : null;
-        $hasBranchBoundary = $nodeId !== null && $this->branchTable()
-            ->where('run_id', $runId)
-            ->where('parent_node_id', $nodeId)
-            ->exists();
-        $status = $hasBranchBoundary ? 'waiting' : 'pending';
+        return $this->connection->transaction(function () use ($runId): bool {
+            // An open wait (a signal wait, or a child swarm's child:<id> wait) keeps the run
+            // waiting: resuming to pending would let the next step run without the signal or
+            // the child's outcome. The wait rows are read before the run row is written — the
+            // order every wait release takes (wait UPDATE, then syncRunWaitSummary on the run)
+            // — and with a shared lock, which is a current read even inside an older MySQL
+            // REPEATABLE READ snapshot and waits for a concurrent release of the same wait to
+            // commit instead of reading it as still open. Every open wait row is read and
+            // locked, not just the first: exists() or first() would stop short of a row
+            // another transaction is releasing.
+            $openWaitIds = $this->waitTable()
+                ->where('run_id', $runId)
+                ->where('status', 'waiting')
+                ->orderBy('id')
+                ->sharedLock()
+                ->pluck('id')
+                ->all();
+            $hasOpenWait = $openWaitIds !== [];
 
-        return $this->table()
-            ->where('run_id', $runId)
-            ->where('status', 'paused')
-            ->update([
-                'status' => $status,
-                'pause_requested_at' => null,
-                'resumed_at' => Carbon::now('UTC'),
-                'updated_at' => Carbon::now('UTC'),
-            ]) === 1;
+            // A paused run's cursor and branch rows do not move: no step runs and joins need
+            // a waiting run.
+            $run = $this->find($runId);
+            $nodeId = is_string($run['current_node_id'] ?? null) ? $run['current_node_id'] : null;
+            $hasBranchBoundary = $nodeId !== null && $this->branchTable()
+                ->where('run_id', $runId)
+                ->where('parent_node_id', $nodeId)
+                ->exists();
+            $status = $hasBranchBoundary || $hasOpenWait ? 'waiting' : 'pending';
+
+            return $this->table()
+                ->where('run_id', $runId)
+                ->where('status', 'paused')
+                ->update([
+                    'status' => $status,
+                    'pause_requested_at' => null,
+                    'resumed_at' => Carbon::now('UTC'),
+                    'updated_at' => Carbon::now('UTC'),
+                ]) === 1;
+        });
     }
 
     public function cancel(string $runId): bool
@@ -2353,11 +2375,13 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStep
             ->orderBy('timeout_at')
             ->first();
 
+        // A paused run stays paused while its waits change (a child finishing releases one of
+        // several waits): resume() is what returns it to waiting.
         $this->table()
             ->where('run_id', $runId)
             ->whereNull('finished_at')
             ->update([
-                'status' => 'waiting',
+                'status' => $this->connection->raw("CASE WHEN status = 'paused' THEN status ELSE 'waiting' END"),
                 'wait_reason' => $latestOpenWait->reason ?? null,
                 'waiting_since' => $latestOpenWait->created_at,
                 'wait_timeout_at' => $nextTimedWait->timeout_at ?? null,

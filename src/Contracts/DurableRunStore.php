@@ -133,6 +133,14 @@ interface DurableRunStore
 
     public function pause(string $runId): bool;
 
+    /**
+     * Move a paused run back to `waiting` when it still has something to wait on —
+     * an open wait row (a signal wait, or a child swarm's `child:<id>` wait) or
+     * branch work under its current node — and to `pending` otherwise. Decide from
+     * a locked read of the run's open waits taken before the run row is written
+     * (the order the wait releases use), so a wait released concurrently cannot
+     * leave the run waiting on nothing. Returns false when the run is not paused.
+     */
     public function resume(string $runId): bool;
 
     public function cancel(string $runId): bool;

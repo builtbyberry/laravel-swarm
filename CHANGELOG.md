@@ -113,6 +113,23 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   no `stop()`, so cancelling a session now skips stopping a faked process that
   lacks it, where it used to fail with an undefined-method error. Real processes
   are stopped exactly as before.
+- **Resuming a paused durable run no longer advances past an open signal or
+  child-swarm wait (#592).** `resume()` put a run paused in a signal or child
+  wait back to `pending` and queued its next step, which then ran without the
+  signal or the child's outcome. Resume now returns such a run to `waiting`
+  (`DurableResumeResult::isWaiting()` is `true`), and it continues when the
+  signal arrives, the child finishes, or `swarm:recover` releases a timed-out
+  wait, as if it had never been paused. A child that finished while the parent
+  was paused is still honoured on resume. The decision reads the run's open
+  waits with a shared lock, so a wait released at the same moment, such as a
+  child finishing, cannot leave the run waiting on nothing. A signal delivered
+  while the run is paused is recorded but not accepted: re-send it after resume
+  with a new idempotency key. That is interim until
+  [#601](https://github.com/builtbyberry/laravel-swarm/issues/601) accepts it on resume. See
+  [UPGRADING](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#resuming-a-run-that-was-paused-while-waiting).
+- A paused durable run is no longer put back to `waiting` when one of several
+  open waits is released while it is paused, for example by a child finishing
+  (#592). It stays paused, with its wait summary updated, until it is resumed.
 
 ## v0.28.1 - 2026-10-10
 

@@ -10,6 +10,8 @@ use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Enums\DurableDispatchType;
+use BuiltByBerry\LaravelSwarm\Enums\DurableLifecycleStatus;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Events\SwarmCancelled;
 use BuiltByBerry\LaravelSwarm\Events\SwarmChildCompleted;
@@ -72,6 +74,7 @@ use Illuminate\Foundation\Bus\PendingDispatch;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Schema;
 use Psr\Log\LoggerInterface;
 
@@ -2020,6 +2023,275 @@ test('durable pending resume dispatches through durable job dispatcher', functio
     $manager->resume($response->runId);
 
     expect($dispatcher->stepDispatches)->toBe([0]);
+});
+
+/**
+ * Every way a step job can be put on its way for one run: the outbox rows written for
+ * it (the relay path, and the row an eager push settles) and the advance jobs pushed
+ * straight onto the fake queue (eager pushes and swarm:recover's direct dispatch).
+ *
+ * @return array{outbox: int, pushed: int}
+ */
+function resumeWaitStepEnqueues(string $runId): array
+{
+    $pushed = 0;
+
+    foreach (Queue::pushedJobs() as $pushes) {
+        foreach ($pushes as $push) {
+            if ($push['job'] instanceof AdvanceDurableSwarm && $push['job']->runId === $runId) {
+                $pushed++;
+            }
+        }
+    }
+
+    return [
+        'outbox' => DB::table('swarm_durable_outbox')->where('run_id', $runId)->where('dispatch_type', DurableDispatchType::Step->value)->count(),
+        'pushed' => $pushed,
+    ];
+}
+
+/**
+ * @return array{0: DurableSwarmResponse, 1: DurableSwarmManager}
+ */
+function resumeWaitSignalRun(bool $eager): array
+{
+    config()->set('swarm.durable.eager_dispatch', $eager);
+    Queue::fake();
+    FakeResearcher::fake(['research-out']);
+    FakeWriter::fake(['writer-out']);
+
+    $response = DurableWaitAttributeSwarm::make()->dispatchDurable('wait-task');
+    $manager = app(DurableSwarmManager::class);
+
+    (new AdvanceDurableSwarm($response->runId, 0))->handle($manager);
+
+    expect($manager->find($response->runId)['status'])->toBe('waiting');
+
+    return [$response, $manager];
+}
+
+/**
+ * @return array{0: DurableSwarmResponse, 1: DurableSwarmManager, 2: string}
+ */
+function resumeWaitChildRun(bool $eager): array
+{
+    config()->set('swarm.durable.eager_dispatch', $eager);
+    Queue::fake();
+    FakeResearcher::fake(['parent-step', 'child-research']);
+    FakeWriter::fake(['parent-final', 'child-writer']);
+    FakeEditor::fake(['child-output']);
+
+    $response = ChildDispatchingSwarm::make()->dispatchDurable('parent-task');
+    $manager = app(DurableSwarmManager::class);
+
+    (new AdvanceDurableSwarm($response->runId, 0))->handle($manager);
+
+    expect($manager->find($response->runId)['status'])->toBe('waiting');
+
+    return [$response, $manager, (string) $manager->inspect($response->runId)->children[0]['child_run_id']];
+}
+
+test('resuming a run paused in a signal wait restores the wait instead of advancing past it', function (bool $eager) {
+    [$response, $manager] = resumeWaitSignalRun($eager);
+    $runId = $response->runId;
+
+    $manager->pause($runId);
+    $beforeResume = resumeWaitStepEnqueues($runId);
+
+    $result = $manager->resume($runId);
+
+    expect($result->status)->toBe(DurableLifecycleStatus::Waiting)
+        ->and($result->isWaiting())->toBeTrue()
+        ->and($result->waitingBoundaryDispatched)->toBeTrue()
+        ->and($result->toArray())->toMatchArray(['status' => 'waiting', 'waiting_boundary_dispatched' => true])
+        ->and($manager->find($runId)['status'])->toBe('waiting')
+        ->and($manager->find($runId)['next_step_index'])->toBe(1)
+        ->and(app(SwarmHistory::class)->find($runId)['status'])->toBe('waiting')
+        ->and($manager->inspect($runId)->waits[0]['status'])->toBe('waiting')
+        ->and(resumeWaitStepEnqueues($runId))->toBe($beforeResume);
+
+    // A step job that reaches the run anyway (a stale or duplicate delivery) cannot advance it.
+    (new AdvanceDurableSwarm($runId, 1))->handle($manager);
+
+    expect($manager->find($runId)['status'])->toBe('waiting')
+        ->and($manager->find($runId)['next_step_index'])->toBe(1);
+
+    $signal = $response->signal('approval_received', ['approved' => true], 'after-resume');
+    $afterSignal = resumeWaitStepEnqueues($runId);
+
+    expect($signal->accepted)->toBeTrue()
+        ->and($manager->find($runId)['status'])->toBe('pending')
+        ->and($afterSignal['outbox'] + $afterSignal['pushed'])->toBeGreaterThan($beforeResume['outbox'] + $beforeResume['pushed']);
+
+    (new AdvanceDurableSwarm($runId, 1))->handle($manager);
+
+    expect($manager->find($runId)['status'])->toBe('completed');
+})->with(['relay dispatch' => false, 'eager dispatch' => true]);
+
+test('resuming a run paused in a child swarm wait restores the wait until the child finishes', function (bool $eager) {
+    [$response, $manager, $childRunId] = resumeWaitChildRun($eager);
+    $runId = $response->runId;
+
+    $manager->pause($runId);
+    $beforeResume = resumeWaitStepEnqueues($runId);
+
+    $result = $manager->resume($runId);
+
+    expect($result->isWaiting())->toBeTrue()
+        ->and($result->waitingBoundaryDispatched)->toBeTrue()
+        ->and($manager->find($runId)['status'])->toBe('waiting')
+        ->and($manager->find($runId)['next_step_index'])->toBe(1)
+        ->and($manager->inspect($runId)->waits[0]['status'])->toBe('waiting')
+        ->and(resumeWaitStepEnqueues($runId))->toBe($beforeResume);
+
+    (new AdvanceDurableSwarm($runId, 1))->handle($manager);
+
+    expect($manager->find($runId)['status'])->toBe('waiting')
+        ->and($manager->find($runId)['next_step_index'])->toBe(1);
+
+    (new AdvanceDurableSwarm($childRunId, 0))->handle($manager);
+    (new AdvanceDurableSwarm($childRunId, 1))->handle($manager);
+    (new AdvanceDurableSwarm($childRunId, 2))->handle($manager);
+
+    expect($manager->find($runId)['status'])->toBe('pending')
+        ->and($manager->inspect($runId)->waits[0]['status'])->toBe('child_completed');
+
+    (new AdvanceDurableSwarm($runId, 1))->handle($manager);
+
+    expect($manager->find($runId)['status'])->toBe('completed');
+})->with(['relay dispatch' => false, 'eager dispatch' => true]);
+
+test('a signal delivered while paused is recorded, and is accepted when re-sent with a new key after resume', function () {
+    [$response, $manager] = resumeWaitSignalRun(false);
+    $runId = $response->runId;
+
+    $manager->pause($runId);
+
+    $whilePaused = $response->signal('approval_received', ['approved' => true], 'while-paused');
+
+    expect($whilePaused->accepted)->toBeFalse()
+        ->and($whilePaused->status)->toBe('recorded');
+
+    $manager->resume($runId);
+
+    expect($manager->find($runId)['status'])->toBe('waiting')
+        ->and($manager->inspect($runId)->waits[0]['status'])->toBe('waiting')
+        ->and($manager->inspect($runId)->signals[0]['status'])->toBe('recorded');
+
+    $sameKey = $response->signal('approval_received', ['approved' => true], 'while-paused');
+
+    expect($sameKey->duplicate)->toBeTrue()
+        ->and($sameKey->accepted)->toBeFalse()
+        ->and($manager->find($runId)['status'])->toBe('waiting');
+
+    $newKey = $response->signal('approval_received', ['approved' => true], 'after-resume');
+
+    expect($newKey->accepted)->toBeTrue()
+        ->and($manager->find($runId)['status'])->toBe('pending')
+        ->and($manager->inspect($runId)->waits[0]['status'])->toBe('signalled');
+});
+
+test('a child that finished while its parent was paused is honoured when the parent resumes', function () {
+    [$response, $manager, $childRunId] = resumeWaitChildRun(false);
+    $runId = $response->runId;
+
+    $manager->pause($runId);
+
+    (new AdvanceDurableSwarm($childRunId, 0))->handle($manager);
+    (new AdvanceDurableSwarm($childRunId, 1))->handle($manager);
+    (new AdvanceDurableSwarm($childRunId, 2))->handle($manager);
+
+    expect($manager->find($runId)['status'])->toBe('paused')
+        ->and($manager->inspect($runId)->waits[0]['status'])->toBe('child_completed');
+
+    $beforeResume = resumeWaitStepEnqueues($runId);
+    $result = $manager->resume($runId);
+
+    expect($result->status)->toBe(DurableLifecycleStatus::Resumed)
+        ->and($result->waitingBoundaryDispatched)->toBeFalse()
+        ->and($manager->find($runId)['status'])->toBe('pending')
+        ->and(resumeWaitStepEnqueues($runId)['outbox'])->toBe($beforeResume['outbox'] + 1)
+        ->and(app(ContextStore::class)->find($runId)['metadata']['durable_child_runs'][$childRunId]['status'])->toBe('completed');
+
+    (new AdvanceDurableSwarm($runId, 1))->handle($manager);
+
+    expect($manager->find($runId)['status'])->toBe('completed');
+});
+
+test('a child whose wait is still open when its paused parent resumes is reconciled by recovery', function () {
+    [$response, $manager, $childRunId] = resumeWaitChildRun(false);
+    $runId = $response->runId;
+
+    $manager->pause($runId);
+
+    // The child finished but its parent was never reconciled (the worker died between the
+    // child's terminal write and the parent's wait release): the wait is still open.
+    DB::table('swarm_durable_child_runs')
+        ->where('child_run_id', $childRunId)
+        ->update(['status' => 'completed', 'updated_at' => now('UTC')]);
+
+    $manager->resume($runId);
+
+    expect($manager->find($runId)['status'])->toBe('waiting')
+        ->and($manager->inspect($runId)->waits[0]['status'])->toBe('waiting');
+
+    $beforeRecover = resumeWaitStepEnqueues($runId);
+    $manager->recover(runId: $runId);
+
+    expect($manager->find($runId)['status'])->toBe('pending')
+        ->and($manager->inspect($runId)->waits[0]['status'])->toBe('child_completed')
+        ->and(app(ContextStore::class)->find($runId)['metadata']['durable_child_runs'][$childRunId]['status'])->toBe('completed')
+        ->and(resumeWaitStepEnqueues($runId)['outbox'])->toBe($beforeRecover['outbox'] + 1);
+});
+
+test('swarm:recover does not time out the wait of a paused run, and does once the run resumes', function () {
+    [$response, $manager] = resumeWaitSignalRun(false);
+    $runId = $response->runId;
+
+    $manager->pause($runId);
+    $this->travel(3601)->seconds();
+
+    $manager->recover(runId: $runId);
+
+    expect($manager->find($runId)['status'])->toBe('paused')
+        ->and($manager->inspect($runId)->waits[0]['status'])->toBe('waiting');
+
+    $manager->resume($runId);
+
+    expect($manager->find($runId)['status'])->toBe('waiting');
+
+    $beforeRecover = resumeWaitStepEnqueues($runId);
+    $manager->recover(runId: $runId);
+
+    expect($manager->inspect($runId)->waits[0]['status'])->toBe('timed_out')
+        ->and($manager->find($runId)['status'])->toBe('pending')
+        ->and(resumeWaitStepEnqueues($runId)['pushed'])->toBe($beforeRecover['pushed'] + 1);
+});
+
+test('a paused run stays paused when one of several open waits is released', function () {
+    Queue::fake();
+    $response = FakeSequentialSwarm::make()->dispatchDurable('durable-task');
+    $runId = $response->runId;
+    $manager = app(DurableSwarmManager::class);
+
+    $manager->wait($runId, 'manual_wait', 'Manual wait');
+    $manager->wait($runId, 'timed_wait', 'Timed wait', 60);
+
+    expect($manager->find($runId)['wait_reason'])->toBe('Timed wait')
+        ->and($manager->find($runId)['wait_timeout_at'])->not->toBeNull();
+
+    $manager->pause($runId);
+
+    app(DurableRunStore::class)->releaseWaitWithOutcome($runId, 'timed_wait', 'child_completed', ['status' => 'completed', 'timed_out' => false]);
+
+    expect($manager->find($runId)['status'])->toBe('paused')
+        ->and($manager->find($runId)['wait_reason'])->toBe('Manual wait')
+        ->and($manager->find($runId)['wait_timeout_at'])->toBeNull();
+
+    $manager->resume($runId);
+
+    expect($manager->find($runId)['status'])->toBe('waiting')
+        ->and($manager->inspect($runId)->waits[0]['status'])->toBe('waiting');
 });
 
 test('durable waiting cancel immediately cancels parent and non terminal branches', function () {
