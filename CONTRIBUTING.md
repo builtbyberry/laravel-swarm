@@ -96,7 +96,8 @@ Capture the official framework branch head at resolution time, temporarily pin
 that source ref, and verify installed and lock identities against the captured
 ref; Laravel AI must resolve a stable 1.x release from its official source.
 Matching two arbitrary SHAs is not official provenance. Restore the production
-manifest before package-contract tests. The separate post-main moving-development run remains a shipping gate.
+manifest before package-contract tests. The separate post-main
+moving-development run remains a shipping gate.
 
 **Dependency advisories** — a separate `audit` workflow runs `composer audit` on
 every push and pull request. Because this package commits no `composer.lock`, CI
