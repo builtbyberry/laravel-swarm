@@ -51,11 +51,41 @@ to `waiting` instead of `pending`, and no step is queued. Code that resumed such
 run and expected its next step to run must now let the wait be released: deliver
 the signal, let the child finish, or let `swarm:recover` time the wait out.
 `DurableResumeResult::$status` is `DurableLifecycleStatus::Waiting` for these
-runs.
+runs. A run whose wait was released while it was paused (for example its child
+finished) has nothing left to wait on and resumes to `pending` as before.
 
 - A signal delivered while the run was paused is recorded, not accepted. Re-send
   it after the run resumes, with a **new** idempotency key; the old key returns
-  the earlier delivery as a duplicate.
+  the earlier delivery as a duplicate. This is interim behaviour until
+  [#601](https://github.com/builtbyberry/laravel-swarm/issues/601) accepts the paused-time delivery on resume.
+- **Runs that already advanced past an open wait.** Under the old behaviour a run
+  resumed past its open wait kept that wait row open (`status = 'waiting'`) while
+  it moved on. If such a run is still in flight and is paused again after you
+  upgrade, resume now holds it in `waiting` on that stale wait. A child wait clears
+  when the child finishes and a timed wait clears through `swarm:recover`, but an
+  untimed signal wait does not clear by itself. Before or right after deploying,
+  find those rows:
+
+  ```sql
+  select w.id, w.run_id, w.name, r.status
+  from swarm_durable_waits w
+  join swarm_durable_runs r on r.run_id = w.run_id
+  where w.status = 'waiting'
+    and r.finished_at is null
+    and r.status in ('pending', 'running');
+  ```
+
+  A run in `pending` or `running` with an open wait is one that went past it. If
+  its workflow no longer needs that wait, deliver the signal it is waiting for
+  once the run is `waiting` again, or cancel the run; if your table names are
+  configured (`swarm.tables.durable_waits`, `swarm.tables.durable`), use those.
+- **Custom `DurableRunStore` implementations**, and classes extending
+  `DatabaseDurableRunStore` that override `resume()` or `syncRunWaitSummary()`,
+  must follow the same rules or keep the old behaviour silently: `resume()` sets
+  `waiting` when the run has an open wait row or branch work under its current
+  node and `pending` otherwise, deciding from a locked read of the open waits
+  taken before the run row is written; a wait release must not change a `paused`
+  run's status.
 - An application transaction that already holds the run (for example one that
   paused it) and then resumes it can deadlock with a worker releasing one of the
   run's waits at that moment. The database aborts one side and rolls it back;

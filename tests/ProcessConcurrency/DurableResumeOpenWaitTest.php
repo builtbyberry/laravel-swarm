@@ -15,6 +15,7 @@ use BuiltByBerry\LaravelSwarm\Tests\ProcessConcurrency\Fixtures\ResumeOpenWait\H
 use BuiltByBerry\LaravelSwarm\Tests\ProcessConcurrency\Fixtures\ResumeOpenWait\LockBarrier;
 use BuiltByBerry\LaravelSwarm\Tests\ProcessConcurrency\Fixtures\ResumeOpenWait\ResumeOpenWaitWorker;
 use Illuminate\Concurrency\ConcurrencyManager;
+use Illuminate\Filesystem\Filesystem;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -48,8 +49,31 @@ function durableResumeOpenWaitBarrierDir(): string
 {
     $dir = sys_get_temp_dir().'/laravel-swarm-resume-open-wait-'.bin2hex(random_bytes(6));
     mkdir($dir, 0777, true);
+    durableResumeOpenWaitBarrierDirs($dir);
 
     return $dir;
+}
+
+/**
+ * The barrier directories this test process created, so afterEach can remove them.
+ *
+ * @return array<int, string>
+ */
+function durableResumeOpenWaitBarrierDirs(?string $add = null, bool $clear = false): array
+{
+    static $dirs = [];
+
+    if ($add !== null) {
+        $dirs[] = $add;
+    }
+
+    $current = $dirs;
+
+    if ($clear) {
+        $dirs = [];
+    }
+
+    return $current;
 }
 
 /**
@@ -286,6 +310,12 @@ beforeEach(function (): void {
     config()->set('swarm.durable.queue.connection', 'durable-test');
 });
 
+afterEach(function (): void {
+    foreach (durableResumeOpenWaitBarrierDirs(clear: true) as $dir) {
+        (new Filesystem)->deleteDirectory($dir);
+    }
+});
+
 test('a run paused in a signal wait resumes into the wait on the real engine', function (): void {
     FakeResearcher::fake(durableResumeOpenWaitSlowOutputs(['research-out']));
     FakeWriter::fake(durableResumeOpenWaitSlowOutputs(['writer-out']));
@@ -409,6 +439,11 @@ test('an application transaction that pauses and resumes a run during a wait rel
         durableResumeOpenWaitPauseResumeOperator($runId, $dir),
         durableResumeOpenWaitBlockingReleaser($runId, 'approval', $dir),
     ]);
+
+    // Fail with each worker's whole result (its lock snapshot included) if the barrier
+    // never saw the contention this test is about.
+    expect($operator['outcome'])->not->toBe('no-contention', json_encode($operator))
+        ->and($releaser['outcome'])->toBeIn(['committed', 'aborted'], json_encode($releaser));
 
     $outcomes = [$operator['outcome'], $releaser['outcome']];
     sort($outcomes);

@@ -124,10 +124,12 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   waits with a shared lock, so a wait released at the same moment, such as a
   child finishing, cannot leave the run waiting on nothing. A signal delivered
   while the run is paused is recorded but not accepted: re-send it after resume
-  with a new idempotency key.
+  with a new idempotency key. That is interim until
+  [#601](https://github.com/builtbyberry/laravel-swarm/issues/601) accepts it on resume. See
+  [UPGRADING](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#resuming-a-run-that-was-paused-while-waiting).
 - A paused durable run is no longer put back to `waiting` when one of several
-  open waits is released while it is paused, for example by a child finishing.
-  It stays paused, with its wait summary updated, until it is resumed.
+  open waits is released while it is paused, for example by a child finishing
+  (#592). It stays paused, with its wait summary updated, until it is resumed.
 
 ## v0.28.1 - 2026-10-10
 

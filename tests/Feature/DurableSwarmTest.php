@@ -2102,7 +2102,8 @@ test('resuming a run paused in a signal wait restores the wait instead of advanc
 
     expect($result->status)->toBe(DurableLifecycleStatus::Waiting)
         ->and($result->isWaiting())->toBeTrue()
-        ->and($result->toArray()['status'])->toBe('waiting')
+        ->and($result->waitingBoundaryDispatched)->toBeTrue()
+        ->and($result->toArray())->toMatchArray(['status' => 'waiting', 'waiting_boundary_dispatched' => true])
         ->and($manager->find($runId)['status'])->toBe('waiting')
         ->and($manager->find($runId)['next_step_index'])->toBe(1)
         ->and(app(SwarmHistory::class)->find($runId)['status'])->toBe('waiting')
@@ -2137,6 +2138,7 @@ test('resuming a run paused in a child swarm wait restores the wait until the ch
     $result = $manager->resume($runId);
 
     expect($result->isWaiting())->toBeTrue()
+        ->and($result->waitingBoundaryDispatched)->toBeTrue()
         ->and($manager->find($runId)['status'])->toBe('waiting')
         ->and($manager->find($runId)['next_step_index'])->toBe(1)
         ->and($manager->inspect($runId)->waits[0]['status'])->toBe('waiting')
@@ -2206,6 +2208,7 @@ test('a child that finished while its parent was paused is honoured when the par
     $result = $manager->resume($runId);
 
     expect($result->status)->toBe(DurableLifecycleStatus::Resumed)
+        ->and($result->waitingBoundaryDispatched)->toBeFalse()
         ->and($manager->find($runId)['status'])->toBe('pending')
         ->and(resumeWaitStepEnqueues($runId)['outbox'])->toBe($beforeResume['outbox'] + 1)
         ->and(app(ContextStore::class)->find($runId)['metadata']['durable_child_runs'][$childRunId]['status'])->toBe('completed');

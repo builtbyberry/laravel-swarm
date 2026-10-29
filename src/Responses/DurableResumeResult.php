@@ -23,7 +23,11 @@ class DurableResumeResult
         public readonly string $topology,
         /** Either DurableLifecycleStatus::Resumed (a step was re-dispatched) or ::Waiting (resumed back into a waiting boundary). */
         public readonly DurableLifecycleStatus $status,
-        /** True when resuming re-dispatched a waiting boundary rather than a step. */
+        /**
+         * True when resuming re-armed a waiting boundary rather than dispatching a step:
+         * branch work re-dispatched, or a signal or child-swarm wait the run is waiting
+         * on again. True whenever the status is Waiting; it does not mean a job was pushed.
+         */
         public readonly bool $waitingBoundaryDispatched = false,
     ) {}
 

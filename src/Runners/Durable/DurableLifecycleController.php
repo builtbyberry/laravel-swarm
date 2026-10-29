@@ -95,9 +95,10 @@ class DurableLifecycleController
      * Resume a paused run. When the run resumes back into a waiting boundary —
      * branch work, an open signal wait, or a child swarm's wait — the returned
      * run row is handed to $dispatchWaiting so the boundary is re-armed; the
-     * closure reports whether it actually re-dispatched one. A signal or child
-     * wait needs nothing dispatched: being `waiting` again is what lets a
-     * signal, the child's outcome or swarm:recover's timeout release it.
+     * closure reports whether it re-armed one. Branch work is re-dispatched; a
+     * signal or child wait is re-armed by the run being `waiting` again, which
+     * is what lets a signal, the child's outcome or swarm:recover's timeout
+     * release it.
      *
      * @param  callable(array<string, mixed>): bool  $dispatchWaiting
      */

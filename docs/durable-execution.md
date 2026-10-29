@@ -634,7 +634,8 @@ the child finishes, or `swarm:recover` releases the wait as timed out:
 - A paused run stays paused while its waits change; only resume moves it.
 - A signal delivered while the run is paused is recorded but not accepted.
   Re-send it after the run resumes, with a new idempotency key (the original key
-  returns the earlier delivery as a `duplicate`).
+  returns the earlier delivery as a `duplicate`). This is interim behaviour:
+  [#601](https://github.com/builtbyberry/laravel-swarm/issues/601) will accept the paused-time delivery on resume.
 - Resume decides from a locked read of the run's open waits, so a wait released
   at the same moment cannot leave the run waiting on nothing. If your application
   calls `resume()` inside a transaction that already holds the run (for example

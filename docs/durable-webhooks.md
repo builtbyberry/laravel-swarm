@@ -179,7 +179,11 @@ For starts, the idempotency key is scoped to the swarm class and request body:
 - failed reservations can be retried with the same key and same body
 
 For signals, the idempotency key is scoped to the run and signal handling path,
-so retried webhook deliveries do not duplicate signals.
+so retried webhook deliveries do not duplicate signals. A signal delivered while
+the run is paused is recorded but not accepted, and a retry with the same key
+returns that recorded delivery as a duplicate. Re-deliver it after the run
+resumes with a new `Idempotency-Key` (interim behaviour until
+[#601](https://github.com/builtbyberry/laravel-swarm/issues/601)).
 
 `swarm:prune` removes stale failed or abandoned no-run webhook idempotency rows
 using `swarm.durable.webhooks.idempotency_ttl`. Completed idempotency rows tied
