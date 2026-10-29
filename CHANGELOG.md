@@ -42,6 +42,24 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   and abandoned. Those are also reported on their own as the new
   `DrainResult::$reclaimedDirect` and `direct_reclaimed_count`, so
   `reclaimed_count` minus `direct_reclaimed_count` stays the relay-health signal.
+- **`swarm:relay` takes one overlap lease per lane instead of one for the whole
+  command.** The durable lane (step, branch, queued_resume), the audit lane and
+  the callback lane each have their own lease, held only while that lane drains
+  a batch. Relays selecting different lanes now run side by side, so
+  `swarm:relay --type=step --type=branch --type=queued_resume` and
+  `swarm:relay --type=audit --type=callback` can be scheduled on separate
+  cadences, and a slow audit or callback drain never holds up another relay's
+  step dispatch. Two relays selecting the same lane still exclude each other.
+  When another invocation holds a selected lane, that lane's remaining batches
+  are skipped for the run, the other lanes still drain, the command warns and
+  exits non-zero, and the `command.relay` audit event lists the lane in its new,
+  always-present `contended_lanes` field; `skipped_overlap` now means every
+  selected lane was held. During a rolling deploy an old relay (single lease)
+  and a new relay (lane leases) may drain the same lane at once; the bundled
+  database outboxes claim with `FOR UPDATE SKIP LOCKED` on MySQL and PostgreSQL,
+  so they take disjoint batches under the existing at-least-once contract. No
+  flag, config key or migration. See
+  [Command overlap leases](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/maintenance.md#command-overlap-leases).
 
 ### Fixed
 

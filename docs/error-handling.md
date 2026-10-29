@@ -431,7 +431,8 @@ Callback deliveries are persisted in `swarm_callback_deliveries`.
   reclaimable by the relay. It honors `swarm.retention.prevent_prune`.
 - **Rollback / drain:** undelivered rows are lost on the down-migration, and draining only moves
   rows into delivery jobs. To revert safely: stop dispatching new runs, run
-  `swarm:relay --type=callback --drain-until-empty`, **wait for the callback queue workers to
+  `swarm:relay --type=callback --drain-until-empty` (re-run until it exits 0: a scheduled relay
+  holding the callback lane makes it skip the lane and exit 1), **wait for the callback queue workers to
   finish** the dispatched `DeliverSwarmCallback` jobs, confirm health has no pending, delivering,
   or dead-letter rows, then stop or restart every long-lived worker before running the down migration
   so no process retains positive table readiness. `swarm:health` exposes aggregate counts and the

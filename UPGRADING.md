@@ -23,6 +23,27 @@ signatures when the class loads.
 
 `enqueueQueuedResume()` is unchanged.
 
+### `swarm:relay` takes one overlap lease per lane
+
+`swarm:relay` now holds a separate lease for each outbox lane (durable, audit,
+callback), only while that lane drains a batch. Nothing needs changing for a
+single bare `swarm:relay` schedule entry, but monitoring may:
+
+- `status: skipped_overlap` on the `command.relay` audit event now means every
+  selected lane was held by another invocation. A run that found only some lanes
+  held drains the rest, reports its normal status, lists the held lanes in the
+  new always-present `contended_lanes` field, and exits 1. Alert on a non-empty
+  `contended_lanes` or the exit code rather than on `skipped_overlap` alone.
+- During a rolling deploy an old relay (one lease for everything) and a new
+  relay (lane leases) can drain the same lane at the same time. The bundled
+  database outboxes claim with `FOR UPDATE SKIP LOCKED` on MySQL and PostgreSQL,
+  so they take disjoint batches. A custom `DurableOutbox` (or audit/callback
+  outbox) must claim in a way that two concurrent drains cannot both take the
+  same row.
+- Relays can now be split by lane on separate cadences. See
+  [Command overlap leases](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/maintenance.md#command-overlap-leases) for the
+  split-cadence schedule and the health thresholds a slower lane needs.
+
 ## Upgrading to v0.28.1
 
 This patch deliberately departs from the additive-only patch policy stated

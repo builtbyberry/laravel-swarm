@@ -14,6 +14,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamStepCheckpointStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
+use BuiltByBerry\LaravelSwarm\Enums\RelayLane;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Memory\StreamStepCheckpoint;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheArtifactRepository;
@@ -1243,3 +1244,88 @@ describe('governance checks in --json output', function (): void {
             ->not->toContain('Capture policy');
     });
 });
+
+// ---------------------------------------------------------------------------
+// Relay staleness is reported per lane while relay lane leases are held
+// ---------------------------------------------------------------------------
+
+test('relay staleness is reported for the stale lane only while that lane lease is held', function (RelayLane $staleLane): void {
+    config()->set('swarm.persistence.driver', 'database');
+    config()->set('swarm.callbacks.enabled', true);
+    config()->set('swarm.callbacks.reservation_timeout_seconds', 60);
+    config()->set('swarm.callbacks.stale_warning_threshold_seconds', 120);
+    app()->forgetInstance(CallbackDeliveryOutbox::class);
+    app()->forgetInstance(ReadableCallbackDeliveryOutbox::class);
+    DB::statement('PRAGMA foreign_keys = OFF');
+
+    $aged = Carbon::now('UTC')->subMinutes(5);
+
+    match ($staleLane) {
+        RelayLane::Durable => DB::table('swarm_durable_outbox')->insert([
+            'run_id' => (string) Str::uuid(),
+            'dispatch_type' => 'step',
+            'payload' => '{}',
+            'queue_connection' => null,
+            'queue_name' => null,
+            'available_at' => $aged,
+            'reserved_at' => null,
+            'created_at' => $aged,
+        ]),
+        RelayLane::Audit => DB::table('swarm_audit_outbox')->insert([
+            'category' => 'run.failed',
+            'run_id' => 'lane-stale-audit',
+            'payload' => '{}',
+            'attempts' => 1,
+            'status' => 'pending',
+            'last_error' => null,
+            'last_attempted_at' => $aged,
+            'reserved_at' => $aged,
+            'created_at' => $aged,
+            'updated_at' => $aged,
+        ]),
+        RelayLane::Callback => DB::table('swarm_callback_deliveries')->insert([
+            'run_id' => 'lane-stale-callback',
+            'slot' => 'then',
+            'callback' => 'x',
+            'context' => null,
+            'status' => 'pending',
+            'attempts' => 1,
+            'last_error' => null,
+            'last_attempted_at' => null,
+            'claim_token' => null,
+            'reserved_at' => null,
+            'available_at' => $aged,
+            'created_at' => $aged,
+            'updated_at' => $aged,
+        ]),
+    };
+
+    $store = Cache::store((string) config('swarm.commands.overlap.store'))->getStore();
+    $lock = $store->lock($staleLane->leaseKey(), 60);
+    expect($lock->get())->toBeTrue();
+
+    try {
+        Artisan::call('swarm:health', ['--durable' => true, '--json' => true]);
+    } finally {
+        $lock->release();
+        DB::statement('PRAGMA foreign_keys = ON');
+    }
+
+    $checks = collect(json_decode(Artisan::output(), true, flags: JSON_THROW_ON_ERROR)['checks']);
+    $laneComponents = [
+        RelayLane::Durable->value => 'Outbox relay',
+        RelayLane::Audit->value => 'Audit outbox staleness',
+        RelayLane::Callback->value => 'Callback delivery',
+    ];
+
+    foreach ($laneComponents as $lane => $component) {
+        expect($checks->firstWhere('component', $component)['status'])
+            ->toBe($lane === $staleLane->value ? 'warning' : 'ok', "{$component} status");
+    }
+
+    expect($checks->firstWhere('component', 'Command overlap lease')['status'])->toBe('ok');
+})->with([
+    'durable' => [RelayLane::Durable],
+    'audit' => [RelayLane::Audit],
+    'callback' => [RelayLane::Callback],
+]);

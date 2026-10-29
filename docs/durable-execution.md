@@ -109,8 +109,9 @@ Schedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping(max(1
 ```
 
 Both commands also own finite atomic leases, covering manual and supervisor
-invocation. Size the lease above the worst-case command duration and use a
-shared store on multiple hosts; see [Command overlap leases](maintenance.md#command-overlap-leases).
+invocation (`swarm:relay` takes one per outbox lane, held only while that lane
+drains a batch). Size the lease above the worst-case recovery sweep and relay
+drain batch and use a shared store on multiple hosts; see [Command overlap leases](maintenance.md#command-overlap-leases).
 
 See [Pause, Resume, Cancel, And Recover](#pause-resume-cancel-and-recover) for
 what recovery covers and how it handles durable parallel branches.
@@ -834,6 +835,12 @@ php artisan swarm:relay --drain-until-empty
 # Retry up to 10 times, including through transient failure batches
 php artisan swarm:relay --drain-until-empty --max-attempts=10
 ```
+
+A scheduled relay can take the durable lane between this run's batches; the
+lane is then skipped for the rest of the run, the command exits 1 and lists it
+in `contended_lanes`. Treat that as unfinished: pass `--type=step --type=branch
+--type=queued_resume` (or pause the schedule entry that drains the lane) and
+re-run until the command exits 0.
 
 `--max-attempts` iterations run consecutively with no sleep. Size N for a short
 recovery window rather than a large one-off number during a sustained outage.
