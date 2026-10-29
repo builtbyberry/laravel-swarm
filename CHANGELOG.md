@@ -84,6 +84,14 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   the exact 13.16.0 release that proves the declared floor. The package's
   requirements and advisory policy are unchanged, and any other advisory against
   13.16.0 still fails the lane.
+- Static analysis passes again on Laravel 13.39.0 and later. That release
+  widened `PendingProcess::start()` to return `InvokedProcess|FakeInvokedProcess`,
+  and the parallel stream session's internal process list was typed as real
+  processes only, so `composer analyse` failed on the stable-latest and 13.x-dev
+  lanes. The type now names both. Older 13.x releases' `FakeInvokedProcess` has
+  no `stop()`, so cancelling a session now skips stopping a faked process that
+  lacks it, where it used to fail with an undefined-method error. Real processes
+  are stopped exactly as before.
 
 ## v0.28.1 - 2026-10-10
 
