@@ -335,6 +335,8 @@ function relayDaemonHoldLane(RelayLane $lane): Lock
 /**
  * Clear Sleep's recorded fake sequence without dropping its callbacks, so the
  * footprint tests measure the daemon rather than the fake's bookkeeping.
+ * Sleep::fake() would reset it but also drops the whenFakingSleep callbacks,
+ * so this writes the protected static Sleep::$sequence of Laravel 13 directly.
  */
 function relayDaemonForgetFakeSleeps(): void
 {
@@ -344,10 +346,6 @@ function relayDaemonForgetFakeSleeps(): void
 }
 
 beforeEach(function (): void {
-    if (! extension_loaded('pcntl')) {
-        $this->markTestSkipped('swarm:relay --daemon requires the pcntl extension.');
-    }
-
     Carbon::setTestNow(Carbon::parse('2026-01-01 00:00:00'));
     config()->set('swarm.durable.relay.daemon.min_sleep_ms', 100);
     config()->set('swarm.durable.relay.daemon.max_sleep_ms', 1000);
@@ -374,24 +372,13 @@ test('the daemon sleeps short after work, backs off to the ceiling when idle, an
         ->and($outboxes['audit']->drains)->toBe(8)
         ->and($outboxes['callback']->drains)->toBe(8)
         ->and($sleeps->getArrayCopy())->toBe(relayDaemonSlices([200, 400, 800, 1000, 1000, 100, 200, 300]))
-        ->and(Artisan::output())->toContain('swarm:relay daemon stopping after 8 cycles: max_time.');
-});
+        ->and(Artisan::output())->toContain('swarm:relay daemon stopping after 8 cycles: max_time (ran 4 s');
+})->skip(! extension_loaded('pcntl'), 'swarm:relay --daemon requires the pcntl extension.');
 
-test('a cycle that only failed, only met contention, or only touched the audit lane backs off instead of resetting', function (string $shape): void {
-    $holder = null;
-    relayDaemonOutboxes(
-        durable: static function (int $n) use ($shape): DrainResult {
-            return $shape === 'transient' ? new DrainResult(0, 0, 1, 1) : new DrainResult(0, 0);
-        },
-        audit: static function (int $n) use ($shape): AuditDrainResult {
-            return $shape === 'audit-only' ? new AuditDrainResult(1, 1, 0, 2) : new AuditDrainResult(0);
-        },
-    );
+test('a cycle that only failed, only met contention, or only touched the audit lane backs off instead of resetting', function (Closure $durable, Closure $audit, ?RelayLane $held): void {
+    relayDaemonOutboxes(durable: $durable, audit: $audit);
     $sleeps = relayDaemonFakeSleep();
-
-    if ($shape === 'contention') {
-        $holder = relayDaemonHoldLane(RelayLane::Callback);
-    }
+    $holder = $held === null ? null : relayDaemonHoldLane($held);
 
     try {
         expect(Artisan::call('swarm:relay', ['--daemon' => true, '--memory' => 0, '--max-time' => 2]))->toBe(0);
@@ -401,7 +388,89 @@ test('a cycle that only failed, only met contention, or only touched the audit l
 
     // Never back to the 100 ms floor: 200, 400, 800, then the 600 ms left.
     expect($sleeps->getArrayCopy())->toBe(relayDaemonSlices([200, 400, 800, 600]));
-})->with(['transient', 'contention', 'audit-only']);
+})->skip(! extension_loaded('pcntl'), 'swarm:relay --daemon requires the pcntl extension.')->with([
+    'transient failures only' => [
+        static fn (): DrainResult => new DrainResult(0, 0, 1, 1),
+        static fn (): AuditDrainResult => new AuditDrainResult(0),
+        null,
+    ],
+    'a held lane only' => [
+        static fn (): DrainResult => new DrainResult(0, 0),
+        static fn (): AuditDrainResult => new AuditDrainResult(0),
+        RelayLane::Callback,
+    ],
+    'audit-lane work only' => [
+        static fn (): DrainResult => new DrainResult(0, 0),
+        static fn (): AuditDrainResult => new AuditDrainResult(1, 1, 0, 2),
+        null,
+    ],
+]);
+
+test('a cycle that only delivered callbacks resets the sleep and emits one event', function (): void {
+    $sink = relayDaemonRecordingSink();
+    relayDaemonOutboxes(callback: static fn (int $n): CallbackDrainResult => $n === 2 ? new CallbackDrainResult(1, 0, 0, 1) : new CallbackDrainResult(0));
+    $sleeps = relayDaemonFakeSleep();
+
+    expect(Artisan::call('swarm:relay', ['--daemon' => true, '--memory' => 0, '--max-time' => 1]))->toBe(0);
+
+    $events = $sink->recordsForCategory('command.relay');
+
+    // Idle 200, back to 100 after the delivery, then 200 and 400, and the 100 ms left.
+    expect($sleeps->getArrayCopy())->toBe(relayDaemonSlices([200, 100, 200, 400, 100]))
+        ->and($events)->toHaveCount(1)
+        ->and($events[0]['callback_dispatched_count'])->toBe(1)
+        ->and($events[0]['status'])->toBe('dispatched');
+})->skip(! extension_loaded('pcntl'), 'swarm:relay --daemon requires the pcntl extension.');
+
+test('a cycle whose only activity was a durable transient failure emits one transient_failure event', function (): void {
+    $sink = relayDaemonRecordingSink();
+    relayDaemonOutboxes(durable: static fn (int $n): DrainResult => $n === 1 ? new DrainResult(0, 0, 2, 2) : new DrainResult(0, 0));
+    Sleep::fake(syncWithCarbon: true);
+
+    expect(Artisan::call('swarm:relay', ['--daemon' => true, '--memory' => 0, '--max-time' => 1]))->toBe(0);
+
+    $events = $sink->recordsForCategory('command.relay');
+
+    expect($events)->toHaveCount(1)
+        ->and($events[0]['status'])->toBe('transient_failure')
+        ->and($events[0]['failed_count'])->toBe(2);
+})->skip(! extension_loaded('pcntl'), 'swarm:relay --daemon requires the pcntl extension.');
+
+test('a cycle whose only activity was in the audit lane is printed but not audited', function (): void {
+    $sink = relayDaemonRecordingSink();
+    relayDaemonOutboxes(audit: static fn (int $n): AuditDrainResult => $n === 1 ? new AuditDrainResult(0, 1) : new AuditDrainResult(0));
+    Sleep::fake(syncWithCarbon: true);
+
+    expect(Artisan::call('swarm:relay', ['--daemon' => true, '--memory' => 0, '--max-time' => 1]))->toBe(0);
+
+    $output = Artisan::output();
+
+    expect($output)->toContain('swarm:relay daemon cycle 1:')
+        ->and($output)->toContain('Dead-lettered 1 audit record')
+        ->and($sink->recordsForCategory('command.relay'))->toBe([]);
+})->skip(! extension_loaded('pcntl'), 'swarm:relay --daemon requires the pcntl extension.');
+
+test('the start line reports the effective limits, including the 128 MB memory default', function (): void {
+    relayDaemonOutboxes();
+    Sleep::fake(syncWithCarbon: true);
+
+    expect(Artisan::call('swarm:relay', ['--daemon' => true, '--max-time' => 1]))->toBe(0)
+        ->and(Artisan::output())->toContain('max-time 1 s, memory 128 MB.');
+})->skip(! extension_loaded('pcntl'), 'swarm:relay --daemon requires the pcntl extension.');
+
+test('the daemon warns at start when queue:restart cannot reach it', function (string $driver, bool $restartable, string $warning): void {
+    config()->set('cache.stores.relay-daemon-default', ['driver' => $driver]);
+    config()->set('cache.default', 'relay-daemon-default');
+    Worker::$restartable = $restartable;
+    relayDaemonOutboxes();
+    Sleep::fake(syncWithCarbon: true);
+
+    expect(Artisan::call('swarm:relay', ['--daemon' => true, '--memory' => 0, '--max-time' => 1]))->toBe(0)
+        ->and(Artisan::output())->toContain($warning);
+})->skip(! extension_loaded('pcntl'), 'swarm:relay --daemon requires the pcntl extension.')->with([
+    'array default cache' => ['array', true, 'uses the [array] driver'],
+    'restarts disabled' => ['array', false, 'Queue restarts are disabled'],
+])->skip(! extension_loaded('pcntl'), 'swarm:relay --daemon requires the pcntl extension.');
 
 test('a lane lease is held while its lane drains and no lease is held across a sleep', function (): void {
     $heldWhileDraining = [];
@@ -424,7 +493,7 @@ test('a lane lease is held while its lane drains and no lease is held across a s
     expect(Artisan::call('swarm:relay', ['--daemon' => true, '--memory' => 0, '--max-time' => 2]))->toBe(0)
         ->and($heldWhileDraining)->toBe([true, true, true, true])
         ->and($freeAtEverySleep)->toBeTrue();
-});
+})->skip(! extension_loaded('pcntl'), 'swarm:relay --daemon requires the pcntl extension.');
 
 test('a held lane is skipped for that cycle only and drained on the next one', function (): void {
     $sink = relayDaemonRecordingSink();
@@ -447,7 +516,7 @@ test('a held lane is skipped for that cycle only and drained on the next one', f
 
     expect($exit)->toBe(0)
         ->and($outboxes['durable']->drains)->toBeGreaterThanOrEqual(1)
-        ->and(Artisan::output())->toContain('skipping that lane this cycle')
+        ->and(Artisan::output())->toContain('lease (swarm:commands:relay:durable) is held, so that lane is skipped this cycle')
         ->and($events)->toHaveCount(2)
         ->and($events[0]['contended_lanes'])->toBe(['durable'])
         ->and($events[0]['attempts'])->toBe(1)
@@ -455,7 +524,7 @@ test('a held lane is skipped for that cycle only and drained on the next one', f
         ->and($events[1]['contended_lanes'])->toBe([])
         ->and($events[1]['dispatched_count'])->toBe(2)
         ->and($events[1]['status'])->toBe('dispatched');
-});
+})->skip(! extension_loaded('pcntl'), 'swarm:relay --daemon requires the pcntl extension.');
 
 test('a cycle whose every lane is held reports skipped_overlap with no attempt, like a one-shot run', function (): void {
     $sink = relayDaemonRecordingSink();
@@ -478,7 +547,7 @@ test('a cycle whose every lane is held reports skipped_overlap with no attempt, 
         ->and($events[0]['attempts'])->toBe(0)
         ->and($events[0]['dispatched_count'])->toBe(0)
         ->and($events[0]['contended_lanes'])->toBe(['durable', 'audit', 'callback']);
-});
+})->skip(! extension_loaded('pcntl'), 'swarm:relay --daemon requires the pcntl extension.');
 
 test('idle and audit-only cycles emit no evidence while a cycle with durable or callback work emits one event', function (): void {
     $sink = relayDaemonRecordingSink();
@@ -504,7 +573,7 @@ test('idle and audit-only cycles emit no evidence while a cycle with durable or 
         ->and($events[0]['audit_replayed_count'])->toBe(1)
         ->and($events[1]['status'])->toBe('transient_failure')
         ->and($events[1]['failed_count'])->toBe(1);
-});
+})->skip(! extension_loaded('pcntl'), 'swarm:relay --daemon requires the pcntl extension.');
 
 test('an exception in a later lane reports the earlier lanes and held lanes of that cycle, releases its lease, and fails', function (): void {
     $sink = relayDaemonRecordingSink();
@@ -531,7 +600,7 @@ test('an exception in a later lane reports the earlier lanes and held lanes of t
         ->and($events[0]['contended_lanes'])->toBe(['audit'])
         ->and(relayDaemonLaneLeaseFree(RelayLane::Durable))->toBeTrue()
         ->and(relayDaemonLaneLeaseFree(RelayLane::Callback))->toBeTrue();
-});
+})->skip(! extension_loaded('pcntl'), 'swarm:relay --daemon requires the pcntl extension.');
 
 test('a lane lease whose release fails reports the work its drain already did', function (): void {
     $releaseFails = new class('swarm:commands:relay:durable', 60) extends Illuminate\Cache\Lock
@@ -568,7 +637,7 @@ test('a lane lease whose release fails reports the work its drain already did', 
         ->and($events[0]['status'])->toBe('error')
         ->and($events[0]['dispatched_count'])->toBe(4)
         ->and($outboxes['audit']->drains)->toBe(0);
-});
+})->skip(! extension_loaded('pcntl'), 'swarm:relay --daemon requires the pcntl extension.');
 
 test('a lane lease that cannot be acquired fails loud and keeps the earlier lanes of that cycle', function (): void {
     $throwing = Mockery::mock(Lock::class);
@@ -587,7 +656,7 @@ test('a lane lease that cannot be acquired fails loud and keeps the earlier lane
     expect($events)->toHaveCount(1)
         ->and($events[0]['status'])->toBe('error')
         ->and($events[0]['dispatched_count'])->toBe(1);
-});
+})->skip(! extension_loaded('pcntl'), 'swarm:relay --daemon requires the pcntl extension.');
 
 test('reaching the memory limit stops the daemon after the cycle in progress', function (): void {
     $outboxes = relayDaemonOutboxes();
@@ -598,8 +667,8 @@ test('reaching the memory limit stops the daemon after the cycle in progress', f
     expect($exit)->toBe(0)
         ->and($outboxes['durable']->drains)->toBe(1)
         ->and($sleeps->getArrayCopy())->toBe([])
-        ->and(Artisan::output())->toContain('stopping after 1 cycle: memory.');
-});
+        ->and(Artisan::output())->toContain('stopping after 1 cycle: memory (');
+})->skip(! extension_loaded('pcntl'), 'swarm:relay --daemon requires the pcntl extension.');
 
 test('invalid daemon limits fail before anything is drained or audited', function (string $option, string $value): void {
     $sink = relayDaemonRecordingSink();
@@ -612,7 +681,7 @@ test('invalid daemon limits fail before anything is drained or audited', functio
         ->and(Artisan::output())->toContain("--{$option} must be a whole number")
         ->and($outboxes['durable']->drains)->toBe(0)
         ->and($sink->recordsForCategory('command.relay'))->toBe([]);
-})->with([
+})->skip(! extension_loaded('pcntl'), 'swarm:relay --daemon requires the pcntl extension.')->with([
     'negative max-time' => ['max-time', '-1'],
     'fractional max-time' => ['max-time', '1.5'],
     'word max-time' => ['max-time', 'abc'],
@@ -635,10 +704,10 @@ test('zero max-time and zero memory mean no limit', function (): void {
         }
     });
 
-    expect(Artisan::call('swarm:relay', ['--daemon' => true, '--memory' => 0, '--max-time' => '0', '--memory' => '0']))->toBe(0)
+    expect(Artisan::call('swarm:relay', ['--daemon' => true, '--max-time' => '0', '--memory' => '0']))->toBe(0)
         ->and($outboxes['durable']->drains)->toBeGreaterThan(1)
-        ->and(Artisan::output())->toContain(': restart.');
-});
+        ->and(Artisan::output())->toContain(': restart (');
+})->skip(! extension_loaded('pcntl'), 'swarm:relay --daemon requires the pcntl extension.');
 
 test('max-time and memory without --daemon warn and run a normal one-shot relay', function (): void {
     $outboxes = relayDaemonOutboxes();
@@ -663,7 +732,7 @@ test('invalid daemon sleep configuration fails loud before anything is drained',
     expect(Artisan::call('swarm:relay', ['--daemon' => true, '--memory' => 0, '--max-time' => 1]))->toBe(1)
         ->and(Artisan::output())->toContain("[swarm.durable.relay.daemon.{$key}] must be {$message}")
         ->and($outboxes['durable']->drains)->toBe(0);
-})->with([
+})->skip(! extension_loaded('pcntl'), 'swarm:relay --daemon requires the pcntl extension.')->with([
     'zero floor' => ['min_sleep_ms', 0, 'a whole number of milliseconds from 1'],
     'fractional floor' => ['min_sleep_ms', '1.5', 'a whole number of milliseconds from 1'],
     'exponent floor' => ['min_sleep_ms', '1e3', 'a whole number of milliseconds from 1'],
@@ -688,7 +757,7 @@ test('environment-style string sleep configuration is accepted', function (): vo
 
     expect(Artisan::call('swarm:relay', ['--daemon' => true, '--memory' => 0, '--max-time' => 1]))->toBe(0)
         ->and($sleeps->getArrayCopy())->toBe([200, 400, 400]);
-});
+})->skip(! extension_loaded('pcntl'), 'swarm:relay --daemon requires the pcntl extension.');
 
 test('daemon and drain-until-empty cannot be combined', function (): void {
     $sink = relayDaemonRecordingSink();
@@ -739,7 +808,7 @@ test('the daemon resolves the default cache store only after its options validat
         ->and(Artisan::output())->toContain('--memory must be a whole number')
         ->and(fn () => Artisan::call('swarm:relay', ['--daemon' => true]))->toThrow(InvalidArgumentException::class)
         ->and($outboxes['durable']->drains)->toBe(0);
-});
+})->skip(! extension_loaded('pcntl'), 'swarm:relay --daemon requires the pcntl extension.');
 
 test('queue:restart stops the daemon at its next check, with no drain after it', function (): void {
     $outboxes = relayDaemonOutboxes();
@@ -756,9 +825,9 @@ test('queue:restart stops the daemon at its next check, with no drain after it',
     $output = new BufferedOutput;
 
     expect(Artisan::call('swarm:relay', ['--daemon' => true, '--memory' => 0, '--max-time' => 60], $output))->toBe(0)
-        ->and($output->fetch())->toContain('stopping after 3 cycles: restart.')
+        ->and($output->fetch())->toContain('stopping after 3 cycles: restart (')
         ->and($outboxes['durable']->drains)->toBe($drainsAtRestart);
-});
+})->skip(! extension_loaded('pcntl'), 'swarm:relay --daemon requires the pcntl extension.');
 
 test('a restart signal already present when the daemon starts does not stop it', function (): void {
     app('cache')->store()->forever('illuminate:queue:restart', 1_700_000_000);
@@ -766,8 +835,8 @@ test('a restart signal already present when the daemon starts does not stop it',
     Sleep::fake(syncWithCarbon: true);
 
     expect(Artisan::call('swarm:relay', ['--daemon' => true, '--memory' => 0, '--max-time' => 1]))->toBe(0)
-        ->and(Artisan::output())->toContain(': max_time.');
-});
+        ->and(Artisan::output())->toContain(': max_time (');
+})->skip(! extension_loaded('pcntl'), 'swarm:relay --daemon requires the pcntl extension.');
 
 test('the restart key is read at start and at each check, and not at all when queue restarts are disabled', function (bool $restartable): void {
     $store = new RelayDaemonSpyStore;
@@ -785,7 +854,7 @@ test('the restart key is read at start and at each check, and not at all when qu
     // max-time 1 s: 200 + 400 + 400 ms, so 3 cycles, each checked after the
     // cycle and after the sleep, plus the startup read.
     expect($store->restartReads)->toBe($restartable ? 1 + 3 * 2 : 0);
-})->with([
+})->skip(! extension_loaded('pcntl'), 'swarm:relay --daemon requires the pcntl extension.')->with([
     'enabled' => true,
     'disabled' => false,
 ]);
@@ -843,7 +912,7 @@ test('a failing audit sink cannot feed the daemon its own evidence', function ()
         ])
         ->and($sleeps[0])->toBe(100)
         ->and(array_slice($sleeps, 1, 4))->toBe([200, 400, 500, 300]);
-});
+})->skip(! extension_loaded('pcntl'), 'swarm:relay --daemon requires the pcntl extension.');
 
 /**
  * Run the daemon for exactly $cycles idle cycles with a 1 ms sleep, the clock
@@ -879,7 +948,7 @@ function relayDaemonIdleFootprint(int $cycles, int $sampleAt): array
         }
     });
 
-    $exit = Artisan::call('swarm:relay', ['--daemon' => true, '--memory' => 0, '--max-time' => $cycles, '--memory' => 0]);
+    $exit = Artisan::call('swarm:relay', ['--daemon' => true, '--max-time' => $cycles, '--memory' => 0]);
 
     return ['cycles' => $state->sleeps, 'samples' => $state->samples, 'exit' => $exit];
 }
@@ -894,7 +963,7 @@ test('idle cycles do not grow the daemon\'s memory', function (): void {
         ->and($outboxes['durable']->drains)->toBe(6000)
         ->and(array_keys($run['samples']))->toBe([1000, 6000])
         ->and($run['samples'][6000] - $run['samples'][1000])->toBeLessThan(16 * 1024);
-});
+})->skip(! extension_loaded('pcntl'), 'swarm:relay --daemon requires the pcntl extension.');
 
 test('idle cycles over the bundled database outboxes do not grow the daemon\'s memory', function (): void {
     config()->set('swarm.persistence.driver', 'database');
@@ -948,7 +1017,7 @@ test('idle cycles over the bundled database outboxes do not grow the daemon\'s m
         ->and($hits->callback)->toBeGreaterThanOrEqual(3000)
         ->and(array_keys($run['samples']))->toBe([500, 3000])
         ->and($run['samples'][3000] - $run['samples'][500])->toBeLessThan(16 * 1024);
-});
+})->skip(! extension_loaded('pcntl'), 'swarm:relay --daemon requires the pcntl extension.');
 
 test('swarm:relay --help documents daemon mode', function (): void {
     Artisan::call('swarm:relay', ['--help' => true]);

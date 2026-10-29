@@ -343,7 +343,7 @@ test('a stop signal during a drain lets the whole cycle finish, releases every l
         ->and($daemon['audit'])->toBe(1)
         ->and($daemon['callback'])->toBe(1)
         ->and($daemon['output'])->toContain('Dispatched 1 outbox entry.')
-        ->and($daemon['output'])->toContain('stopping after 1 cycle: signal.');
+        ->and($daemon['output'])->toContain('stopping after 1 cycle: signal (');
 
     foreach (RelayLane::cases() as $lane) {
         expect(relayDaemonProcessLeaseFree($root, $lane))->toBeTrue();
@@ -367,7 +367,7 @@ test('a stop signal during the idle sleep ends it promptly, and no lease is held
         ->and($daemon['exit'])->toBe(0)
         ->and($daemon['durable'])->toBe(1)
         ->and($daemon['exited_at'] - $controller['signal_at'])->toBeLessThan(1.5)
-        ->and($daemon['output'])->toContain('stopping after 1 cycle: signal.');
+        ->and($daemon['output'])->toContain('stopping after 1 cycle: signal (');
 });
 
 test('a stop signal that arrives while the restart key is read is acted on before the next sleep or drain', function (string $scenario, int $armedRead): void {
@@ -384,7 +384,7 @@ test('a stop signal that arrives while the restart key is read is acted on befor
         ->and(file_exists($root.'/cycle-end-1'))->toBeTrue()
         ->and($daemon['exit'])->toBe(0)
         ->and($daemon['durable'])->toBe(1)
-        ->and($daemon['output'])->toContain('stopping after 1 cycle: signal.');
+        ->and($daemon['output'])->toContain('stopping after 1 cycle: signal (');
 
     if ($scenario === 'post-cycle-read') {
         // No full 5 s sleep after the signal.
@@ -410,5 +410,5 @@ test('queue:restart in another process stops the daemon through a shared default
     expect($controller['restart_exit'])->toBe(0)
         ->and($daemon['exit'])->toBe(0)
         ->and($daemon['durable'])->toBe($controller['cycles_at_restart'])
-        ->and($daemon['output'])->toContain(': restart.');
+        ->and($daemon['output'])->toContain(': restart (');
 });

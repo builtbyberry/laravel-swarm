@@ -39,7 +39,9 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   (read from the default cache store, as `queue:work` does) and the new
   `--max-time` and `--memory` options also stop it with exit 0, so the
   supervisor must restart it on any exit (`autorestart=true`). It exits non-zero
-  only on genuine failure. Requires `pcntl`, and cannot be combined with
+  only on genuine failure: invalid options or configuration, an exception from a
+  drain (audited as `status: error`), or a failure reading the `queue:restart`
+  key (not audited). Requires `pcntl`, and cannot be combined with
   `--drain-until-empty`. In daemon mode `command.relay` is emitted once per cycle
   that moved or failed durable or callback rows or found a lane held; idle and
   audit-only cycles emit nothing, so a failing audit sink cannot keep the daemon

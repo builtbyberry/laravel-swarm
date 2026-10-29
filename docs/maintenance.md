@@ -317,7 +317,12 @@ queue as they commit and the relay is only the recovery sweep: an
 `everyMinute()` schedule entry is enough and needs no process supervisor. Run
 the daemon when you still want sub-minute polling — for example to deliver
 terminal callbacks or replay audit evidence within seconds, or because eager
-dispatch is off — without paying for a boot every second.
+dispatch is off — without paying for a boot every second. An idle daemon
+still polls: every selected lane takes and releases its lease and runs one
+empty claim query about every `max_sleep_ms` (3 s by default), around twenty
+times the load of an `everyMinute()` entry. Raise `max_sleep_ms` or narrow
+`--type` to cut that idle database and lock-store load, at the cost of slower
+pickup of rows the relay is the only path for.
 
 **How a cycle works.** Each cycle drains each selected lane once (`--limit`
 rows per lane), each under its own [lane lease](#command-overlap-leases), taken
@@ -333,8 +338,14 @@ the sleep grows by `backoff_multiplier` (2) up to `max_sleep_ms` (3000 ms). See
 **Evidence.** A daemon cycle that moved or failed durable or callback rows, or
 found a lane held, emits one `command.relay` event describing that cycle. Idle
 cycles and cycles whose only work was in the audit lane emit nothing, so a
-failing audit sink cannot keep the daemon replaying its own evidence. See the
-[Audit Evidence Contract](audit-evidence-contract.md).
+failing audit sink cannot keep the daemon replaying its own evidence (an
+audit-only cycle is still printed to the console). See the
+[Audit Evidence Contract](audit-evidence-contract.md). Because idle cycles are
+silent, a stopped daemon and an idle one look the same in the evidence stream:
+watch the process through your supervisor, and keep `swarm:health --durable`
+in your monitoring, whose stale-row warnings
+(`swarm.durable.relay.stale_warning_threshold_seconds`) are the signal that no
+relay is draining.
 
 **Stopping and restarting.** The daemon requires the `pcntl` extension and
 refuses to start without it.
@@ -359,8 +370,10 @@ refuses to start without it.
   disables either. They are checked between cycles, never mid-drain.
 
 Every one of these stops exits 0. The daemon exits non-zero only for a genuine
-failure: invalid options or configuration, missing `pcntl`, or an exception
-escaping a drain (audited as `status: error`, then rethrown). Code **and
+failure: invalid options or configuration, missing `pcntl`, an exception
+escaping a drain (audited as `status: error`, then rethrown), or a failure
+reading the `queue:restart` key from the default cache store (not audited, as
+with `queue:work`). Code **and
 configuration** are loaded once at start, so restart the daemon on every deploy
 and after changing any `swarm.*` setting.
 
@@ -371,6 +384,8 @@ A Supervisor program for the daemon:
 command=php /var/www/app/artisan swarm:relay --daemon --max-time=3600
 autostart=true
 autorestart=true
+startsecs=0
+startretries=100
 stopsignal=TERM
 stopwaitsecs=60
 numprocs=1
@@ -382,12 +397,31 @@ stdout_logfile=/var/www/app/storage/logs/swarm-relay.log
 `autorestart=true` is required, not optional: `--max-time`, `--memory` and
 `queue:restart` all stop the daemon with exit code 0 so that Supervisor starts a
 fresh one, and Supervisor's default `autorestart=unexpected` treats exit 0 as
-"finished" and would leave the relay stopped. Size `stopwaitsecs` for the whole
+"finished" and would leave the relay stopped. `startsecs=0` and a high
+`startretries` matter as much: an outage of the database or of the overlap
+lease store makes every drain throw, so each restarted daemon exits within a
+second. With Supervisor's defaults (`startsecs=1`, `startretries=3`) that marks
+the program `FATAL` after three tries and Supervisor stops restarting it, so the
+relay stays down after the outage clears. If `supervisorctl status` ever shows
+the program `FATAL`, start it again with `supervisorctl start swarm-relay`.
+
+Size `stopwaitsecs` for the whole
 cycle a stop waits for: the worst-case batch time of every selected lane added
 together, plus that cycle's audit sink write, plus your default cache store's
-read timeout, plus 0.5 s and a margin. Run one daemon per set of lanes
-(`numprocs=1`): a second daemon on the same lanes only contends for their
-leases. To run step dispatch and audit/callback work on separate cadences,
+read timeout, plus 0.5 s and a margin. The same applies to any other host's stop
+grace period — Docker's `docker stop` (10 s) and Kubernetes'
+`terminationGracePeriodSeconds` (30 s) are often shorter. A daemon killed in the
+middle of a batch leaves that lane's lease held until
+`swarm.commands.overlap.lease_seconds` expires (3600 s by default): the restarted
+daemon warns on every cycle that the lane is held and skips it, and with eager
+dispatch off its durable runs wait. To free the lane sooner, release its key as
+described under [Command overlap leases](#command-overlap-leases).
+
+Run exactly one daemon per set of lanes across **all** your hosts, not one per
+host: `numprocs=1` only limits a single machine. A Supervisor program deployed to
+every app server, or a background process on a platform running several
+replicas, starts one daemon per machine, and the extra daemons only contend for
+the same leases. Put the daemon on one server, or on a single-replica worker. To run step dispatch and audit/callback work on separate cadences,
 run two programs with disjoint `--type` selections, as in the
 [split-cadence schedule](#split-cadence-relay-schedule).
 
@@ -396,7 +430,10 @@ run two programs with disjoint `--type` selections, as in the
 entry for the same lanes. Do not leave both: every cycle that meets the
 scheduled run's lease is skipped for that lane and emits a `command.relay`
 event. To roll back, put the schedule entry back first, then stop the daemon,
-so no lane is left without a relay.
+so no lane is left without a relay. While the two overlap, a scheduled run that
+meets the daemon's lease exits 1 and records `contended_lanes` (or
+`skipped_overlap`); that is expected, so keep the overlap to a tick or two and
+expect those exits if you alert on the scheduled command's exit code.
 
 #### Rolling deploys
 

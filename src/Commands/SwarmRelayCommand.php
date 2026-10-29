@@ -25,6 +25,10 @@ use Illuminate\Support\Sleep;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Throwable;
 
+/**
+ * @phpstan-type RelayBatch array{results: array<string, DrainResult|AuditDrainResult|CallbackDrainResult>, contended: list<string>}
+ * @phpstan-type RelayTotals array{dispatched: int, skipped: int, failed: int, claimed: int, reclaimed: int, reclaimed_direct: int, audit_replayed: int, audit_dead_lettered: int, callback_dispatched: int, callback_dead_lettered: int}
+ */
 #[AsCommand(name: 'swarm:relay')]
 class SwarmRelayCommand extends Command
 {
@@ -42,6 +46,13 @@ class SwarmRelayCommand extends Command
      * The highest idle-sleep bound accepted from configuration.
      */
     private const DAEMON_MAX_SLEEP_CEILING_MS = 60_000;
+
+    /**
+     * The lanes whose work keeps a daemon on its short cadence and makes a cycle
+     * reportable. The audit lane is left out so a failing audit sink cannot keep
+     * the daemon replaying, and reporting, its own evidence.
+     */
+    private const DAEMON_WORK_LANES = ['durable', 'callback'];
 
     protected $signature = 'swarm:relay
                             {--type=* : Dispatch types to relay (step, branch, queued_resume, audit, callback). Defaults to all.}
@@ -78,8 +89,9 @@ class SwarmRelayCommand extends Command
           another invocation holds a selected lane, that lane's remaining batches
           are skipped for this run, the other lanes still drain, and the command
           exits 1. (A daemon instead skips a held lane for that cycle only and
-          keeps running; see DAEMON MODE.) Configure the store and duration with swarm.commands.overlap; the
-          lease must exceed the worst-case single drain batch.
+          keeps running; see DAEMON MODE.) Configure the store and duration with
+          swarm.commands.overlap; the lease must exceed the worst-case single
+          drain batch.
 
           To keep step dispatch on a fast cadence and audit and callback work on a
           slow one, schedule the lanes separately (queued_resume belongs with the
@@ -149,12 +161,14 @@ class SwarmRelayCommand extends Command
 
           Evidence. Each cycle that moved or failed durable or callback rows, or
           found a lane held, emits one command.relay event for that cycle; idle and
-          audit-only cycles emit nothing.
+          audit-only cycles emit nothing. Console lines are timestamped; a cycle
+          with audit-lane activity only is printed but not audited.
 
           Exit codes. 0 when stopped by a signal, queue:restart, --max-time or
           --memory. Non-zero only on genuine failure: invalid options or
-          configuration, missing pcntl, or an exception from a drain (audited as
-          status error, then rethrown).
+          configuration, missing pcntl, an exception from a drain (audited as
+          status error, then rethrown), or a failure reading the queue:restart
+          key from the default cache store (not audited, as with queue:work).
 
         When --drain-until-empty encounters permanently invalid entries, each loop
         iteration reports and deletes the bad rows and continues until the table is
@@ -171,7 +185,7 @@ class SwarmRelayCommand extends Command
           php artisan swarm:relay --daemon --type=step --type=branch --type=queued_resume
         HELP;
 
-    public function handle(DurableOutbox $outbox, AuditOutbox $auditOutbox, CallbackDeliveryOutbox $callbackOutbox, SwarmAuditDispatcher $audit, ConfigRepository $config, CommandOverlapGuard $overlap, CacheFactory $cacheFactory): int
+    public function handle(DurableOutbox $outbox, AuditOutbox $auditOutbox, CallbackDeliveryOutbox $callbackOutbox, SwarmAuditDispatcher $audit, ConfigRepository $config, CommandOverlapGuard $overlap): int
     {
         $daemon = (bool) $this->option('daemon');
         $drainUntilEmpty = (bool) $this->option('drain-until-empty');
@@ -226,7 +240,7 @@ class SwarmRelayCommand extends Command
                 return self::FAILURE;
             }
 
-            return $this->runDaemon($drainers, $selectedTypeValues, $limit, $settings, $overlap, $audit, $cacheFactory);
+            return $this->runDaemon($drainers, $selectedTypeValues, $limit, $settings, $overlap, $audit, $config);
         }
 
         foreach (['max-time', 'memory'] as $daemonOption) {
@@ -349,7 +363,7 @@ class SwarmRelayCommand extends Command
      * @param  list<string>  $selectedTypeValues
      * @param  array{min_sleep_ms: int, max_sleep_ms: int, backoff_multiplier: float, max_time: int, memory: int}  $settings
      */
-    private function runDaemon(array $drainers, array $selectedTypeValues, int $limit, array $settings, CommandOverlapGuard $overlap, SwarmAuditDispatcher $audit, CacheFactory $cacheFactory): int
+    private function runDaemon(array $drainers, array $selectedTypeValues, int $limit, array $settings, CommandOverlapGuard $overlap, SwarmAuditDispatcher $audit, ConfigRepository $config): int
     {
         $actorMetadata = ['actor' => Actor::system('artisan')->toArray()];
 
@@ -369,7 +383,7 @@ class SwarmRelayCommand extends Command
         $lastRestart = null;
 
         if (Worker::$restartable) {
-            $restartCache = $cacheFactory->store();
+            $restartCache = $this->laravel->make(CacheFactory::class)->store();
             $lastRestart = $restartCache->get(self::RESTART_CACHE_KEY);
         }
 
@@ -407,12 +421,24 @@ class SwarmRelayCommand extends Command
         };
 
         $this->components->info(sprintf(
-            'swarm:relay daemon started: lanes [%s], limit %d per lane per cycle, idle sleep %d-%d ms.',
+            '[%s] swarm:relay daemon started: lanes [%s], limit %d per lane per cycle, idle sleep %d-%d ms, max-time %s, memory %s.',
+            $this->daemonTimestamp(),
             implode(', ', array_keys($drainers)),
             $limit,
             $settings['min_sleep_ms'],
             $settings['max_sleep_ms'],
+            $settings['max_time'] > 0 ? $settings['max_time'].' s' : 'none',
+            $settings['memory'] > 0 ? $settings['memory'].' MB' : 'none',
         ));
+
+        $defaultStore = $config->get('cache.default');
+        $defaultDriver = $config->get('cache.stores.'.(is_string($defaultStore) ? $defaultStore : '').'.driver');
+
+        if (! Worker::$restartable) {
+            $this->components->warn('Queue restarts are disabled (Worker::$restartable is false), so queue:restart will not stop this daemon. Stop it with SIGTERM through your process supervisor.');
+        } elseif (in_array($defaultDriver, ['array', 'null'], true)) {
+            $this->components->warn("The default cache store uses the [{$defaultDriver}] driver, which other processes cannot see, so queue:restart will not reach this daemon. Stop it with SIGTERM through your process supervisor.");
+        }
 
         $sleepMs = $settings['min_sleep_ms'];
         $cycles = 0;
@@ -426,14 +452,14 @@ class SwarmRelayCommand extends Command
                     $drainers,
                     $overlap,
                     $batch,
-                    fn (RelayLane $lane) => $this->components->warn("Another swarm:relay invocation holds the [{$lane->value}] lane's command overlap lease; skipping that lane this cycle."),
+                    fn (RelayLane $lane) => $this->components->warn("[{$this->daemonTimestamp()}] The [{$lane->value}] lane's command overlap lease ({$lane->leaseKey()}) is held, so that lane is skipped this cycle. Either another swarm:relay is draining it, or a relay that was killed mid-batch still holds it until swarm.commands.overlap.lease_seconds expires; see \"Command overlap leases\" in docs/maintenance.md to release it."),
                 );
             } catch (Throwable $exception) {
                 $totals = $this->emptyTotals();
                 $this->addBatchToTotals($batch, $totals);
 
                 $audit->emit('command.relay', [
-                    ...$this->relayEvidence($selectedTypeValues, $limit, false, null, 1, $totals, array_fill_keys($batch['contended'], true)),
+                    ...$this->daemonCycleEvidence($selectedTypeValues, $limit, 1, $totals, $batch),
                     'status' => 'error',
                     'exception_class' => $exception::class,
                     ...$audit->metadata($actorMetadata),
@@ -442,7 +468,7 @@ class SwarmRelayCommand extends Command
                 throw $exception;
             }
 
-            $this->reportDaemonCycle($batch, $selectedTypeValues, $limit, $audit, $actorMetadata);
+            $this->reportDaemonCycle($batch, $cycles, $selectedTypeValues, $limit, $audit, $actorMetadata);
 
             // Only durable and callback work keeps the cadence short. Audit-lane
             // replays, transient failures and contention back off, so a failing sink
@@ -474,59 +500,93 @@ class SwarmRelayCommand extends Command
             }
         }
 
-        $this->components->info("swarm:relay daemon stopping after {$cycles} cycle".($cycles === 1 ? '' : 's').": {$reason}.");
+        $this->components->info(sprintf(
+            '[%s] swarm:relay daemon stopping after %d cycle%s: %s (ran %d s, memory %s MB).',
+            $this->daemonTimestamp(),
+            $cycles,
+            $cycles === 1 ? '' : 's',
+            $reason,
+            (int) floor($elapsedMs() / 1000),
+            number_format(memory_get_usage(true) / 1024 / 1024, 1),
+        ));
 
         return self::SUCCESS;
     }
 
     /**
-     * Report one daemon cycle: console lines and one command.relay event, but only
-     * when the durable or callback lane did work or a lane was found held. Idle
-     * and audit-lane-only cycles stay silent.
+     * Report one daemon cycle. A cycle where the durable or callback lane did
+     * work, or a lane was found held, prints its summary and emits one
+     * command.relay event. A cycle whose only activity was in the audit lane
+     * prints its summary but emits nothing; an idle cycle stays silent.
      *
-     * @param  array{results: array<string, DrainResult|AuditDrainResult|CallbackDrainResult>, contended: list<string>}  $batch
+     * @param  RelayBatch  $batch
      * @param  list<string>  $selectedTypeValues
      * @param  array<string, mixed>  $actorMetadata
      */
-    private function reportDaemonCycle(array $batch, array $selectedTypeValues, int $limit, SwarmAuditDispatcher $audit, array $actorMetadata): void
+    private function reportDaemonCycle(array $batch, int $cycle, array $selectedTypeValues, int $limit, SwarmAuditDispatcher $audit, array $actorMetadata): void
     {
-        $workFailed = 0;
-
-        foreach ([RelayLane::Durable->value, RelayLane::Callback->value] as $lane) {
-            $workFailed += isset($batch['results'][$lane]) ? $batch['results'][$lane]->failed : 0;
-        }
-
-        if ($this->workRemoved($batch) === 0 && $workFailed === 0 && $batch['contended'] === []) {
-            return;
-        }
-
-        $contended = array_fill_keys($batch['contended'], true);
+        $reportable = $this->workRemoved($batch) > 0 || $this->workFailed($batch) > 0 || $batch['contended'] !== [];
 
         if ($batch['results'] === []) {
-            $audit->emit('command.relay', [
-                ...$this->relayEvidence($selectedTypeValues, $limit, false, null, 0, $this->emptyTotals(), $contended),
-                'status' => 'skipped_overlap',
-                ...$audit->metadata($actorMetadata),
-            ]);
+            if ($reportable) {
+                $audit->emit('command.relay', [
+                    ...$this->daemonCycleEvidence($selectedTypeValues, $limit, 0, $this->emptyTotals(), $batch),
+                    'status' => 'skipped_overlap',
+                    ...$audit->metadata($actorMetadata),
+                ]);
+            }
 
             return;
         }
 
         $totals = $this->emptyTotals();
         $this->addBatchToTotals($batch, $totals);
+
+        if ($this->totalsRemoved($totals) === 0 && $totals['failed'] === 0 && ! $reportable) {
+            return;
+        }
+
+        if ($reportable) {
+            $audit->emit('command.relay', [
+                ...$this->daemonCycleEvidence($selectedTypeValues, $limit, 1, $totals, $batch),
+                'status' => $this->totalsStatus($totals, $totals['failed'] > 0),
+                ...$audit->metadata($actorMetadata),
+            ]);
+        }
+
         $failed = [];
 
         foreach ($batch['results'] as $lane => $result) {
             $failed[$lane] = $result->failed;
         }
 
-        $audit->emit('command.relay', [
-            ...$this->relayEvidence($selectedTypeValues, $limit, false, null, 1, $totals, $contended),
-            'status' => $this->totalsStatus($totals, $totals['failed'] > 0),
-            ...$audit->metadata($actorMetadata),
-        ]);
-
+        $this->line("[{$this->daemonTimestamp()}] swarm:relay daemon cycle {$cycle}:");
         $this->reportTotals($totals, $failed, null, 1);
+    }
+
+    /**
+     * The command.relay evidence for one daemon cycle: it describes that cycle,
+     * not the invocation, so it never drains until empty and has no attempt
+     * budget. $attempts is 1, or 0 when every selected lane was held.
+     *
+     * @see docs/audit-evidence-contract.md (command.relay)
+     *
+     * @param  list<string>  $selectedTypeValues
+     * @param  RelayTotals  $totals
+     * @param  RelayBatch  $batch
+     * @return array<string, mixed>
+     */
+    private function daemonCycleEvidence(array $selectedTypeValues, int $limit, int $attempts, array $totals, array $batch): array
+    {
+        return $this->relayEvidence($selectedTypeValues, $limit, false, null, $attempts, $totals, array_fill_keys($batch['contended'], true));
+    }
+
+    /**
+     * The local time stamped on daemon console lines.
+     */
+    private function daemonTimestamp(): string
+    {
+        return Carbon::now()->format('Y-m-d H:i:s');
     }
 
     /**
@@ -538,7 +598,7 @@ class SwarmRelayCommand extends Command
      * already done in $batch for the caller to report.
      *
      * @param  array<string, Closure(): (DrainResult|AuditDrainResult|CallbackDrainResult)>  $drainers
-     * @param  array{results: array<string, DrainResult|AuditDrainResult|CallbackDrainResult>, contended: list<string>}  $batch
+     * @param  RelayBatch  $batch
      * @param  Closure(RelayLane): void  $onContended
      */
     private function drainBatch(array $drainers, CommandOverlapGuard $overlap, array &$batch, Closure $onContended): void
@@ -560,7 +620,7 @@ class SwarmRelayCommand extends Command
     }
 
     /**
-     * @return array{results: array<string, DrainResult|AuditDrainResult|CallbackDrainResult>, contended: list<string>}
+     * @return RelayBatch
      */
     private function emptyBatch(): array
     {
@@ -568,7 +628,7 @@ class SwarmRelayCommand extends Command
     }
 
     /**
-     * @return array{dispatched: int, skipped: int, failed: int, claimed: int, reclaimed: int, reclaimed_direct: int, audit_replayed: int, audit_dead_lettered: int, callback_dispatched: int, callback_dead_lettered: int}
+     * @return RelayTotals
      */
     private function emptyTotals(): array
     {
@@ -587,8 +647,8 @@ class SwarmRelayCommand extends Command
     }
 
     /**
-     * @param  array{results: array<string, DrainResult|AuditDrainResult|CallbackDrainResult>, contended: list<string>}  $batch
-     * @param  array{dispatched: int, skipped: int, failed: int, claimed: int, reclaimed: int, reclaimed_direct: int, audit_replayed: int, audit_dead_lettered: int, callback_dispatched: int, callback_dead_lettered: int}  $totals
+     * @param  RelayBatch  $batch
+     * @param  RelayTotals  $totals
      */
     private function addBatchToTotals(array $batch, array &$totals): void
     {
@@ -614,7 +674,7 @@ class SwarmRelayCommand extends Command
     /**
      * Rows removed from any lane's outbox in this batch.
      *
-     * @param  array{results: array<string, DrainResult|AuditDrainResult|CallbackDrainResult>, contended: list<string>}  $batch
+     * @param  RelayBatch  $batch
      */
     private function batchRemoved(array $batch): int
     {
@@ -622,7 +682,7 @@ class SwarmRelayCommand extends Command
     }
 
     /**
-     * @param  array{results: array<string, DrainResult|AuditDrainResult|CallbackDrainResult>, contended: list<string>}  $batch
+     * @param  RelayBatch  $batch
      */
     private function batchFailed(array $batch): int
     {
@@ -633,21 +693,34 @@ class SwarmRelayCommand extends Command
      * Rows removed from the durable and callback outboxes — the work that keeps
      * the daemon on its short cadence. The audit lane is deliberately excluded.
      *
-     * @param  array{results: array<string, DrainResult|AuditDrainResult|CallbackDrainResult>, contended: list<string>}  $batch
+     * @param  RelayBatch  $batch
      */
     private function workRemoved(array $batch): int
     {
-        $removed = 0;
-
-        foreach ([RelayLane::Durable->value, RelayLane::Callback->value] as $lane) {
-            $removed += isset($batch['results'][$lane]) ? $batch['results'][$lane]->total() : 0;
-        }
-
-        return $removed;
+        return array_sum(array_map(static fn (DrainResult|AuditDrainResult|CallbackDrainResult $result): int => $result->total(), $this->workResults($batch)));
     }
 
     /**
-     * @param  array{dispatched: int, skipped: int, failed: int, claimed: int, reclaimed: int, reclaimed_direct: int, audit_replayed: int, audit_dead_lettered: int, callback_dispatched: int, callback_dead_lettered: int}  $totals
+     * Transient failures in the durable and callback outboxes in this batch.
+     *
+     * @param  RelayBatch  $batch
+     */
+    private function workFailed(array $batch): int
+    {
+        return array_sum(array_map(static fn (DrainResult|AuditDrainResult|CallbackDrainResult $result): int => $result->failed, $this->workResults($batch)));
+    }
+
+    /**
+     * @param  RelayBatch  $batch
+     * @return array<string, DrainResult|AuditDrainResult|CallbackDrainResult>
+     */
+    private function workResults(array $batch): array
+    {
+        return array_intersect_key($batch['results'], array_flip(self::DAEMON_WORK_LANES));
+    }
+
+    /**
+     * @param  RelayTotals  $totals
      */
     private function totalsRemoved(array $totals): int
     {
@@ -655,7 +728,7 @@ class SwarmRelayCommand extends Command
     }
 
     /**
-     * @param  array{dispatched: int, skipped: int, failed: int, claimed: int, reclaimed: int, reclaimed_direct: int, audit_replayed: int, audit_dead_lettered: int, callback_dispatched: int, callback_dead_lettered: int}  $totals
+     * @param  RelayTotals  $totals
      */
     private function totalsStatus(array $totals, bool $hasUnresolvedTransient): string
     {
@@ -670,7 +743,7 @@ class SwarmRelayCommand extends Command
      * The frozen command.relay evidence fields, without status.
      *
      * @param  list<string>  $selectedTypeValues
-     * @param  array{dispatched: int, skipped: int, failed: int, claimed: int, reclaimed: int, reclaimed_direct: int, audit_replayed: int, audit_dead_lettered: int, callback_dispatched: int, callback_dead_lettered: int}  $totals
+     * @param  RelayTotals  $totals
      * @param  array<string, true>  $contended
      * @return array<string, mixed>
      */
@@ -699,7 +772,7 @@ class SwarmRelayCommand extends Command
     /**
      * Print the summary lines for drained totals.
      *
-     * @param  array{dispatched: int, skipped: int, failed: int, claimed: int, reclaimed: int, reclaimed_direct: int, audit_replayed: int, audit_dead_lettered: int, callback_dispatched: int, callback_dead_lettered: int}  $totals
+     * @param  RelayTotals  $totals
      * @param  array<string, int>  $lastFailed  each lane's transient failures in its last drained batch
      */
     private function reportTotals(array $totals, array $lastFailed, ?int $maxAttempts, int $attempts): void
@@ -845,6 +918,8 @@ class SwarmRelayCommand extends Command
 
     /**
      * Whether stop signals can be trapped (queue:work's check of the same name).
+     *
+     * @internal A test seam, not an extension point.
      */
     protected function supportsAsyncSignals(): bool
     {
