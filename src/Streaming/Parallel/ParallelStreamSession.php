@@ -8,6 +8,7 @@ use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
 use BuiltByBerry\LaravelSwarm\Runners\ConcurrentAgentResult;
 use Illuminate\Contracts\Process\ProcessResult;
+use Illuminate\Process\FakeInvokedProcess;
 use Illuminate\Process\InvokedProcess;
 
 /** @internal */
@@ -32,7 +33,7 @@ final class ParallelStreamSession
 
     /**
      * @param  resource  $server
-     * @param  array<string, InvokedProcess>  $processes
+     * @param  array<string, InvokedProcess|FakeInvokedProcess>  $processes
      * @param  list<string>  $branchIds
      */
     public function __construct(
