@@ -11,7 +11,7 @@ function adoptionProofInputs(string $lane = 'minimum'): array
 {
     $manifest = json_decode(file_get_contents(dirname(__DIR__, 3).'/composer.json'), true, flags: JSON_THROW_ON_ERROR);
     $packages = [
-        ['name' => 'laravel/ai', 'version' => $lane === 'moving-dev' ? '1.x-dev' : 'v1.0.0', 'source' => ['type' => 'git', 'url' => 'https://github.com/laravel/ai.git', 'reference' => '101c7ea33cd8569d82570f753fbf38e48b7d3d95']],
+        ['name' => 'laravel/ai', 'version' => 'v1.0.0', 'source' => ['type' => 'git', 'url' => 'https://github.com/laravel/ai.git', 'reference' => '101c7ea33cd8569d82570f753fbf38e48b7d3d95']],
         ['name' => 'laravel/framework', 'version' => $lane === 'moving-dev' ? '13.x-dev' : 'v13.16.0', 'source' => ['type' => 'git', 'url' => 'https://github.com/laravel/framework.git', 'reference' => str_repeat('a', 40)]],
     ];
     if ($lane === 'laravel-13.16') {
@@ -22,7 +22,6 @@ function adoptionProofInputs(string $lane = 'minimum'): array
 
     // Expected observations are fixture inputs independent of the lock under test.
     return [$manifest, ['packages' => $packages], ['packages' => $packages], $lane, [
-        'laravel/ai' => '101c7ea33cd8569d82570f753fbf38e48b7d3d95',
         'laravel/framework' => str_repeat('a', 40),
     ]];
 }
@@ -77,7 +76,7 @@ it('requires every compatibility dependency to be installed from its verified lo
 it('fails closed on a stable lock masquerading as moving development', function () {
     $args = adoptionProofInputs();
     $args[3] = 'moving-dev';
-    expect(adoptionDependencyErrors(...$args))->toContain('laravel/ai did not resolve the exact compatible moving development branch.');
+    expect(adoptionDependencyErrors(...$args))->toContain('laravel/framework did not resolve the exact compatible moving development branch.');
 });
 
 it('rejects changed production constraints and non official resolutions', function (string $mutation, string $expected) {
@@ -107,13 +106,13 @@ it('rejects changed production constraints and non official resolutions', functi
     ['framework', 'Laravel 13'], ['unknown', 'Unknown dependency lane'],
 ]);
 
-it('rejects other dev branches and malformed source refs', function (string $version, string $reference) {
+it('rejects a laravel/ai development branch in the moving lane even at a full commit', function (string $version, string $reference) {
     $args = adoptionProofInputs('moving-dev');
     $args[1]['packages'][0]['version'] = $version;
     $args[1]['packages'][0]['source']['reference'] = $reference;
     $args[2] = $args[1];
-    expect(adoptionDependencyErrors(...$args))->not->toBe([]);
-})->with([['0.x-dev', str_repeat('a', 40)], ['dev-main', str_repeat('a', 40)], ['1.x-dev', 'moving']]);
+    expect(adoptionDependencyErrors(...$args))->toContain('Stable AI must be >=1.0.0 and <2.0.0.');
+})->with([['1.x-dev', str_repeat('a', 40)], ['0.x-dev', str_repeat('a', 40)], ['dev-main', str_repeat('a', 40)], ['1.x-dev', 'moving']]);
 
 it('parses the actual nightly workflow and requires hard gates after verified moving resolution', function () {
     $workflow = Yaml::parseFile(dirname(__DIR__, 3).'/.github/workflows/nightly.yml');
@@ -130,8 +129,9 @@ it('parses the actual nightly workflow and requires hard gates after verified mo
         }
     }
     $commands = implode("\n", $runs);
-    expect($commands)->toContain('"laravel/ai:1.x-dev#${SWARM_AI_DEV_REF}"', '"laravel/framework:13.x-dev#${SWARM_FRAMEWORK_DEV_REF}"', 'verify-adoption-dependencies.php moving-dev')
-        ->not->toContain('0.x-dev', '|| true');
+    expect($job['name'])->toBe('PHP 8.5 - Laravel 13.x-dev / AI stable');
+    expect($commands)->toContain('"laravel/framework:13.x-dev#${SWARM_FRAMEWORK_DEV_REF}"', 'verify-adoption-dependencies.php moving-dev')
+        ->not->toContain('laravel/ai:', 'SWARM_AI_DEV_REF', '1.x-dev', '0.x-dev', '|| true');
     $verify = strpos($commands, 'verify-adoption-dependencies.php moving-dev');
     foreach (['composer test:ci', 'composer test:process-concurrency:ci', 'composer analyse', 'composer test:compliance', 'composer lint'] as $gate) {
         expect($runs)->toContain($gate);
@@ -265,14 +265,14 @@ it('rejects the same wrong well formed branch SHA in lock and installed metadata
     $args[2] = $args[1];
 
     expect(adoptionDependencyErrors(...$args))->toContain($args[1]['packages'][$package]['name'].' must match the captured official branch reference.');
-})->with([0, 1]);
+})->with([1]);
 
 it('requires independently captured full expected branch refs', function (int $package, mixed $expected) {
     $args = adoptionProofInputs('moving-dev');
     $args[4][$args[1]['packages'][$package]['name']] = $expected;
 
     expect(implode(' ', adoptionDependencyErrors(...$args)))->toContain('captured official branch reference');
-})->with([0, 1])->with([null, false, '', 'moving', 'abcd', str_repeat('f', 40)]);
+})->with([1])->with([null, false, '', 'moving', 'abcd', str_repeat('f', 40)]);
 
 it('rejects incorrect package identity or installed source even with matching versions', function (string $mutation) {
     $args = adoptionProofInputs('moving-dev');
@@ -283,7 +283,7 @@ it('rejects incorrect package identity or installed source even with matching ve
         'installed-name' => $args[2]['packages'][0]['name'] = 'fork/ai',
         'installed-url' => $args[2]['packages'][0]['source']['url'] = 'https://github.com/fork/ai.git',
         'installed-type' => $args[2]['packages'][0]['source']['type'] = 'path',
-        'installed-version' => $args[2]['packages'][0]['version'] = 'v1.0.0',
+        'installed-version' => $args[2]['packages'][0]['version'] = 'v1.0.1',
         'lock-type' => $args[1]['packages'][0]['source']['type'] = 'path',
     };
 
@@ -331,14 +331,13 @@ it('checks the actual restored manifest and captured refs through the standalone
             $manifest['description'] = 'Job-only manifest was not restored';
         }
         if ($mutation === 'wrong-sha') {
-            $lock['packages'][0]['source']['reference'] = str_repeat('d', 40);
+            $lock['packages'][1]['source']['reference'] = str_repeat('d', 40);
             $installed = $lock;
         }
         file_put_contents($directory.'/composer.json', json_encode($manifest));
         file_put_contents($directory.'/composer.lock', json_encode($lock));
         file_put_contents($directory.'/vendor/composer/installed.json', json_encode($installed));
         $process = new Process([PHP_BINARY, dirname(__DIR__, 3).'/.github/workflows/verify-adoption-dependencies.php', $lane, $directory, $directory.'/original.json'], env: [
-            'SWARM_AI_DEV_REF' => $expected['laravel/ai'],
             'SWARM_FRAMEWORK_DEV_REF' => $expected['laravel/framework'],
         ]);
         $process->run();
@@ -365,12 +364,13 @@ it('captures official branch refs before pinning and restores manifests before v
         $capture = $steps['Capture official moving branch references'];
         expect($capture['shell'])->toBe('bash');
         expect($capture)->not->toHaveKey('continue-on-error');
-        expect($capture['run'])->toContain('git ls-remote --exit-code', 'https://github.com/laravel/ai.git refs/heads/1.x SWARM_AI_DEV_REF', 'https://github.com/laravel/framework.git refs/heads/13.x SWARM_FRAMEWORK_DEV_REF', 'date -u');
+        expect($capture['run'])->toContain('git ls-remote --exit-code', 'https://github.com/laravel/framework.git refs/heads/13.x SWARM_FRAMEWORK_DEV_REF', 'date -u')
+            ->not->toContain('laravel/ai.git', 'SWARM_AI_DEV_REF');
         $runs = array_values(array_filter(array_column($job['steps'], 'run')));
         $commands = implode("\n", $runs);
-        foreach (['"laravel/ai:1.x-dev#${SWARM_AI_DEV_REF}"', '"laravel/framework:13.x-dev#${SWARM_FRAMEWORK_DEV_REF}"'] as $pin) {
-            expect(strpos($commands, $pin))->toBeGreaterThan(strpos($commands, 'git ls-remote --exit-code'));
-        }
+        expect(strpos($commands, '"laravel/framework:13.x-dev#${SWARM_FRAMEWORK_DEV_REF}"'))->toBeGreaterThan(strpos($commands, 'git ls-remote --exit-code'));
+        // The moving lanes take laravel/ai's latest stable release, never its development branch.
+        expect($commands)->not->toContain('laravel/ai:', 'SWARM_AI_DEV_REF', '1.x-dev');
         $restore = strpos($commands, 'cp /tmp/swarm-production-composer.json composer.json');
         $verify = strpos($commands, 'php .github/workflows/verify-adoption-dependencies.php');
         expect($restore)->toBeGreaterThan(strpos($commands, 'composer update'));
@@ -421,19 +421,23 @@ BASH);
             $process->run();
             expect($process->isSuccessful())->toBe($case === 'valid');
             if ($case === 'valid') {
-                expect(file_get_contents($directory.'/environment'))->toBe('SWARM_AI_DEV_REF='.str_repeat('a', 40)."\nSWARM_FRAMEWORK_DEV_REF=".str_repeat('b', 40)."\n");
-                expect($process->getOutput())->toContain('Official branch refs observed at', 'refs/heads/1.x', 'refs/heads/13.x');
+                expect(file_get_contents($directory.'/environment'))->toBe('SWARM_FRAMEWORK_DEV_REF='.str_repeat('b', 40)."\n");
+                expect($process->getOutput())->toContain('Official branch refs observed at', 'refs/heads/13.x')->not->toContain('refs/heads/1.x');
             }
         });
     }
 })->with(['valid', 'unavailable', 'empty', 'malformed', 'wrong-branch', 'ambiguous']);
 
-it('accepts current stable AI 1.x while refusing other majors prereleases and dev identities', function (string $version, bool $accepted) {
-    $args = adoptionProofInputs('current');
+it('accepts current stable AI 1.x while refusing other majors prereleases and dev identities', function (string $lane, string $version, bool $accepted) {
+    $args = adoptionProofInputs($lane);
     $args[1]['packages'][0]['version'] = $version;
+    if ($version !== 'v1.0.0') {
+        // Any stable 1.x release at its own commit, not only the v1.0.0 floor the minimum lane pins.
+        $args[1]['packages'][0]['source']['reference'] = str_repeat('e', 40);
+    }
     $args[2] = $args[1];
     expect(adoptionDependencyErrors(...$args) === [])->toBe($accepted);
-})->with([['v1.0.0', true], ['v1.0.1', true], ['v1.2.3', true], ['v0.11.2', false], ['v2.0.0', false], ['v1.1.0-beta.1', false], ['1.x-dev', false]]);
+})->with(['current', 'moving-dev'])->with([['v1.0.0', true], ['v1.0.1', true], ['v1.2.3', true], ['v1.3.0', true], ['v0.11.2', false], ['v2.0.0', false], ['v1.1.0-beta.1', false], ['1.x-dev', false]]);
 
 it('retains process skips analysis memory compliance and advisory policy in the executable gates', function () {
     $root = dirname(__DIR__, 3);
