@@ -25,11 +25,36 @@ use Illuminate\Foundation\Bus\PendingDispatch;
  */
 class DurableJobDispatcher
 {
+    /**
+     * Native-input versions already read, keyed by run id. Null means this
+     * instance does not memoize: every container-resolved dispatcher stays that
+     * way, and only a copy made by forDrain() fills the array.
+     *
+     * @var array<string, int|null>|null
+     */
+    protected ?array $nativeInputVersions = null;
+
     public function __construct(
         protected ConfigRepository $config,
         protected ?ContextStore $contexts = null,
         protected ?NativeInputStore $nativeInputs = null,
     ) {}
+
+    /**
+     * A copy that reads each run's native-input version once and reuses it for
+     * every later job it builds for that run. Hold it for one outbox drain and
+     * then drop it: the next drain takes a new copy and reads the versions fresh.
+     * Within the drain a run's first result is reused, a null one (no context row)
+     * included. The copy shares this instance's stores; only the memo is its own.
+     * This instance is left as it was, so it never memoizes.
+     */
+    public function forDrain(): static
+    {
+        $dispatcher = clone $this;
+        $dispatcher->nativeInputVersions = [];
+
+        return $dispatcher;
+    }
 
     public function dispatchStep(string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null): PendingDispatch
     {
@@ -131,6 +156,23 @@ class DurableJobDispatcher
     }
 
     protected function nativeInputVersion(string $runId): ?int
+    {
+        if ($this->nativeInputVersions === null) {
+            return $this->readNativeInputVersion($runId);
+        }
+
+        if (array_key_exists($runId, $this->nativeInputVersions)) {
+            return $this->nativeInputVersions[$runId];
+        }
+
+        // A read that throws stores nothing, so the next job for the run reads again.
+        return $this->nativeInputVersions[$runId] = $this->readNativeInputVersion($runId);
+    }
+
+    /**
+     * Read the run's context and, when it names one, its native-input row: no memo.
+     */
+    protected function readNativeInputVersion(string $runId): ?int
     {
         $context = ($this->contexts ?? Container::getInstance()->make(ContextStore::class))->find($runId);
 
