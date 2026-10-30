@@ -192,7 +192,8 @@ if ($result->accepted) {
 ```
 
 Signals can still be recorded with `accepted` set to `false` when the run has no
-matching open wait, the signal is a duplicate, or the run cannot advance. Use
+matching open wait, the signal is a duplicate, the run is paused, or the run
+cannot advance. Use
 `$result->status` and `$result->duplicate` when your application needs to
 distinguish those outcomes.
 
@@ -255,7 +256,11 @@ timeout outcome and dispatches the next durable step when the run can continue.
 
 ## Edge Cases
 
-- Paused runs retain signals but do not advance until resumed.
+- A signal delivered while the run is paused is recorded but not accepted, and
+  it is not applied when the run resumes. Re-send it after the run resumes, with
+  a new idempotency key: the original key returns the earlier delivery as a
+  `duplicate`. This is interim behaviour until [#601](https://github.com/builtbyberry/laravel-swarm/issues/601) accepts it on
+  resume. See [Pause, Resume, Cancel, And Recover](durable-execution.md#pause-resume-cancel-and-recover).
 - Cancelled runs ignore later signals.
 - Duplicate signals with the same idempotency key return the stored outcome.
 - Signals sent before a matching wait exists are still recorded on the run.

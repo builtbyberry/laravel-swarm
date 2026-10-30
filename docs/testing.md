@@ -159,7 +159,9 @@ Common patterns:
 - Bind a test double for `BuiltByBerry\LaravelSwarm\Runners\Durable\DurableJobDispatcher`
   **before** resolving `DurableSwarmManager` so you can assert how many
   `AdvanceDurableSwarm` / `AdvanceDurableBranch` dispatches occurred or inject
-  controlled failures.
+  controlled failures. With `swarm.durable.eager_dispatch` on, jobs pushed on
+  commit do not go through the double's `dispatchStep()` / `dispatchBranch()`;
+  observe them with `Queue::fake()` instead.
 - Bind `BuiltByBerry\LaravelSwarm\Runners\DurableRunRecorder` if you need to spy
   checkpoint writes; the service provider documents `makeWith` parameters.
 

@@ -38,6 +38,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\StreamEventMapper;
 use BuiltByBerry\LaravelSwarm\Streaming\StreamStepAccumulator;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
+use BuiltByBerry\LaravelSwarm\Support\AgentResponseOutput;
 use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\NativeAgentInvoker;
@@ -89,7 +90,7 @@ class DurableBranchAdvancer
         protected NativeInputManager $nativeInputs,
     ) {}
 
-    public function advanceBranch(string $runId, string $branchId): void
+    public function advanceBranch(string $runId, string $branchId, ?int $outboxEntryId = null): void
     {
         $run = $this->runs->requireRun($runId);
         $branch = $this->durableRuns->findBranch($runId, $branchId);
@@ -113,6 +114,12 @@ class DurableBranchAdvancer
 
         if ($token === null) {
             return;
+        }
+
+        // Settle the directly pushed job's outbox entry as soon as the lease is held,
+        // before any work, so the relay never redispatches it.
+        if ($outboxEntryId !== null) {
+            $this->outbox->settle($outboxEntryId, $runId);
         }
 
         // Per-swarm durable-streaming opt-in, pinned on the run row at start (#310);
@@ -189,6 +196,7 @@ class DurableBranchAdvancer
 
                     $startedAt = MonotonicTime::now();
                     $step = null;
+                    $sink = null;
 
                     try {
                         $this->stepsRecorder->started($state, (int) $branch['step_index'], $branch['agent_class'], $branch['input']);
@@ -217,9 +225,12 @@ class DurableBranchAdvancer
                             // it runs the unchanged blocking prompt(). The void above already ran for
                             // any pinned run regardless of the kill-switch, so a retraction is never
                             // dropped. Both shapes return [output, usage, snapshot].
-                            [$output, $usage, $snapshot, $citationEvidence, $nativeResult] = $this->nodeStream->streamingActive($durableStreaming)
-                                ? $this->streamBranchAgent($state, $agent, $branch, $snapshot, $this->nodeStream->sinkFor($runId, $branchNodeId, $branchEpoch))
-                                : $this->promptBranchAgent($state, $agent, $branch, $snapshot);
+                            if ($this->nodeStream->streamingActive($durableStreaming)) {
+                                $sink = $this->nodeStream->sinkFor($runId, $branchNodeId, $branchEpoch);
+                                [$output, $usage, $snapshot, $citationEvidence, $nativeResult] = $this->streamBranchAgent($state, $agent, $branch, $snapshot, $sink);
+                            } else {
+                                [$output, $usage, $snapshot, $citationEvidence, $nativeResult] = $this->promptBranchAgent($state, $agent, $branch, $snapshot);
+                            }
                         } finally {
                             ActiveRunContext::exit();
                         }
@@ -253,6 +264,10 @@ class DurableBranchAdvancer
                             nativeResult: $nativeResult,
                         );
                         $this->coordinator->commitMemory($replay, $runId);
+                        // Write any batched deltas before the branch is marked completed
+                        // below: completion makes the join eligible, and the join's
+                        // checkpoint seals this branch's rows.
+                        $sink?->flush();
 
                         $this->connection->transaction(function () use ($runId, $branch, $branchId, $token, $output, $usage, $durationMs, $step, $context, $state): void {
                             $evidence = $this->capture->citationEvidence($step->citationEvidence, $context);
@@ -355,7 +370,7 @@ class DurableBranchAdvancer
             $snapshot = $this->snapshots->appendToolCall($snapshot, $toolCall);
         }
 
-        return [(string) $response, $response->usage->toArray(), $snapshot,
+        return [AgentResponseOutput::text($response), $response->usage->toArray(), $snapshot,
             $this->citations->response($response, $state->context->runId, (int) $branch['step_index'], $agent::class,
                 is_string($branch['node_id'] ?? null) ? $branch['node_id'] : (string) $branch['branch_id']),
             $this->stepsRecorder->nativeResult($response)];

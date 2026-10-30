@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Commands\Concerns;
 
+use BuiltByBerry\LaravelSwarm\Enums\RelayLane;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use Closure;
 use Illuminate\Cache\ArrayStore;
@@ -17,13 +18,14 @@ use Throwable;
 /**
  * Owns the finite command-level lease used by scheduled swarm operations.
  *
+ * swarm:recover takes RECOVER_KEY; swarm:relay takes one lease per outbox lane
+ * ({@see RelayLane::leaseKey()}).
+ *
  * @internal
  */
 class CommandOverlapGuard
 {
     public const RECOVER_KEY = 'swarm:commands:recover';
-
-    public const RELAY_KEY = 'swarm:commands:relay';
 
     public function __construct(
         private CacheManager $cache,

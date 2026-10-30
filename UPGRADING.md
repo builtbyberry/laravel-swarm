@@ -1,5 +1,98 @@
 # Upgrading Laravel Swarm
 
+## Upgrading to realtime-dispatch
+
+### Custom `DurableOutbox` implementations
+
+The `DurableOutbox` contract changed to support eager durable dispatch
+(`swarm.durable.eager_dispatch`). The bundled `DatabaseDurableOutbox` is updated
+for you; applications that only *inject* `DurableOutbox` need no changes.
+
+If your application binds its **own `DurableOutbox` implementation**, update it
+before upgrading, whether or not you turn eager dispatch on: PHP rejects the old
+signatures when the class loads.
+
+- `enqueueStep()` and `enqueueBranch()` take a trailing
+  `bool $directDispatch = false` parameter and return `int`, the id of the row
+  written. When `$directDispatch` is `true`, write the row already reserved
+  (`reserved_at` set to now) so your relay leaves it alone until the reservation
+  goes stale.
+- Add `settle(int $entryId, ?string $runId = null): void`, which deletes the row
+  with that id. `$runId` is context for reporting a failure only. It must not
+  throw: a failed settle should be reported and swallowed.
+
+`enqueueQueuedResume()` is unchanged.
+
+### `swarm:relay` takes one overlap lease per lane
+
+`swarm:relay` now holds a separate lease for each outbox lane (durable, audit,
+callback), only while that lane drains a batch. Nothing needs changing for a
+single bare `swarm:relay` schedule entry, but monitoring may:
+
+- `status: skipped_overlap` on the `command.relay` audit event now means every
+  selected lane was held by another invocation. A run that found only some lanes
+  held drains the rest, reports its normal status, lists the held lanes in the
+  new always-present `contended_lanes` field, and exits 1. Alert on a non-empty
+  `contended_lanes` or the exit code rather than on `skipped_overlap` alone.
+- During a rolling deploy an old relay (one lease for everything) and a new
+  relay (lane leases) can drain the same lane at the same time. The bundled
+  database outboxes claim with `FOR UPDATE SKIP LOCKED` on MySQL and PostgreSQL,
+  so they take disjoint batches. A custom `DurableOutbox` (or audit/callback
+  outbox) must claim in a way that two concurrent drains cannot both take the
+  same row.
+- Relays can now be split by lane on separate cadences. See
+  [Command overlap leases](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/maintenance.md#command-overlap-leases) for the
+  split-cadence schedule and the health thresholds a slower lane needs.
+
+### Resuming a run that was paused while waiting
+
+`resume()` on a durable run paused in a signal or child-swarm wait now returns it
+to `waiting` instead of `pending`, and no step is queued. Code that resumed such a
+run and expected its next step to run must now let the wait be released: deliver
+the signal, let the child finish, or let `swarm:recover` time the wait out.
+`DurableResumeResult::$status` is `DurableLifecycleStatus::Waiting` for these
+runs. A run whose wait was released while it was paused (for example its child
+finished) has nothing left to wait on and resumes to `pending` as before.
+
+- A signal delivered while the run was paused is recorded, not accepted. Re-send
+  it after the run resumes, with a **new** idempotency key; the old key returns
+  the earlier delivery as a duplicate. This is interim behaviour until
+  [#601](https://github.com/builtbyberry/laravel-swarm/issues/601) accepts the paused-time delivery on resume.
+- **Runs that already advanced past an open wait.** Under the old behaviour a run
+  resumed past its open wait kept that wait row open (`status = 'waiting'`) while
+  it moved on. If such a run is still in flight and is paused again after you
+  upgrade, resume now holds it in `waiting` on that stale wait. A child wait clears
+  when the child finishes and a timed wait clears through `swarm:recover`, but an
+  untimed signal wait does not clear by itself. Before or right after deploying,
+  find those rows:
+
+  ```sql
+  select w.id, w.run_id, w.name, r.status
+  from swarm_durable_waits w
+  join swarm_durable_runs r on r.run_id = w.run_id
+  where w.status = 'waiting'
+    and r.finished_at is null
+    and r.status in ('pending', 'running');
+  ```
+
+  A run in `pending` or `running` with an open wait is one that went past it. If
+  its workflow no longer needs that wait, deliver the signal it is waiting for
+  once the run is `waiting` again, or cancel the run; if your table names are
+  configured (`swarm.tables.durable_waits`, `swarm.tables.durable`), use those.
+- **Custom `DurableRunStore` implementations**, and classes extending
+  `DatabaseDurableRunStore` that override `resume()` or `syncRunWaitSummary()`,
+  must follow the same rules or keep the old behaviour silently: `resume()` sets
+  `waiting` when the run has an open wait row or branch work under its current
+  node and `pending` otherwise, deciding from a locked read of the open waits
+  taken before the run row is written; a wait release must not change a `paused`
+  run's status.
+- An application transaction that already holds the run (for example one that
+  paused it) and then resumes it can deadlock with a worker releasing one of the
+  run's waits at that moment. The database aborts one side and rolls it back;
+  retry it.
+- During a rolling deploy, workers still on the old code keep the old behaviour
+  until they are replaced.
+
 ## Upgrading to v0.28.1
 
 This patch deliberately departs from the additive-only patch policy stated

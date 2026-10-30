@@ -14,6 +14,7 @@ use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Carbon;
+use RuntimeException;
 use Throwable;
 use UnexpectedValueException;
 
@@ -30,19 +31,34 @@ class DatabaseDurableOutbox implements DurableOutbox
         protected DurableJobDispatcher $jobs,
     ) {}
 
-    public function enqueueStep(string $runId, int $stepIndex, ?string $connection, ?string $queue): void
+    public function enqueueStep(string $runId, int $stepIndex, ?string $connection, ?string $queue, bool $directDispatch = false): int
     {
-        $this->insert(DurableDispatchType::Step, $runId, ['step_index' => $stepIndex], $connection, $queue);
+        return $this->insert(DurableDispatchType::Step, $runId, ['step_index' => $stepIndex], $connection, $queue, $directDispatch);
     }
 
-    public function enqueueBranch(string $runId, string $branchId, ?string $connection, ?string $queue): void
+    public function enqueueBranch(string $runId, string $branchId, ?string $connection, ?string $queue, bool $directDispatch = false): int
     {
-        $this->insert(DurableDispatchType::Branch, $runId, ['branch_id' => $branchId], $connection, $queue);
+        return $this->insert(DurableDispatchType::Branch, $runId, ['branch_id' => $branchId], $connection, $queue, $directDispatch);
     }
 
     public function enqueueQueuedResume(string $runId, ?string $connection, ?string $queue): void
     {
-        $this->insert(DurableDispatchType::QueuedResume, $runId, [], $connection, $queue);
+        $this->insert(DurableDispatchType::QueuedResume, $runId, [], $connection, $queue, false);
+    }
+
+    public function settle(int $entryId, ?string $runId = null): void
+    {
+        try {
+            $this->table()->where('id', $entryId)->delete();
+        } catch (Throwable $e) {
+            // A failed settle leaves the row reserved; the relay reclaims it once the
+            // reservation goes stale and dispatches a duplicate that acquireLease()
+            // turns into a no-op. Never fail the step for it.
+            $this->safeReport(new RuntimeException(
+                "Failed to settle durable outbox entry [{$entryId}]".($runId !== null ? " for run [{$runId}]" : '').'; swarm:relay will dispatch it again as a no-op once its reservation goes stale.',
+                previous: $e,
+            ));
+        }
     }
 
     /**
@@ -109,6 +125,16 @@ class DatabaseDurableOutbox implements DurableOutbox
 
         $claimed = $entries->count();
         $reclaimed = $entries->filter(fn (object $e): bool => $e->reserved_at !== null)->count();
+        // A direct-dispatch row carries "direct" in its payload and is written with
+        // reserved_at = created_at; a relay claim overwrites reserved_at. Both together
+        // mark a direct row reclaimed for the first time. (Timestamps alone are not
+        // enough: they are second-precision, so a relay row claimed in its creation
+        // second would match.)
+        $reclaimedDirect = $entries->filter(
+            fn (object $e): bool => $e->reserved_at !== null
+                && (string) $e->reserved_at === (string) $e->created_at
+                && $this->writtenForDirectDispatch($e),
+        )->count();
 
         // Phase 2: dispatch each entry individually, outside any transaction.
         //
@@ -127,9 +153,13 @@ class DatabaseDurableOutbox implements DurableOutbox
         $failed = 0;
         $dispatchedIds = [];
 
+        // One dispatcher copy per drain: entries of the same run share a single read of
+        // its native-input version, and the next drain reads it fresh.
+        $jobs = $this->jobs->forDrain();
+
         foreach ($entries as $entry) {
             try {
-                $this->dispatchEntry($entry, $knownConnections);
+                $this->dispatchEntry($entry, $knownConnections, $jobs);
                 $dispatchedIds[] = $entry->id;
                 $dispatched++;
             } catch (UnexpectedValueException $e) {
@@ -151,16 +181,17 @@ class DatabaseDurableOutbox implements DurableOutbox
             $this->table()->whereIn('id', $dispatchedIds)->delete();
         }
 
-        return new DrainResult($dispatched, $skipped, $failed, $claimed, $reclaimed);
+        return new DrainResult($dispatched, $skipped, $failed, $claimed, $reclaimed, $reclaimedDirect);
     }
 
     /**
      * @param  list<string>  $knownConnections
+     * @param  DurableJobDispatcher  $jobs  The dispatcher this drain builds its jobs with; see DurableJobDispatcher::forDrain().
      *
      * @throws UnexpectedValueException For permanently invalid entries: unknown dispatch_type,
      *                                  unknown queue_connection, or malformed/missing payload fields.
      */
-    protected function dispatchEntry(object $entry, array $knownConnections): void
+    protected function dispatchEntry(object $entry, array $knownConnections, DurableJobDispatcher $jobs): void
     {
         // A misrouted audit row is a distinct, diagnosable failure: audit evidence
         // belongs in swarm_audit_outbox and is drained by AuditOutbox, never here.
@@ -216,19 +247,19 @@ class DatabaseDurableOutbox implements DurableOutbox
         $queue = $entry->queue_name ?: null;
 
         match ($type) {
-            DurableDispatchType::Step => $this->jobs->dispatchStep(
+            DurableDispatchType::Step => $jobs->dispatchStep(
                 $entry->run_id,
                 $this->extractStepIndex($entry->id, $payload),
                 $connection,
                 $queue,
             ),
-            DurableDispatchType::Branch => $this->jobs->dispatchBranch(
+            DurableDispatchType::Branch => $jobs->dispatchBranch(
                 $entry->run_id,
                 $this->extractBranchId($entry->id, $payload),
                 $connection,
                 $queue,
             ),
-            DurableDispatchType::QueuedResume => $this->jobs->dispatchQueuedResumeById(
+            DurableDispatchType::QueuedResume => $jobs->dispatchQueuedResumeById(
                 $entry->run_id,
                 $connection,
                 $queue,
@@ -287,22 +318,34 @@ class DatabaseDurableOutbox implements DurableOutbox
     }
 
     /**
+     * A direct-dispatch row is born reserved: drain()'s claim predicate skips it
+     * until the reservation is older than reservation_timeout_seconds, which is
+     * exactly the existing stale-reclaim path a relay-claimed row takes when its
+     * relay dies mid-run.
+     *
      * @param  array<string, mixed>  $payload
      */
-    protected function insert(DurableDispatchType $type, string $runId, array $payload, ?string $connection, ?string $queue): void
+    protected function insert(DurableDispatchType $type, string $runId, array $payload, ?string $connection, ?string $queue, bool $directDispatch): int
     {
         $now = Carbon::now('UTC');
 
-        $this->table()->insert([
+        return (int) $this->table()->insertGetId([
             'run_id' => $runId,
             'dispatch_type' => $type->value,
-            'payload' => json_encode($payload),
+            'payload' => json_encode($directDispatch ? [...$payload, 'direct' => true] : $payload),
             'queue_connection' => $connection,
             'queue_name' => $queue,
             'available_at' => $now,
-            'reserved_at' => null,
+            'reserved_at' => $directDispatch ? $now : null,
             'created_at' => $now,
         ]);
+    }
+
+    protected function writtenForDirectDispatch(object $entry): bool
+    {
+        $payload = is_string($entry->payload) ? json_decode($entry->payload, true) : (array) $entry->payload;
+
+        return is_array($payload) && ($payload['direct'] ?? false) === true;
     }
 
     protected function table(): Builder

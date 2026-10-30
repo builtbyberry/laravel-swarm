@@ -234,21 +234,245 @@ leases aligned and avoids Laravel's 24-hour scheduler default after a hard crash
 Scheduled execution becomes eligible when that rounded-up scheduler mutex
 expires; direct command invocation is eligible at the exact command-lease expiry.
 
-Each command also acquires its own finite atomic lease from
+Each command also acquires finite atomic leases from
 `swarm.commands.overlap.store` (`SWARM_COMMAND_OVERLAP_STORE`; `null` uses the
 default cache store). `swarm.commands.overlap.lease_seconds` defaults to 3600.
-Set it longer than the worst-case invocation: a command that outlives its lease
-is no longer protected from overlap, while a hard-crashed process becomes
-startable when the lease expires. Array, null, failover, and non-lock-capable
+`swarm:recover` holds its lease for the whole sweep, so set the duration longer
+than the worst-case recovery sweep; `swarm:relay` holds a lane's lease for one
+drain batch (below), so it must also exceed the worst-case single batch. Work that
+outlives its lease is no longer protected from overlap, while a hard-crashed
+process becomes startable when the lease expires. Array, null, failover, and non-lock-capable
 stores fail before any sweep. File locks cover processes on one host only;
 multi-host deployments require a shared atomic store such as Redis, Memcached,
-DynamoDB, or database cache. Lock contention warns, records
-`status: skipped_overlap`, exits non-zero, and performs no sweep.
+DynamoDB, or database cache. When `swarm:recover` finds its lease held it warns,
+records `status: skipped_overlap`, exits non-zero, and performs no sweep;
+`swarm:relay` contention is per lane, as described next.
 
-`swarm:relay` must run at least as frequently as you want checkpointed steps to
-advance. The default limit is 100 rows per run; pass `--limit` to tune, or
-`--drain-until-empty` to clear a backlog in a single invocation. Without the
-relay scheduled, durable runs stall at the first step.
+`swarm:relay` takes one lease per outbox lane rather than one for the whole
+command: `durable` (shared by `--type=step`, `branch` and `queued_resume`),
+`audit`, and `callback`. A lane's lease is held only while that lane drains one
+batch, so relays that select different lanes run side by side, and a slow audit
+or callback drain never holds up another relay's step dispatch. Two relays that
+select the same lane still exclude each other. The lane lease keys are
+`swarm:commands:relay:durable`, `swarm:commands:relay:audit` and
+`swarm:commands:relay:callback` (`swarm:recover` uses `swarm:commands:recover`).
+A relay that is hard-killed mid-batch leaves its lane's key held until the lease
+expires; to free it sooner, make sure no relay is running and release that key
+in the overlap store (for example
+`Cache::store(config('swarm.commands.overlap.store'))->lock('swarm:commands:relay:durable')->forceRelease()`).
+These key names are an operational detail, not a stable API. Within one invocation the
+selected lanes still drain one after another: a bare `swarm:relay` waits for its
+own audit batch before its next durable batch, which is why a split schedule
+(below) is the way to keep step dispatch on its own cadence.
+
+When another invocation holds a lane this one selected, that lane's remaining
+batches are skipped for this run — the holder may not finish the backlog (its
+`--type` filter or `--limit` can differ), so the next scheduled run picks it up.
+The other selected lanes still drain. The command warns as soon as it sees the
+held lane, records the lane in the `contended_lanes` field of the
+`command.relay` audit event, and exits non-zero. Only when every selected lane
+is held does it record `status: skipped_overlap` and drain nothing.
+
+#### Split-cadence relay schedule
+
+To keep step dispatch fast and run audit and callback relay on a slower cadence,
+schedule the lanes as two entries instead of one bare `swarm:relay`:
+
+```php
+Schedule::command('swarm:relay --type=step --type=branch --type=queued_resume')->everyMinute()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));
+Schedule::command('swarm:relay --type=audit --type=callback')->everyFiveMinutes()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));
+```
+
+Keep `--type=queued_resume` in the fast entry. The queued hierarchical resume job
+is only ever dispatched by the relay — [eager dispatch](configuration.md#durable-eager-dispatch)
+does not push it — so leaving it out of the fast entry would leave
+`queue()` `multi_worker` joins waiting on the slow cadence, or on nothing at all.
+The scheduler mutex is keyed on the full command string, so the two entries do
+not share one.
+
+Running the audit/callback entry less often than every minute has two effects
+to plan for. Terminal workflow callbacks are only delivered by the relay, so
+they wait up to that interval. And `swarm:health` warns about callback and audit
+rows that have waited longer than twice the reservation timeout (120 seconds by
+default), so on a five-minute entry it would warn on a healthy relay. Raise
+`SWARM_CALLBACKS_STALE_WARNING_THRESHOLD_SECONDS` above the interval (for
+example `360` for five minutes). The audit staleness warning has no key of its
+own: it reuses `SWARM_DURABLE_RELAY_STALE_WARNING_THRESHOLD_SECONDS`, which also
+sets the durable outbox aging warning. Either raise that too, accepting a later
+durable warning, or keep `--type=audit` on an every-minute entry and slow only
+`--type=callback`. Do not also schedule a bare `swarm:relay` beside the pair: it
+selects every lane, contends with both entries, and exits non-zero.
+
+#### Daemon relay
+
+`swarm:relay --daemon` runs the relay as one long-lived process instead of a
+scheduled command, the same way `queue:work` replaces `queue:work --once` on a
+cron. It boots the framework once, then drains every selected lane once per
+cycle and sleeps between cycles, so a fast polling cadence no longer costs a
+framework boot per tick.
+
+**Choosing daemon or schedule.** With
+[eager dispatch](configuration.md#durable-eager-dispatch) on, steps reach the
+queue as they commit and the relay is only the recovery sweep: an
+`everyMinute()` schedule entry is enough and needs no process supervisor. Run
+the daemon when you still want sub-minute polling — for example to deliver
+terminal callbacks or replay audit evidence within seconds, or because eager
+dispatch is off — without paying for a boot every second. An idle daemon
+still polls: every selected lane takes and releases its lease and runs one
+empty claim query about every `max_sleep_ms` (3 s by default), around twenty
+times the load of an `everyMinute()` entry. Raise `max_sleep_ms` or narrow
+`--type` to cut that idle database and lock-store load, at the cost of slower
+pickup of rows the relay is the only path for.
+
+**How a cycle works.** Each cycle drains each selected lane once (`--limit`
+rows per lane), each under its own [lane lease](#command-overlap-leases), taken
+for that lane's batch and released before the next lane and before any sleep.
+A lane another relay holds is skipped for that cycle only and retried on the
+next; it does not stop the daemon or change its exit code. After a cycle that
+moved durable or callback rows the daemon sleeps
+`swarm.durable.relay.daemon.min_sleep_ms` (100 ms by default). After any other
+cycle — idle, audit-lane replays only, transient failures only, or a held lane —
+the sleep grows by `backoff_multiplier` (2) up to `max_sleep_ms` (3000 ms). See
+[Durable Relay](configuration.md#durable-relay) for the keys.
+
+**Evidence.** A daemon cycle that moved or failed durable or callback rows, or
+found a lane held, emits one `command.relay` event describing that cycle. Idle
+cycles and cycles whose only work was in the audit lane emit nothing, so a
+failing audit sink cannot keep the daemon replaying its own evidence (an
+audit-only cycle is still printed to the console). See the
+[Audit Evidence Contract](audit-evidence-contract.md). Because idle cycles are
+silent, a stopped daemon and an idle one look the same in the evidence stream:
+watch the process through your supervisor, and keep `swarm:health --durable`
+in your monitoring, whose stale-row warnings
+(`swarm.durable.relay.stale_warning_threshold_seconds`) are the signal that no
+relay is draining.
+
+**Stopping and restarting.** The daemon requires the `pcntl` extension and
+refuses to start without it.
+
+- `SIGTERM` or `SIGINT` lets the current cycle finish — every remaining selected
+  lane's batch and that cycle's reporting — then exits 0 with every lease
+  released. A stop during the idle sleep is acted on within about 500 ms once the
+  process is back in its loop; a read of the restart key that is in progress (below)
+  finishes first.
+- `php artisan queue:restart` stops it too, exactly as it stops `queue:work`. The
+  daemon reads Laravel's `illuminate:queue:restart` key from the application's
+  **default cache store** (`cache.default`) — not from
+  `swarm.commands.overlap.store` — so the deploy process and the daemon must
+  share that store's storage and prefix. An `array` or `null` default cache, a
+  file cache inside the release directory, or a `cache.prefix` that changes per
+  release all mean `queue:restart` never reaches the daemon: restart it through
+  your supervisor (`SIGTERM`) instead, which always works. `queue:restart` does
+  not wake a sleeping daemon; it is noticed at the next check, after the current
+  cycle and up to `max_sleep_ms` later.
+- `--max-time=N` stops it after `N` seconds and `--memory=MB` once memory use
+  reaches `MB` megabytes (default 128), both in the style of `queue:work`; `0`
+  disables either. They are checked between cycles, never mid-drain.
+
+Every one of these stops exits 0. The daemon exits non-zero only for a genuine
+failure: invalid options or configuration, missing `pcntl`, an exception
+escaping a drain (audited as `status: error`, then rethrown), or a failure
+reading the `queue:restart` key from the default cache store (not audited, as
+with `queue:work`). Code **and
+configuration** are loaded once at start, so restart the daemon on every deploy
+and after changing any `swarm.*` setting.
+
+A Supervisor program for the daemon:
+
+```ini
+[program:swarm-relay]
+command=php /var/www/app/artisan swarm:relay --daemon --max-time=3600
+autostart=true
+autorestart=true
+startsecs=0
+startretries=100
+stopsignal=TERM
+stopwaitsecs=60
+numprocs=1
+user=forge
+redirect_stderr=true
+stdout_logfile=/var/www/app/storage/logs/swarm-relay.log
+```
+
+`autorestart=true` is required, not optional: `--max-time`, `--memory` and
+`queue:restart` all stop the daemon with exit code 0 so that Supervisor starts a
+fresh one, and Supervisor's default `autorestart=unexpected` treats exit 0 as
+"finished" and would leave the relay stopped. `startsecs=0` and a high
+`startretries` matter as much: an outage of the database or of the overlap
+lease store makes every drain throw, so each restarted daemon exits within a
+second. With Supervisor's defaults (`startsecs=1`, `startretries=3`) that marks
+the program `FATAL` after three tries and Supervisor stops restarting it, so the
+relay stays down after the outage clears. If `supervisorctl status` ever shows
+the program `FATAL`, start it again with `supervisorctl start swarm-relay`.
+
+Size `stopwaitsecs` for the whole
+cycle a stop waits for: the worst-case batch time of every selected lane added
+together, plus that cycle's audit sink write, plus your default cache store's
+read timeout, plus 0.5 s and a margin. The same applies to any other host's stop
+grace period — Docker's `docker stop` (10 s) and Kubernetes'
+`terminationGracePeriodSeconds` (30 s) are often shorter. A daemon killed in the
+middle of a batch leaves that lane's lease held until
+`swarm.commands.overlap.lease_seconds` expires (3600 s by default): the restarted
+daemon warns on every cycle that the lane is held and skips it, and with eager
+dispatch off its durable runs wait. To free the lane sooner, release its key as
+described under [Command overlap leases](#command-overlap-leases).
+
+Run exactly one daemon per set of lanes across **all** your hosts, not one per
+host: `numprocs=1` only limits a single machine. A Supervisor program deployed to
+every app server, or a background process on a platform running several
+replicas, starts one daemon per machine, and the extra daemons only contend for
+the same leases. Put the daemon on one server, or on a single-replica worker. To run step dispatch and audit/callback work on separate cadences,
+run two programs with disjoint `--type` selections, as in the
+[split-cadence schedule](#split-cadence-relay-schedule).
+
+**Adopting and rolling back.** Start the daemon first and confirm it drains
+(its console output, or `command.relay` events), then remove the schedule
+entry for the same lanes. Do not leave both: every cycle that meets the
+scheduled run's lease is skipped for that lane and emits a `command.relay`
+event. To roll back, put the schedule entry back first, then stop the daemon,
+so no lane is left without a relay. While the two overlap, a scheduled run that
+meets the daemon's lease exits 1 and records `contended_lanes` (or
+`skipped_overlap`); that is expected, so keep the overlap to a tick or two and
+expect those exits if you alert on the scheduled command's exit code.
+
+#### Rolling deploys
+
+During a rolling deploy, processes still on the previous release take the old
+single relay lease (`swarm:commands:relay`) while upgraded processes take the
+lane leases, so an old and a new relay can drain the same lane at the same time
+until the deploy completes. No flag is needed. With the bundled database outboxes
+on MySQL or PostgreSQL, each claim runs `FOR UPDATE SKIP LOCKED`, so the two
+relays claim disjoint batches. Delivery keeps the existing at-least-once
+contract: a reservation that goes stale while its batch is still being
+delivered can be reclaimed by the other relay, exactly as after a crashed relay.
+For durable rows that can queue a duplicate job, which the existing advance
+guards turn into a no-op. For terminal callbacks the claim token fences row
+ownership and settlement but cannot deduplicate what the callback does, so a
+callback may run more than once or overlap itself — callbacks must already be
+idempotent under the callback contract. Audit replay is likewise at-least-once
+to the sink. SQLite has no `SKIP LOCKED` and is single-host; do not rely on
+contention-free concurrent drains there.
+
+Rolling back below this release opens the same window in reverse. If you had
+moved to the split-cadence schedule, return to a single bare `swarm:relay` entry
+first: on the old single lease the two entries contend again, and one of them
+records `skipped_overlap` and exits non-zero on every overlapping tick. The
+`contended_lanes` field also disappears from `command.relay` events.
+
+By default `swarm:relay` must run — on a schedule, or continuously as a
+[daemon](#daemon-relay) — at least as frequently as you want checkpointed
+steps to advance. Do not schedule it more often than every minute to make steps
+start sooner: turn on [eager dispatch](configuration.md#durable-eager-dispatch)
+instead, which queues each step as its checkpoint commits, and keep the relay on
+`everyMinute()` as the recovery sweep. The default limit is 100 rows per run;
+pass `--limit` to tune, or `--drain-until-empty` to clear a backlog in a single
+invocation. Without the relay scheduled, durable runs stall at the first step
+(with eager dispatch on, only lost pushes and relay-driven work stall, and
+`swarm:health --durable` reports them after twice the reservation timeout).
+A scheduled relay can take a lane between a manual `--drain-until-empty` run's
+batches, which skips that lane for the rest of the run and exits non-zero:
+select the backlogged lane with `--type` or pause its schedule entry, and re-run
+until the command exits 0.
 
 The same `swarm:recover` loop redispatches **coordinated queue hierarchical parallel** joins (`coordination_profile = queue_hierarchical_parallel` on `swarm_durable_runs`): stale `waiting` parents with terminal branch rows release to `pending` and enqueue `ResumeQueuedHierarchicalSwarm`, and branch rows are recovered the same way as durable parallel branches.
 
@@ -334,7 +558,8 @@ through the same `swarm:relay` schedule that handles durable dispatches.
 ### Migration and scheduling
 
 On database persistence, run `php artisan migrate` to create the
-`swarm_audit_outbox` table. The existing relay schedule covers all three lanes:
+`swarm_audit_outbox` table. The existing relay schedule covers all three lanes
+(or split it per lane — see [Split-cadence relay schedule](#split-cadence-relay-schedule)):
 
 ```php
 Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));
@@ -567,14 +792,16 @@ pre-tag proof. The daily mutation workflow is informational and uses
 `continue-on-error: true`. The maintainer reviews both weekly as part of
 release-readiness and again before tagging any release.
 
-### Nightly Laravel 13.x and Laravel AI 1.x moving branches
+### Nightly Laravel 13.x moving branch
 
 `.github/workflows/nightly.yml`
 
-- **Purpose.** Canary against the exact official branch heads of
-  `laravel/framework:13.x-dev` and `laravel/ai:1.x-dev`. Surfaces breaking
-  upstream changes before a tagged release reaches the package's supported
-  version matrix.
+- **Purpose.** Canary against the exact official branch head of
+  `laravel/framework:13.x-dev`, with the latest stable `laravel/ai` 1.x
+  release. Surfaces breaking framework changes before a tagged Laravel release
+  reaches the package's supported version matrix. Laravel AI's unreleased 1.x
+  branch is not tested, so a `laravel/ai` change first shows up on the
+  stable-latest lanes once it is tagged.
 - **What it runs.** `composer test:ci` (the Unit, Feature, and Installer suites
   across four concurrent ParaTest workers, with a fresh worker for every
   parallel test-file assignment, followed by the database-heavy `ci-serial`
@@ -593,9 +820,9 @@ release-readiness and again before tagging any release.
   from the failed test, analysis, compliance, or lint gate. Re-run once when
   the evidence points to transient network or package-source failure. If the
   failure reproduces, file an issue tagged `laravel-canary` with the pinned
-  Laravel or Laravel AI commit, the failing gate, and the affected package
-  code, then keep the release gate closed until the incompatibility or workflow
-  defect is resolved.
+  Laravel commit and resolved Laravel AI release, the failing gate, and the
+  affected package code, then keep the release gate closed until the
+  incompatibility or workflow defect is resolved.
 
   Per-file worker startup is intentionally slower than persistent workers. It
   prevents suite growth or file-order changes from carrying accumulated process

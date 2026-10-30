@@ -71,20 +71,24 @@ return [
     'commands' => [
         'overlap' => [
             /*
-             * Cache store used by the command-owned swarm:relay and swarm:recover
-             * leases. null uses cache.default. The store must support atomic locks;
-             * array, null, and failover stores are rejected because they cannot make
-             * the package's cross-process guarantee. File locks cover one host only;
-             * multi-host deployments must name a shared store such as Redis,
-             * Memcached, DynamoDB, or database cache.
+             * Cache store used by the command-owned swarm:recover lease and the
+             * per-lane swarm:relay leases (durable, audit, callback — each held
+             * only while that lane drains). null uses cache.default. The store
+             * must support atomic locks; array, null, and failover stores are
+             * rejected because they cannot make the package's cross-process
+             * guarantee. File locks cover one host only; multi-host deployments
+             * must name a shared store such as Redis, Memcached, DynamoDB, or
+             * database cache.
              */
             'store' => env('SWARM_COMMAND_OVERLAP_STORE'),
 
             /*
-             * Finite lease held by one command invocation. Size this above the
-             * application's worst-case relay/recovery duration. A hard-crashed
-             * process becomes startable after this window; an invocation that runs
-             * longer than the lease is no longer protected from overlap.
+             * Finite lease duration. swarm:recover holds its lease for the whole
+             * sweep; swarm:relay holds a lane's lease for one drain batch. Size
+             * this above the worst-case recovery sweep and single relay drain
+             * batch. A hard-crashed process becomes startable after this window;
+             * an invocation that runs longer than the lease is no longer
+             * protected from overlap.
              */
             'lease_seconds' => (int) env('SWARM_COMMAND_OVERLAP_LEASE_SECONDS', 3600),
         ],
@@ -819,6 +823,70 @@ return [
         'streaming_enabled' => (bool) env('SWARM_DURABLE_STREAMING_ENABLED', true),
 
         /*
+         * Batched causal-log writes for durable per-node streaming. Off (the
+         * default): every streamed event is its own INSERT into swarm_stream_events,
+         * visible the moment it is emitted. On: text and reasoning deltas are held
+         * and written as one multi-row INSERT, cutting the write load that
+         * streaming_enabled above otherwise sheds by turning streaming off.
+         *
+         * What a reader of swarm_stream_events sees with it on: a node attempt's
+         * first event, and every event that is not a delta (node open/close, tool
+         * call/result, text end, …), is written at once together with any deltas
+         * held before it, unless together they would pass max_bytes, in which case
+         * the held deltas go first. Held deltas are written when max_events are
+         * held, when a delta arrives and the oldest held one is max_age_ms old, and
+         * when the node's step succeeds — always before the node's seal barrier. The age limit is checked as events
+         * arrive; there is no timer, so while a provider is silent mid-text the held
+         * deltas wait for its next event. An attempt that fails drops what it holds,
+         * as a crash would. Read once per node attempt, so changing it mid-run is
+         * safe; workers pick up a change after config:cache and queue:restart.
+         */
+        'stream_batching' => [
+            'enabled' => (bool) env('SWARM_DURABLE_STREAM_BATCHING', false),
+            /*
+             * Most deltas written per INSERT (1-100). 50 turns a steady token stream
+             * into about one write per batch; each row binds 9 values, so the 100
+             * cap keeps a statement under SQLite's older 999-variable limit.
+             */
+            'max_events' => (int) env('SWARM_DURABLE_STREAM_BATCHING_MAX_EVENTS', 50),
+            /*
+             * Most encoded payload bytes per INSERT (256 KiB). Bounds the memory one
+             * attempt holds and the statement size; keep it well under your
+             * database's packet limit (MySQL max_allowed_packet). A single larger
+             * event is written on its own.
+             */
+            'max_bytes' => (int) env('SWARM_DURABLE_STREAM_BATCHING_MAX_BYTES', 262144),
+            /*
+             * Longest span of emission time one batch may hold, in milliseconds.
+             * 250 keeps a steadily streaming node's text arriving a few times a
+             * second while still collapsing 5-25 deltas per write at typical
+             * provider rates. 0 writes held deltas on every next delta.
+             */
+            'max_age_ms' => (int) env('SWARM_DURABLE_STREAM_BATCHING_MAX_AGE_MS', 250),
+        ],
+
+        /*
+         * Eager dispatch on commit. Off (the default): a durable step or branch
+         * reaches the queue only when swarm:relay drains its outbox row, so per-step
+         * latency is bounded by the relay schedule. On: the advance job is pushed the
+         * moment the swarm transaction that wrote its outbox row commits, and the job
+         * deletes ("settles") that row as soon as it acquires its lease. Covers durable
+         * steps and branches and queue() multi_worker hierarchical branches; queued
+         * hierarchical resume jobs stay relay-driven.
+         *
+         * The row is written already reserved, so the relay leaves it alone while
+         * the pushed job is in flight. If the push is lost, the relay reclaims the
+         * row once its reservation is older than relay.reservation_timeout_seconds —
+         * keep swarm:relay scheduled (everyMinute is enough) as the recovery sweep.
+         * A job that waits in the queue longer than that timeout is pushed a second
+         * time by the relay; the duplicate is a safe no-op. With the flag on,
+         * signal() / resume() include that push on the calling request's path, so
+         * give the queue connection a bounded timeout. Nothing is pushed eagerly on
+         * the sync driver.
+         */
+        'eager_dispatch' => (bool) env('SWARM_DURABLE_EAGER_DISPATCH', false),
+
+        /*
          * AdvanceDurableSwarm / AdvanceDurableBranch queue settings.
          * Job timeout is step_timeout + timeout_margin_seconds (not a separate absolute cap).
          */
@@ -876,6 +944,26 @@ return [
              * (the default).
              */
             'stale_warning_threshold_seconds' => (int) env('SWARM_DURABLE_RELAY_STALE_WARNING_THRESHOLD_SECONDS', 0),
+
+            /*
+             * Adaptive idle sleep for `swarm:relay --daemon`, the long-lived relay
+             * process (see docs/maintenance.md, "Daemon relay"). After a cycle that
+             * moved durable or callback rows the daemon sleeps min_sleep_ms; after
+             * a cycle that did not (idle, audit-only, transient failures, or a held
+             * lane) the sleep grows by backoff_multiplier up to max_sleep_ms. So
+             * max_sleep_ms is the longest a new row waits for the next idle cycle
+             * to start, and roughly how long a `queue:restart` takes to be noticed.
+             *
+             * The daemon validates these once at start and fails loud on a bad
+             * value: whole milliseconds, 1 <= min_sleep_ms <= max_sleep_ms <=
+             * 60000, and a multiplier from 1 to 10. Restart the daemon to apply a
+             * change. Scheduled (non-daemon) runs ignore this block.
+             */
+            'daemon' => [
+                'min_sleep_ms' => env('SWARM_DURABLE_RELAY_DAEMON_MIN_SLEEP_MS', 100),
+                'max_sleep_ms' => env('SWARM_DURABLE_RELAY_DAEMON_MAX_SLEEP_MS', 3000),
+                'backoff_multiplier' => env('SWARM_DURABLE_RELAY_DAEMON_BACKOFF_MULTIPLIER', 2.0),
+            ],
         ],
         'webhooks' => [
             'enabled' => env('SWARM_WEBHOOKS_ENABLED', false),

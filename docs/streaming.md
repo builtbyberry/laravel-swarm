@@ -506,6 +506,13 @@ stored order as the response is iterated. If the original stream **failed**,
 replay emits stored events through `swarm_stream_error` and completes **without**
 re-throwing the original exception (informational playback).
 
+Replay reads only what has been written. A durable run with
+`#[DurableStreaming]` writes its node events as they are emitted. With
+`swarm.durable.stream_batching` on, it writes deltas in batches, so a replay read
+while a node is still streaming can trail the provider by a held batch. See
+[batched causal-log writes](durable-execution.md#batched-causal-log-writes) for
+what such a reader is guaranteed to see.
+
 Configuration for replay storage drivers and prefixes lives under
 `swarm.streaming.replay` in `config/swarm.php`. See
 [Persistence And History — Replaying Stream Events](persistence-and-history.md#replaying-stream-events).

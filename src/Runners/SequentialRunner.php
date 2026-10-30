@@ -26,6 +26,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\StreamEventMapper;
 use BuiltByBerry\LaravelSwarm\Streaming\StreamStepAccumulator;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
+use BuiltByBerry\LaravelSwarm\Support\AgentResponseOutput;
 use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\NativeAgentInvoker;
@@ -285,7 +286,7 @@ class SequentialRunner
                     $response = NativeAgentInvoker::prompt($agent, $invocation);
                     $this->outcomes->validateResponse($response);
                     $citationEvidence = $this->citations->response($response, $state->context->runId, $index, $agent::class);
-                    $output = (string) $response;
+                    $output = AgentResponseOutput::text($response);
                     $stepUsage = $this->usageFromResponse($response);
                     $this->appendResponseToolCalls($snapshot, $response);
 
@@ -418,7 +419,7 @@ class SequentialRunner
         } finally {
             ActiveRunContext::exit();
         }
-        $output = (string) $response;
+        $output = AgentResponseOutput::text($response);
         $usage = $this->usageFromResponse($response);
         $this->appendResponseToolCalls($snapshot, $response);
         $mergedUsage = $this->mergeUsageReport(

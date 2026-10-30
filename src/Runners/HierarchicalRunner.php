@@ -28,6 +28,7 @@ use BuiltByBerry\LaravelSwarm\Routing\HierarchicalRoutePlanner;
 use BuiltByBerry\LaravelSwarm\Routing\HierarchicalWorkerNode;
 use BuiltByBerry\LaravelSwarm\Runners\Concerns\AlignsQueuedHierarchicalParallelCursor;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableNodeStreamRecorder;
+use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableNodeStreamSink;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmNodeChildrenDecided;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmNodeClosed;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmNodeOpened;
@@ -36,6 +37,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\StreamEventMapper;
 use BuiltByBerry\LaravelSwarm\Streaming\StreamStepAccumulator;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\AdHocSwarm;
+use BuiltByBerry\LaravelSwarm\Support\AgentResponseOutput;
 use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\NativeAgentInvoker;
@@ -596,6 +598,9 @@ class HierarchicalRunner
                 result: null,
                 timestamp: SwarmStreamEvent::timestamp(),
             ));
+            // NodeClosed is never held, so this finds nothing to write today; it
+            // keeps the write-before-seal order if that ever changes.
+            $sink->flush();
         }
 
         return new DurableHierarchicalStepResult(
@@ -1054,7 +1059,7 @@ class HierarchicalRunner
                                 Container::getInstance()->make(NativeOutcomeValidator::class)->validateResponse($response);
 
                                 return [
-                                    'output' => (string) $response,
+                                    'output' => AgentResponseOutput::text($response),
                                     'citation_evidence' => NativeCitationEvidence::forConcurrentWorker($citationLimits)->response($response, $branchRunId, $branchIndex, $agentClass, $branchNodeId)->toArray(),
                                     'usage' => $response->usage->toArray(),
                                     'duration_ms' => MonotonicTime::elapsedMilliseconds($startedAt),
@@ -1682,7 +1687,7 @@ class HierarchicalRunner
         } finally {
             ActiveRunContext::exit();
         }
-        $output = (string) $response;
+        $output = AgentResponseOutput::text($response);
         $usage = $this->usageFromResponse($response);
 
         foreach (SnapshotToolCallNormalizer::fromResponse($response) as $toolCall) {
@@ -1854,6 +1859,9 @@ class HierarchicalRunner
             result: $this->capture->applyOutput($stepOutput, $state->context),
             timestamp: SwarmStreamEvent::timestamp(),
         ));
+        // NodeClosed is never held, so this finds nothing to write today; it keeps
+        // the write-before-seal order if that ever changes.
+        $sink->flush();
 
         return $step;
     }
@@ -1861,14 +1869,12 @@ class HierarchicalRunner
     /**
      * Build the per-attempt durable causal-log sink for a node, or null when the
      * run did not opt in OR the operator kill-switch has paused emission. The
-     * returned closure stamps each event with the node id + attempt epoch and
-     * appends it (#298 F4 — per-attempt identity lives only in the closure's scope,
-     * never on a runner field, so two concurrent runs in one Octane worker never
-     * share a stamp).
-     *
-     * @return (callable(SwarmStreamEvent): void)|null
+     * returned sink stamps each event with the node id + attempt epoch and
+     * appends it (#298 F4 — per-attempt identity lives on the sink, never on a
+     * runner field, so two concurrent runs in one Octane worker never share a
+     * stamp). The caller flushes it once the node's step has succeeded.
      */
-    protected function durableNodeSink(SwarmExecutionState $state, string $nodeId, bool $durableStreaming, int $attemptEpoch): ?callable
+    protected function durableNodeSink(SwarmExecutionState $state, string $nodeId, bool $durableStreaming, int $attemptEpoch): ?DurableNodeStreamSink
     {
         if (! $this->nodeStream->streamingActive($durableStreaming)) {
             return null;

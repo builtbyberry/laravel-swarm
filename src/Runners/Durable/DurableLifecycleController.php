@@ -6,7 +6,6 @@ namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
-use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Enums\DurableLifecycleStatus;
 use BuiltByBerry\LaravelSwarm\Events\SwarmCancelled;
@@ -37,7 +36,7 @@ class DurableLifecycleController
         protected DurablePayloadCapture $payloads,
         protected DurableChildSwarmCoordinator $children,
         protected SwarmAuditDispatcher $audit,
-        protected DurableOutbox $outbox,
+        protected DurableEagerDispatcher $eager,
     ) {}
 
     public function pause(string $runId): DurablePauseResult
@@ -93,9 +92,13 @@ class DurableLifecycleController
     }
 
     /**
-     * Resume a paused run. When the run resumes back into a waiting boundary,
-     * the returned run row is handed to $dispatchWaiting so the boundary is
-     * re-armed; the closure reports whether it actually re-dispatched one.
+     * Resume a paused run. When the run resumes back into a waiting boundary —
+     * branch work, an open signal wait, or a child swarm's wait — the returned
+     * run row is handed to $dispatchWaiting so the boundary is re-armed; the
+     * closure reports whether it re-armed one. Branch work is re-dispatched; a
+     * signal or child wait is re-armed by the run being `waiting` again, which
+     * is what lets a signal, the child's outcome or swarm:recover's timeout
+     * release it.
      *
      * @param  callable(array<string, mixed>): bool  $dispatchWaiting
      */
@@ -124,12 +127,8 @@ class DurableLifecycleController
             }
 
             if (! $this->runs->isQueueHierarchicalParallel($updated)) {
-                $this->outbox->enqueueStep(
-                    $runId,
-                    (int) ($updated['next_step_index'] ?? $run['next_step_index']),
-                    $updated['queue_connection'],
-                    $updated['queue_name'],
-                );
+                $nextStepIndex = (int) ($updated['next_step_index'] ?? $run['next_step_index']);
+                $this->eager->enqueueStep($runId, $nextStepIndex, $updated['queue_connection'], $updated['queue_name']);
             }
 
             return true;

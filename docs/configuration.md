@@ -32,13 +32,18 @@ Top-level settings that apply to every swarm run regardless of topology or execu
 ## Scheduled Commands
 
 Controls the command-owned finite leases used by `swarm:relay` and
-`swarm:recover`. Scheduler examples derive their whole-minute mutex expiry from
-the same lease duration.
+`swarm:recover`. `swarm:recover` holds one lease for its whole sweep.
+`swarm:relay` holds one lease per outbox lane — `durable` (step, branch and
+queued_resume), `audit`, `callback` — and only while that lane drains a batch, so
+relays selecting different lanes never block each other (see
+[Command overlap leases](maintenance.md#command-overlap-leases) for the
+split-cadence schedule this allows). Scheduler examples derive their whole-minute
+mutex expiry from the same lease duration.
 
 | Key | Type | Default | Env Var | Description |
 |-----|------|---------|---------|-------------|
 | `swarm.commands.overlap.store` | string\|null | `null` | `SWARM_COMMAND_OVERLAP_STORE` | Atomic cache-lock store for `swarm:relay` and `swarm:recover`; `null` uses `cache.default`. Array, null, failover, and non-lock-capable stores fail loud. File covers one host only; multi-host deployments require a shared store. |
-| `swarm.commands.overlap.lease_seconds` | int | `3600` | `SWARM_COMMAND_OVERLAP_LEASE_SECONDS` | Finite command lease. Must be positive and longer than the worst-case invocation. Direct invocation becomes startable at exact expiry; recommended scheduler mutexes round the duration up to whole minutes. A command that outlives the lease is no longer protected. |
+| `swarm.commands.overlap.lease_seconds` | int | `3600` | `SWARM_COMMAND_OVERLAP_LEASE_SECONDS` | Finite command lease, applied to the `swarm:recover` lease and to each `swarm:relay` lane lease. Must be positive and longer than the worst-case recovery sweep and single relay drain batch. Direct invocation becomes startable at exact expiry; recommended scheduler mutexes round the duration up to whole minutes. A command that outlives the lease is no longer protected. |
 
 ---
 
@@ -336,6 +341,21 @@ Settings for `dispatchDurable()` execution. Durable runs are database-backed and
 |-----|------|---------|---------|-------------|
 | `swarm.durable.step_timeout` | int | `300` | `SWARM_DURABLE_STEP_TIMEOUT` | Maximum seconds a single durable step may run before the job times out. The actual queue job timeout is `step_timeout + job.timeout_margin_seconds`. |
 
+### Durable Stream Batching
+
+For `#[DurableStreaming]` runs, write text and reasoning deltas to
+`swarm_stream_events` as one multi-row `INSERT` per batch instead of one per event.
+A node's first event and every event that is not a delta are still written at
+once. See [Batched causal-log writes](durable-execution.md#batched-causal-log-writes)
+for what a reader of the table sees, and when.
+
+| Key | Type | Default | Env Var | Description |
+|-----|------|---------|---------|-------------|
+| `swarm.durable.stream_batching.enabled` | bool | `false` | `SWARM_DURABLE_STREAM_BATCHING` | Turn batching on. Off writes every event as its own `INSERT`, as before. |
+| `swarm.durable.stream_batching.max_events` | int | `50` | `SWARM_DURABLE_STREAM_BATCHING_MAX_EVENTS` | Most deltas per batch, 1–100. The cap keeps one statement under SQLite's older 999-variable limit. |
+| `swarm.durable.stream_batching.max_bytes` | int | `262144` | `SWARM_DURABLE_STREAM_BATCHING_MAX_BYTES` | Most encoded payload bytes per batch. Keep it well under the database packet limit. A single larger event is written on its own. |
+| `swarm.durable.stream_batching.max_age_ms` | int | `250` | `SWARM_DURABLE_STREAM_BATCHING_MAX_AGE_MS` | Longest span of emission time one batch holds. It is checked as events arrive, with no timer, so deltas held while a provider is silent wait for its next event. `0` writes held deltas on every next delta. |
+
 ### Durable Job Settings
 
 | Key | Type | Default | Env Var | Description |
@@ -367,7 +387,7 @@ Settings for `dispatchDurable()` execution. Durable runs are database-backed and
 
 ### Durable Relay
 
-The transactional outbox relay (`swarm:relay`) drains `swarm_durable_outbox` rows and dispatches the corresponding queue jobs. **You must schedule this command for durable execution to advance:**
+The transactional outbox relay (`swarm:relay`) drains `swarm_durable_outbox` rows and dispatches the corresponding queue jobs. **You must schedule this command, or run it as a daemon (`swarm:relay --daemon`, below), for durable execution to advance:**
 
 ```php
 // routes/console.php
@@ -376,11 +396,77 @@ Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping(max(1, (int)
 
 Without the relay, durable runs stall permanently after the first step completes.
 
+To poll faster than once a minute without a framework boot per tick, run
+`swarm:relay --daemon` under a process supervisor instead of the schedule entry:
+one long-lived process that drains every selected lane once per cycle and sleeps
+adaptively between cycles. It requires `pcntl`, stops gracefully on `SIGTERM`,
+`SIGINT` and `queue:restart` (read from the default cache store), and supports
+`--max-time` and `--memory` like `queue:work`. See
+[Daemon relay](maintenance.md#daemon-relay) for choosing between the two, a
+Supervisor example, and deploy guidance.
+
 | Key | Type | Default | Env Var | Description |
 |-----|------|---------|---------|-------------|
 | `swarm.durable.relay.reservation_timeout_seconds` | int | `60` | `SWARM_DURABLE_RELAY_RESERVATION_TIMEOUT_SECONDS` | How long a relay worker's claim on an outbox entry is valid. Entries whose `reserved_at` is older than this are treated as abandoned and become eligible for re-claim by the next relay run. |
-| `swarm.durable.relay.limit` | int | `100` | `SWARM_DURABLE_RELAY_LIMIT` | Maximum outbox entries drained per relay invocation. The `--limit` option on `swarm:relay` overrides this at runtime, capped at 10,000. |
+| `swarm.durable.relay.limit` | int | `100` | `SWARM_DURABLE_RELAY_LIMIT` | Maximum outbox entries drained per relay invocation, or per lane per cycle under `--daemon`. The `--limit` option on `swarm:relay` overrides this at runtime, capped at 10,000. |
+| `swarm.durable.relay.daemon.min_sleep_ms` | int | `100` | `SWARM_DURABLE_RELAY_DAEMON_MIN_SLEEP_MS` | `swarm:relay --daemon` only. Sleep after a cycle that moved durable or callback rows, and the start of idle backoff. Whole milliseconds, at least 1. |
+| `swarm.durable.relay.daemon.max_sleep_ms` | int | `3000` | `SWARM_DURABLE_RELAY_DAEMON_MAX_SLEEP_MS` | `swarm:relay --daemon` only. Ceiling for the idle sleep: the longest a new row waits for the next idle cycle to start, and roughly how long `queue:restart` takes to be noticed. Whole milliseconds, from `min_sleep_ms` to 60000. |
+| `swarm.durable.relay.daemon.backoff_multiplier` | float | `2.0` | `SWARM_DURABLE_RELAY_DAEMON_BACKOFF_MULTIPLIER` | `swarm:relay --daemon` only. Factor the idle sleep grows by after each cycle that moved no durable or callback rows (idle, audit-only, transient failures, or a held lane). From 1 to 10. |
 | `swarm.durable.relay.stale_warning_threshold_seconds` | int | `0` | `SWARM_DURABLE_RELAY_STALE_WARNING_THRESHOLD_SECONDS` | How old an unclaimed outbox row must be before `swarm:health` reports a warning — applies to both the durable outbox (`swarm:health --durable`) and the audit outbox (checked on bare `swarm:health`). `0` uses `2 × reservation_timeout_seconds` as the threshold. |
+
+### Durable Eager Dispatch
+
+By default a durable step or branch reaches the queue only when `swarm:relay`
+drains its outbox row, so the time between one step finishing and the next one
+starting is bounded by the relay schedule. Do not schedule the relay every
+second to shorten that: turn on eager dispatch instead and keep the relay on
+`everyMinute()`.
+
+| Key | Type | Default | Env Var | Description |
+|-----|------|---------|---------|-------------|
+| `swarm.durable.eager_dispatch` | bool | `false` | `SWARM_DURABLE_EAGER_DISPATCH` | Push the next advance job as soon as the transaction that wrote its outbox row commits, instead of waiting for the relay. Covers durable steps and branches and `queue()` `multi_worker` hierarchical branches; the queued hierarchical resume job stays relay-driven. |
+
+With the flag on:
+
+- The outbox row is still written in the same transaction as the checkpoint, but
+  already reserved, so the relay leaves it alone. The pushed job deletes the row
+  as soon as it holds its lease.
+- The relay becomes the recovery sweep. If a push is lost (a process killed
+  between commit and push, a queue outage), the row's reservation goes stale and
+  the next relay run reclaims and dispatches it. Recovery therefore takes
+  `reservation_timeout_seconds` plus up to one relay interval. Keep `swarm:relay`
+  scheduled.
+- The reservation clock starts when the row is written, not when the job is
+  pushed. A job that waits in the queue longer than `reservation_timeout_seconds`
+  is pushed a second time by the relay; the duplicate is a safe no-op. Raising the
+  timeout means fewer duplicates under a queue backlog, but slower recovery of a
+  lost push and slower health detection.
+- A pushed job deletes its row only once it holds its lease, so a job that finds
+  nothing to do (a cancelled, paused or already-advanced run, or a duplicate)
+  leaves its row for the relay to reclaim and dispatch once more as a no-op. The
+  `command.relay` audit event (see
+  [Audit Evidence Contract](audit-evidence-contract.md)) reports these, and lost
+  or late pushes, as `direct_reclaimed_count`, separately within
+  `reclaimed_count`: `reclaimed_count` minus `direct_reclaimed_count` is the
+  relay-health signal. The `swarm:relay` console output does not print either.
+- `swarm:health --durable` reports a reserved row as pending only once its latest
+  reservation is older than twice `reservation_timeout_seconds`, so a lost eager
+  push shows up there after up to 2× the timeout. A relay attempt that fails
+  renews the reservation and restarts that window.
+- `signal()`, `resume()` and a finished child swarm's parent release now include a
+  queue push on the calling request's path, after its transaction commits. A push
+  that fails is reported and left to the relay, but a hung queue connection
+  blocks the caller until the driver times out, so give the queue connection a
+  bounded timeout (for example Redis `read_timeout`).
+- `queue()` `multi_worker` hierarchical runs get their branches pushed on commit,
+  but the job that resumes the run after the branches join is still delivered by
+  the relay, so those runs keep up to one relay interval at the join.
+- On the `sync` queue driver nothing is pushed eagerly (a push would run the
+  whole run inline, one step inside the next); those rows stay with the relay.
+- After a deploy or rollback, restart queue workers as usual. Jobs queued by the
+  new code and run by old workers simply never delete their row; the relay
+  reclaims it after the timeout and dispatches a duplicate that does nothing. No
+  data is lost and there is no schema change.
 
 ### Durable Webhooks
 

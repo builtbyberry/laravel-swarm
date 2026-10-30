@@ -8,6 +8,7 @@ use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
 use BuiltByBerry\LaravelSwarm\Runners\ConcurrentAgentResult;
 use Illuminate\Contracts\Process\ProcessResult;
+use Illuminate\Process\FakeInvokedProcess;
 use Illuminate\Process\InvokedProcess;
 
 /** @internal */
@@ -32,7 +33,7 @@ final class ParallelStreamSession
 
     /**
      * @param  resource  $server
-     * @param  array<string, InvokedProcess>  $processes
+     * @param  array<string, InvokedProcess|FakeInvokedProcess>  $processes
      * @param  list<string>  $branchIds
      */
     public function __construct(
@@ -340,7 +341,8 @@ final class ParallelStreamSession
 
         if ($cancel) {
             foreach ($this->processes as $process) {
-                if ($process->running()) {
+                // Older framework releases' FakeInvokedProcess has no stop().
+                if ($process->running() && method_exists($process, 'stop')) {
                     $process->stop($this->cancelGraceMilliseconds / 1000);
                 }
             }
