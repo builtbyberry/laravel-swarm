@@ -341,6 +341,21 @@ Settings for `dispatchDurable()` execution. Durable runs are database-backed and
 |-----|------|---------|---------|-------------|
 | `swarm.durable.step_timeout` | int | `300` | `SWARM_DURABLE_STEP_TIMEOUT` | Maximum seconds a single durable step may run before the job times out. The actual queue job timeout is `step_timeout + job.timeout_margin_seconds`. |
 
+### Durable Stream Batching
+
+For `#[DurableStreaming]` runs, write text and reasoning deltas to
+`swarm_stream_events` as one multi-row `INSERT` per batch instead of one per event.
+A node's first event and every event that is not a delta are still written at
+once. See [Batched causal-log writes](durable-execution.md#batched-causal-log-writes)
+for what a reader of the table sees, and when.
+
+| Key | Type | Default | Env Var | Description |
+|-----|------|---------|---------|-------------|
+| `swarm.durable.stream_batching.enabled` | bool | `false` | `SWARM_DURABLE_STREAM_BATCHING` | Turn batching on. Off writes every event as its own `INSERT`, as before. |
+| `swarm.durable.stream_batching.max_events` | int | `50` | `SWARM_DURABLE_STREAM_BATCHING_MAX_EVENTS` | Most deltas per batch, 1–100. The cap keeps one statement under SQLite's older 999-variable limit. |
+| `swarm.durable.stream_batching.max_bytes` | int | `262144` | `SWARM_DURABLE_STREAM_BATCHING_MAX_BYTES` | Most encoded payload bytes per batch. Keep it well under the database packet limit. A single larger event is written on its own. |
+| `swarm.durable.stream_batching.max_age_ms` | int | `250` | `SWARM_DURABLE_STREAM_BATCHING_MAX_AGE_MS` | Longest span of emission time one batch holds. It is checked as events arrive, with no timer, so deltas held while a provider is silent wait for its next event. `0` writes held deltas on every next delta. |
+
 ### Durable Job Settings
 
 | Key | Type | Default | Env Var | Description |

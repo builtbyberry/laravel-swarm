@@ -80,7 +80,7 @@ class DatabaseStreamEventStore implements StreamEventStore
 
     public function assertReady(): void
     {
-        $table = (string) $this->config->get('swarm.tables.stream_events', 'swarm_stream_events');
+        $table = $this->tableName();
         $schema = $this->connection->getSchemaBuilder();
 
         if (! $schema->hasTable($table)) {
@@ -113,8 +113,16 @@ class DatabaseStreamEventStore implements StreamEventStore
         }
     }
 
+    /**
+     * The configured stream-events table name, resolved now.
+     */
+    public function tableName(): string
+    {
+        return (string) $this->config->get('swarm.tables.stream_events', 'swarm_stream_events');
+    }
+
     protected function table(): Builder
     {
-        return $this->connection->table((string) $this->config->get('swarm.tables.stream_events', 'swarm_stream_events'));
+        return $this->connection->table($this->tableName());
     }
 }

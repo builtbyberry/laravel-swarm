@@ -823,6 +823,49 @@ return [
         'streaming_enabled' => (bool) env('SWARM_DURABLE_STREAMING_ENABLED', true),
 
         /*
+         * Batched causal-log writes for durable per-node streaming. Off (the
+         * default): every streamed event is its own INSERT into swarm_stream_events,
+         * visible the moment it is emitted. On: text and reasoning deltas are held
+         * and written as one multi-row INSERT, cutting the write load that
+         * streaming_enabled above otherwise sheds by turning streaming off.
+         *
+         * What a reader of swarm_stream_events sees with it on: a node attempt's
+         * first event, and every event that is not a delta (node open/close, tool
+         * call/result, text end, …), is written at once together with any deltas
+         * held before it, unless together they would pass max_bytes, in which case
+         * the held deltas go first. Held deltas are written when max_events are
+         * held, when a delta arrives and the oldest held one is max_age_ms old, and
+         * when the node's step succeeds — always before the node's seal barrier. The age limit is checked as events
+         * arrive; there is no timer, so while a provider is silent mid-text the held
+         * deltas wait for its next event. An attempt that fails drops what it holds,
+         * as a crash would. Read once per node attempt, so changing it mid-run is
+         * safe; workers pick up a change after config:cache and queue:restart.
+         */
+        'stream_batching' => [
+            'enabled' => (bool) env('SWARM_DURABLE_STREAM_BATCHING', false),
+            /*
+             * Most deltas written per INSERT (1-100). 50 turns a steady token stream
+             * into about one write per batch; each row binds 9 values, so the 100
+             * cap keeps a statement under SQLite's older 999-variable limit.
+             */
+            'max_events' => (int) env('SWARM_DURABLE_STREAM_BATCHING_MAX_EVENTS', 50),
+            /*
+             * Most encoded payload bytes per INSERT (256 KiB). Bounds the memory one
+             * attempt holds and the statement size; keep it well under your
+             * database's packet limit (MySQL max_allowed_packet). A single larger
+             * event is written on its own.
+             */
+            'max_bytes' => (int) env('SWARM_DURABLE_STREAM_BATCHING_MAX_BYTES', 262144),
+            /*
+             * Longest span of emission time one batch may hold, in milliseconds.
+             * 250 keeps a steadily streaming node's text arriving a few times a
+             * second while still collapsing 5-25 deltas per write at typical
+             * provider rates. 0 writes held deltas on every next delta.
+             */
+            'max_age_ms' => (int) env('SWARM_DURABLE_STREAM_BATCHING_MAX_AGE_MS', 250),
+        ],
+
+        /*
          * Eager dispatch on commit. Off (the default): a durable step or branch
          * reaches the queue only when swarm:relay drains its outbox row, so per-step
          * latency is bounded by the relay schedule. On: the advance job is pushed the

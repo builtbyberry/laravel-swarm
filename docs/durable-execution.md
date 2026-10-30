@@ -318,6 +318,58 @@ follows. Applying `#[DurableStreaming]` to a topology that does not yet stream *
 loud at dispatch** — it never silently pins the opt-in and no-ops. Non-durable
 (`run()`/`queue()`) execution is unaffected.
 
+
+### Batched causal-log writes
+
+By default every streamed event is its own `INSERT` into `swarm_stream_events`,
+written the moment it is emitted. A token stream therefore costs one write per
+delta. Set `SWARM_DURABLE_STREAM_BATCHING=true`
+(`swarm.durable.stream_batching.enabled`, default `false`) to write text and
+reasoning deltas in batches instead, one multi-row `INSERT` per batch. Try this
+before reaching for the kill switch when the table is hot.
+
+Batching changes **when** a reader of `swarm_stream_events` (such as
+`SwarmHistory::replay()` or a `CausalLogView`) can see an event. It does not change
+what is written or in what order. With batching on, for each node attempt:
+
+- **The first event is written at once**, so a reader always sees a node start.
+- **Every event that is not a delta is written at once**: a node opening or
+  closing, a tool call or result, a text or reasoning end, a citation, a
+  provider-tool event. It goes out in the same `INSERT` as the deltas held before
+  it, so order is unchanged.
+- **Text and reasoning deltas are held**, then written together when any of these
+  happens first:
+  - `max_events` deltas are held (default 50, at most 100);
+  - a delta arrives while the oldest held delta is `max_age_ms` old (default 250).
+    The arriving delta is written with them;
+  - the node's step succeeds: its stream has finished and its guardrails passed.
+- **No `INSERT` carries more than `max_bytes` of encoded payload** (default
+  256 KiB). When the next event would take it past that, the held deltas are
+  written first. A single event larger than `max_bytes` is written on its own.
+- **Everything a node attempt emitted is written before that node's seal
+  barrier**, and a branch's events before the branch is marked completed.
+
+The age limit is checked **when an event arrives**. There is no timer, so it
+limits how much emission time one batch spans, not how long a reader waits. If a
+provider goes quiet mid-text, the deltas it already sent wait until its next
+event or the end of the node. During that pause a reader can see up to
+`max_age_ms` of emitted text (at most `max_events` deltas) less than the provider
+has sent. Tool calls and other structural events are never held, so long tool
+runs do not hide text emitted before them.
+
+If a node attempt fails, including a guardrail rejecting its output, any deltas
+it was still holding are dropped, exactly as when the worker process dies. What was already written stays retractable: the
+resumed attempt voids it with a `node_reexecuted` edge, as it does without
+batching.
+
+Batching settings are read once per node attempt, so changing them, or the kill
+switch, affects the next attempt and never the one in flight. A worker reads them
+from its booted configuration: after changing the environment, rebuild the config
+cache and restart workers (`php artisan config:cache` then `php artisan
+queue:restart`) for the change to reach them. Turning batching
+off returns to one `INSERT` per event, exactly as before. Batching does not
+change the table, the seal barriers, compaction or the cold archive.
+
 ## Durable Hierarchical Parallel Flow
 
 A hierarchical durable run can contain route-plan `parallel` nodes. Those
