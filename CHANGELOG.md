@@ -48,6 +48,24 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   replaying its own evidence. Scheduled relays are unchanged. See
   [Daemon relay](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/maintenance.md#daemon-relay).
 
+- **Batched causal-log writes for durable per-node streaming.** New
+  `swarm.durable.stream_batching` keys: `enabled`
+  (`SWARM_DURABLE_STREAM_BATCHING`, default `false`), `max_events` (50, capped at
+  100), `max_bytes` (256 KiB) and `max_age_ms` (250). With it on, a
+  `#[DurableStreaming]` node writes its text and reasoning deltas to
+  `swarm_stream_events` as one multi-row `INSERT` per batch instead of one per
+  event. This is a way to cut the write load other than turning
+  `swarm.durable.streaming_enabled` off. A node's first event and every event
+  that is not a delta are still written at once, carrying any deltas held before
+  them. Everything a node emitted is written before its seal barrier. The age
+  limit is checked as events arrive, not by a timer, so while a provider is
+  silent mid-text, a reader can trail it by up to one held batch until its next
+  event. A failing attempt drops the deltas it still holds, as a crashed worker
+  would, and what it already wrote is retracted on resume as before. With the
+  flag off, every event is its own `INSERT`, as before. No schema change; seal
+  barriers, compaction and the cold archive are unchanged. See
+  [Batched causal-log writes](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-execution.md#batched-causal-log-writes).
+
 ### Changed
 
 - **BREAKING for custom `DurableOutbox` implementations.**

@@ -28,6 +28,7 @@ use BuiltByBerry\LaravelSwarm\Routing\HierarchicalRoutePlanner;
 use BuiltByBerry\LaravelSwarm\Routing\HierarchicalWorkerNode;
 use BuiltByBerry\LaravelSwarm\Runners\Concerns\AlignsQueuedHierarchicalParallelCursor;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableNodeStreamRecorder;
+use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableNodeStreamSink;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmNodeChildrenDecided;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmNodeClosed;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmNodeOpened;
@@ -597,6 +598,9 @@ class HierarchicalRunner
                 result: null,
                 timestamp: SwarmStreamEvent::timestamp(),
             ));
+            // NodeClosed is never held, so this finds nothing to write today; it
+            // keeps the write-before-seal order if that ever changes.
+            $sink->flush();
         }
 
         return new DurableHierarchicalStepResult(
@@ -1855,6 +1859,9 @@ class HierarchicalRunner
             result: $this->capture->applyOutput($stepOutput, $state->context),
             timestamp: SwarmStreamEvent::timestamp(),
         ));
+        // NodeClosed is never held, so this finds nothing to write today; it keeps
+        // the write-before-seal order if that ever changes.
+        $sink->flush();
 
         return $step;
     }
@@ -1862,14 +1869,12 @@ class HierarchicalRunner
     /**
      * Build the per-attempt durable causal-log sink for a node, or null when the
      * run did not opt in OR the operator kill-switch has paused emission. The
-     * returned closure stamps each event with the node id + attempt epoch and
-     * appends it (#298 F4 — per-attempt identity lives only in the closure's scope,
-     * never on a runner field, so two concurrent runs in one Octane worker never
-     * share a stamp).
-     *
-     * @return (callable(SwarmStreamEvent): void)|null
+     * returned sink stamps each event with the node id + attempt epoch and
+     * appends it (#298 F4 — per-attempt identity lives on the sink, never on a
+     * runner field, so two concurrent runs in one Octane worker never share a
+     * stamp). The caller flushes it when the node's stream is done.
      */
-    protected function durableNodeSink(SwarmExecutionState $state, string $nodeId, bool $durableStreaming, int $attemptEpoch): ?callable
+    protected function durableNodeSink(SwarmExecutionState $state, string $nodeId, bool $durableStreaming, int $attemptEpoch): ?DurableNodeStreamSink
     {
         if (! $this->nodeStream->streamingActive($durableStreaming)) {
             return null;

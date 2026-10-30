@@ -33,9 +33,9 @@ use Illuminate\Contracts\Config\Repository as ConfigRepository;
  * ever dropping a retraction or seal — the kill-switch can force streaming off, never on.
  *
  * State discipline (#298 F4): nothing per-attempt is held on this object. The sink
- * is a fresh closure per `advance()` call, capturing the node id and epoch in its
- * own scope, so two concurrent durable runs in one Octane worker never share a
- * step's buffer or stamp each other's events.
+ * is a fresh {@see DurableNodeStreamSink} per `advance()` call, carrying the node
+ * id, epoch and any held batch itself, so two concurrent durable runs in one
+ * Octane worker never share a step's buffer or stamp each other's events.
  *
  * The attempt epoch is the durable run's recovery count: it is bumped before any
  * recovery/retry re-dispatch (see {@see DatabaseDurableRunStore::markRecoveryDispatched()}),
@@ -153,21 +153,31 @@ class DurableNodeStreamRecorder
     }
 
     /**
-     * Build a per-attempt sink: it stamps each event with `$nodeId` and `$epoch`
-     * and appends it to the causal log. Returned as a fresh closure per call so the
-     * per-attempt identity lives only in the closure's scope (#298 F4), never on a
-     * shared field.
+     * Build a per-attempt sink that stamps each event with `$nodeId` and `$epoch`
+     * and appends it to the causal log. A fresh sink per call keeps the
+     * per-attempt identity, and any held batch, off this shared object (#298 F4).
      *
-     * @return callable(SwarmStreamEvent): void
+     * `swarm.durable.stream_batching` is read here, once per attempt, so changing
+     * it mid-run affects the next attempt, never the one in flight. The caller
+     * must {@see DurableNodeStreamSink::flush()} when the attempt's stream returns.
      */
-    public function sinkFor(string $runId, string $nodeId, int $epoch): callable
+    public function sinkFor(string $runId, string $nodeId, int $epoch): DurableNodeStreamSink
     {
-        $ttlSeconds = $this->ttlSeconds();
+        $batching = (bool) $this->config->get('swarm.durable.stream_batching.enabled', false)
+            && $this->causalLog instanceof DatabaseCausalLogStore;
 
-        return function (SwarmStreamEvent $event) use ($runId, $nodeId, $epoch, $ttlSeconds): void {
-            $event->withNodeId($nodeId)->withAttemptEpoch($epoch);
-            $this->causalLog->record($runId, $event, $ttlSeconds);
-        };
+        return new DurableNodeStreamSink(
+            causalLog: $this->causalLog,
+            runId: $runId,
+            nodeId: $nodeId,
+            epoch: $epoch,
+            ttlSeconds: $this->ttlSeconds(),
+            batching: $batching,
+            maxEvents: min(100, max(1, (int) $this->config->get('swarm.durable.stream_batching.max_events', 50))),
+            maxBytes: max(1, (int) $this->config->get('swarm.durable.stream_batching.max_bytes', 262144)),
+            maxAgeMs: max(0, (int) $this->config->get('swarm.durable.stream_batching.max_age_ms', 250)),
+            table: $this->causalLog instanceof DatabaseCausalLogStore ? $this->causalLog->tableName() : '',
+        );
     }
 
     /**

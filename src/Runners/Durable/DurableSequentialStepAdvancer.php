@@ -75,6 +75,9 @@ class DurableSequentialStepAdvancer
             $expectedStepIndex,
             function (?MemorySnapshot $existing, ?ReplaySwarmMemory $replay) use ($state, $expectedStepIndex, $sink, $runId): SwarmStep {
                 $step = $this->sequential->streamSingleStep($state, $expectedStepIndex, $sink);
+                // Write any batched deltas before the caller checkpoints and seals
+                // this node: the seal barrier must land after every one of its rows.
+                $sink->flush();
                 $this->coordinator->commitMemory($replay, $runId);
 
                 return $step;

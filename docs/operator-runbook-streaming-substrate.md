@@ -32,6 +32,14 @@ course-correction is a *void-edge* row, not an edit. That table grows for the
 life of a run, so the substrate bounds it by **graduating** a sealed prefix to a
 cold tier.
 
+Durable per-node streaming writes one row per event, and by default one `INSERT`
+per event too. If that write rate makes the table hot, turn on
+[batched causal-log writes](durable-execution.md#batched-causal-log-writes)
+(`SWARM_DURABLE_STREAM_BATCHING=true`) before reaching for the
+`SWARM_DURABLE_STREAMING_ENABLED=false` kill switch. Batching keeps streaming on
+and writes deltas as multi-row `INSERT`s. Rows, order, seal barriers and
+compaction are unchanged.
+
 Three pieces do that:
 
 - **A seal barrier.** Durable per-node streaming emits a `SwarmCausalSealBarrier`

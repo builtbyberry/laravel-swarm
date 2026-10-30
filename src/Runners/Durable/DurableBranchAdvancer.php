@@ -224,9 +224,16 @@ class DurableBranchAdvancer
                             // it runs the unchanged blocking prompt(). The void above already ran for
                             // any pinned run regardless of the kill-switch, so a retraction is never
                             // dropped. Both shapes return [output, usage, snapshot].
-                            [$output, $usage, $snapshot, $citationEvidence, $nativeResult] = $this->nodeStream->streamingActive($durableStreaming)
-                                ? $this->streamBranchAgent($state, $agent, $branch, $snapshot, $this->nodeStream->sinkFor($runId, $branchNodeId, $branchEpoch))
-                                : $this->promptBranchAgent($state, $agent, $branch, $snapshot);
+                            if ($this->nodeStream->streamingActive($durableStreaming)) {
+                                $sink = $this->nodeStream->sinkFor($runId, $branchNodeId, $branchEpoch);
+                                [$output, $usage, $snapshot, $citationEvidence, $nativeResult] = $this->streamBranchAgent($state, $agent, $branch, $snapshot, $sink);
+                                // Write any batched deltas before the branch is marked
+                                // completed below: completion makes the join eligible, and
+                                // the join's checkpoint seals this branch's rows.
+                                $sink->flush();
+                            } else {
+                                [$output, $usage, $snapshot, $citationEvidence, $nativeResult] = $this->promptBranchAgent($state, $agent, $branch, $snapshot);
+                            }
                         } finally {
                             ActiveRunContext::exit();
                         }
