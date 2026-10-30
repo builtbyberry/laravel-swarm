@@ -88,10 +88,12 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   batch of N entries from M runs costs M context reads instead of N. Nothing is
   kept between drains: the next drain reads every run fresh, and a read that
   fails is not reused. This covers the step, branch and queued-resume lanes.
-  No flag, config key, contract change or migration. A test double bound for
-  `DurableJobDispatcher` that extends the class needs no change; a Mockery mock
-  of it must now also stub `forDrain()` to return the mock, because the drain
-  calls it before dispatching.
+  No flag, config key, contract change or migration. If your tests bind a
+  `DurableJobDispatcher` double and drain the database outbox (`swarm:relay`),
+  the drain now dispatches through the copy `forDrain()` returns, not through
+  the bound instance. A double that records calls in its own properties (or a
+  Mockery mock of the class) should override or stub `forDrain()` to return
+  itself, so the calls are recorded on the instance your test reads.
 
 ### Fixed
 

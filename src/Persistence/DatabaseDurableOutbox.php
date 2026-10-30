@@ -186,7 +186,7 @@ class DatabaseDurableOutbox implements DurableOutbox
 
     /**
      * @param  list<string>  $knownConnections
-     * @param  DurableJobDispatcher  $jobs  The drain's forDrain() copy, which reads each run's native-input version once.
+     * @param  DurableJobDispatcher  $jobs  The dispatcher this drain builds its jobs with; see DurableJobDispatcher::forDrain().
      *
      * @throws UnexpectedValueException For permanently invalid entries: unknown dispatch_type,
      *                                  unknown queue_connection, or malformed/missing payload fields.
