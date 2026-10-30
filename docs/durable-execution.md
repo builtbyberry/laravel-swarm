@@ -298,6 +298,27 @@ is hot. It gates only emission: opted-in runs fall back to the blocking `prompt(
 path, but every crashed attempt is still retracted and every committed node still
 sealed, so the log stays consistent. Flipping it mid-run is safe.
 
+Scope: sequential and parallel durable runs in v0.15.0. Parallel covers both
+top-level `Topology::Parallel` branches and hierarchical fan-out branches (and so
+queue-hierarchical-parallel, whose branches run through the same advancer); each
+branch streams under its own node id — a fan-out branch's real node id, or, for a
+top-level parallel branch, its stable `branch_id` (e.g. `parallel:2`) — and under
+its own branch attempt epoch, so a branch that crashes and resumes retracts only its
+own prior attempt and never a committed sibling. Seal-on-join is by topology: a
+**hierarchical** fan-out's branch generation is sealed at the parent's post-join
+checkpoint (never at branch commit), so its events graduate and compact. A
+**top-level `Topology::Parallel`** run instead converges by completing the run with no
+post-join checkpoint, so its streamed branch events are **never sealed** — they are
+retained-but-uncompacted in `swarm_stream_events` and expire with the rest of the run
+at its data TTL (`swarm.context.ttl`) rather than graduating to cold storage. This is
+deliberate: a top-level parallel run has no subsequent node to fence, so there is no
+on-join seal point; size `swarm_stream_events` retention with that in mind for
+high-fan-out top-level parallel streaming. Hierarchical main-walk node streaming
+follows. Applying `#[DurableStreaming]` to a topology that does not yet stream **fails
+loud at dispatch** — it never silently pins the opt-in and no-ops. Non-durable
+(`run()`/`queue()`) execution is unaffected.
+
+
 ### Batched causal-log writes
 
 By default every streamed event is its own `INSERT` into `swarm_stream_events`,
@@ -319,12 +340,12 @@ what is written or in what order. With batching on, for each node attempt:
 - **Text and reasoning deltas are held**, then written together when any of these
   happens first:
   - `max_events` deltas are held (default 50, at most 100);
-  - the next delta would take the held encoded payload past `max_bytes` (default
-    256 KiB). The held deltas are written first. A single event larger than that
-    is written on its own;
   - a delta arrives while the oldest held delta is `max_age_ms` old (default 250).
     The arriving delta is written with them;
-  - the node's stream ends.
+  - the node's step succeeds: its stream has finished and its guardrails passed.
+- **No `INSERT` carries more than `max_bytes` of encoded payload** (default
+  256 KiB). When the next event would take it past that, the held deltas are
+  written first. A single event larger than `max_bytes` is written on its own.
 - **Everything a node attempt emitted is written before that node's seal
   barrier**, and a branch's events before the branch is marked completed.
 
@@ -336,35 +357,18 @@ event or the end of the node. During that pause a reader can see up to
 has sent. Tool calls and other structural events are never held, so long tool
 runs do not hide text emitted before them.
 
-If a node attempt fails, any deltas it was still holding are dropped, exactly as
-when the worker process dies. What was already written stays retractable: the
+If a node attempt fails, including a guardrail rejecting its output, any deltas
+it was still holding are dropped, exactly as when the worker process dies. What was already written stays retractable: the
 resumed attempt voids it with a `node_reexecuted` edge, as it does without
 batching.
 
 Batching settings are read once per node attempt, so changing them, or the kill
-switch, affects the next attempt and never the one in flight. Turning batching
+switch, affects the next attempt and never the one in flight. A worker reads them
+from its booted configuration: after changing the environment, rebuild the config
+cache and restart workers (`php artisan config:cache` then `php artisan
+queue:restart`) for the change to reach them. Turning batching
 off returns to one `INSERT` per event, exactly as before. Batching does not
 change the table, the seal barriers, compaction or the cold archive.
-
-Scope: sequential and parallel durable runs in v0.15.0. Parallel covers both
-top-level `Topology::Parallel` branches and hierarchical fan-out branches (and so
-queue-hierarchical-parallel, whose branches run through the same advancer); each
-branch streams under its own node id — a fan-out branch's real node id, or, for a
-top-level parallel branch, its stable `branch_id` (e.g. `parallel:2`) — and under
-its own branch attempt epoch, so a branch that crashes and resumes retracts only its
-own prior attempt and never a committed sibling. Seal-on-join is by topology: a
-**hierarchical** fan-out's branch generation is sealed at the parent's post-join
-checkpoint (never at branch commit), so its events graduate and compact. A
-**top-level `Topology::Parallel`** run instead converges by completing the run with no
-post-join checkpoint, so its streamed branch events are **never sealed** — they are
-retained-but-uncompacted in `swarm_stream_events` and expire with the rest of the run
-at its data TTL (`swarm.context.ttl`) rather than graduating to cold storage. This is
-deliberate: a top-level parallel run has no subsequent node to fence, so there is no
-on-join seal point; size `swarm_stream_events` retention with that in mind for
-high-fan-out top-level parallel streaming. Hierarchical main-walk node streaming
-follows. Applying `#[DurableStreaming]` to a topology that does not yet stream **fails
-loud at dispatch** — it never silently pins the opt-in and no-ops. Non-durable
-(`run()`/`queue()`) execution is unaffected.
 
 ## Durable Hierarchical Parallel Flow
 

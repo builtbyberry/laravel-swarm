@@ -47,6 +47,9 @@ use Illuminate\Contracts\Config\Repository as ConfigRepository;
  */
 class DurableNodeStreamRecorder
 {
+    /** Most rows one batched INSERT may carry, whatever max_events is set to. */
+    public const MAX_BATCH_ROWS = 100;
+
     public function __construct(
         protected CausalLogStore $causalLog,
         protected ConfigRepository $config,
@@ -159,24 +162,24 @@ class DurableNodeStreamRecorder
      *
      * `swarm.durable.stream_batching` is read here, once per attempt, so changing
      * it mid-run affects the next attempt, never the one in flight. The caller
-     * must {@see DurableNodeStreamSink::flush()} when the attempt's stream returns.
+     * must {@see DurableNodeStreamSink::flush()} once the attempt's step has
+     * succeeded, before that step is checkpointed or its branch completed — the
+     * point after which the node can be sealed.
      */
     public function sinkFor(string $runId, string $nodeId, int $epoch): DurableNodeStreamSink
     {
-        $batching = (bool) $this->config->get('swarm.durable.stream_batching.enabled', false)
-            && $this->causalLog instanceof DatabaseCausalLogStore;
-
         return new DurableNodeStreamSink(
             causalLog: $this->causalLog,
             runId: $runId,
             nodeId: $nodeId,
             epoch: $epoch,
             ttlSeconds: $this->ttlSeconds(),
-            batching: $batching,
-            maxEvents: min(100, max(1, (int) $this->config->get('swarm.durable.stream_batching.max_events', 50))),
+            batching: (bool) $this->config->get('swarm.durable.stream_batching.enabled', false),
+            // One row binds the 9 columns of DatabaseCausalLogStore::causalRow();
+            // 100 rows keeps an INSERT under SQLite's older 999-variable limit.
+            maxEvents: min(self::MAX_BATCH_ROWS, max(1, (int) $this->config->get('swarm.durable.stream_batching.max_events', 50))),
             maxBytes: max(1, (int) $this->config->get('swarm.durable.stream_batching.max_bytes', 262144)),
             maxAgeMs: max(0, (int) $this->config->get('swarm.durable.stream_batching.max_age_ms', 250)),
-            table: $this->causalLog instanceof DatabaseCausalLogStore ? $this->causalLog->tableName() : '',
         );
     }
 

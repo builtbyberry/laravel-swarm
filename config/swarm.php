@@ -832,13 +832,14 @@ return [
          * What a reader of swarm_stream_events sees with it on: a node attempt's
          * first event, and every event that is not a delta (node open/close, tool
          * call/result, text end, …), is written at once together with any deltas
-         * held before it. Held deltas are written when max_events are held, before
-         * one would take the held payload past max_bytes, when a delta arrives and
-         * the oldest held one is max_age_ms old, and when the node's stream ends —
-         * always before the node's seal barrier. The age limit is checked as events
+         * held before it, unless together they would pass max_bytes, in which case
+         * the held deltas go first. Held deltas are written when max_events are
+         * held, when a delta arrives and the oldest held one is max_age_ms old, and
+         * when the node's step succeeds — always before the node's seal barrier. The age limit is checked as events
          * arrive; there is no timer, so while a provider is silent mid-text the held
          * deltas wait for its next event. An attempt that fails drops what it holds,
-         * as a crash would. Read once per node attempt, so changing it mid-run is safe.
+         * as a crash would. Read once per node attempt, so changing it mid-run is
+         * safe; workers pick up a change after config:cache and queue:restart.
          */
         'stream_batching' => [
             'enabled' => (bool) env('SWARM_DURABLE_STREAM_BATCHING', false),

@@ -1872,7 +1872,7 @@ class HierarchicalRunner
      * returned sink stamps each event with the node id + attempt epoch and
      * appends it (#298 F4 — per-attempt identity lives on the sink, never on a
      * runner field, so two concurrent runs in one Octane worker never share a
-     * stamp). The caller flushes it when the node's stream is done.
+     * stamp). The caller flushes it once the node's step has succeeded.
      */
     protected function durableNodeSink(SwarmExecutionState $state, string $nodeId, bool $durableStreaming, int $attemptEpoch): ?DurableNodeStreamSink
     {

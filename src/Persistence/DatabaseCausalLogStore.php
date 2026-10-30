@@ -87,14 +87,6 @@ class DatabaseCausalLogStore extends DatabaseStreamEventStore implements CausalL
         $this->connection->table($table)->insert($rows);
     }
 
-    /**
-     * The configured stream-events table name, as {@see table()} resolves it now.
-     */
-    public function tableName(): string
-    {
-        return (string) $this->config->get('swarm.tables.stream_events', 'swarm_stream_events');
-    }
-
     public function appendVoidEdge(
         string $runId,
         CausalVoidEdgeType $type,
@@ -287,7 +279,7 @@ class DatabaseCausalLogStore extends DatabaseStreamEventStore implements CausalL
     {
         parent::assertReady();
 
-        $table = (string) $this->config->get('swarm.tables.stream_events', 'swarm_stream_events');
+        $table = $this->tableName();
         $schema = $this->connection->getSchemaBuilder();
 
         if (! $schema->hasColumns($table, ['event_uuid', 'void_type', 'void_target_event_uuid', 'void_reason', 'sealed_at', 'node_id', 'attempt_epoch'])) {

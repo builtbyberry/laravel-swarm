@@ -158,7 +158,6 @@ function batchingSink(string $runId, string $nodeId = 'step:0', int $epoch = 0, 
         maxEvents: $maxEvents,
         maxBytes: $maxBytes,
         maxAgeMs: $maxAgeMs,
-        table: $store->tableName(),
         clock: $clock,
     );
 }
@@ -376,6 +375,31 @@ test('max_bytes writes the held deltas before one that would pass it, and writes
         ->and(array_slice(streamBatchingUuids('run-bytes'), -2))->toBe(['held-small', 'oversized']);
 });
 
+test('a structural event that would pass max_bytes goes out after the held deltas, not with them', function () {
+    enableStreamBatching();
+    seedStreamBatchingRun('run-bytes-structural');
+
+    $row = batchingPayloadBytes('run-bytes-structural', batchingDelta('run-bytes-structural', 'probe-000', str_repeat('a', 100)));
+    $budget = (int) floor($row * 2.5);
+
+    $inserts = recordStreamEventInserts();
+    $sink = batchingSink('run-bytes-structural', maxBytes: $budget);
+    $sink(batchingDelta('run-bytes-structural', 'first-000', str_repeat('a', 100)));
+    $sink(batchingDelta('run-bytes-structural', 'held-0001', str_repeat('a', 100)));
+    $sink(batchingDelta('run-bytes-structural', 'held-0002', str_repeat('a', 100)));
+
+    // A tool call that fits the budget alone but not on top of the two held deltas.
+    $sink(new SwarmToolCall('tool-call', 'run-bytes-structural', 0, 'Agent', new ToolCall('tool-id', 'tool', ['q' => str_repeat('c', 100)]), 123));
+
+    expect($inserts->getArrayCopy())->toBe([1, 2, 1])
+        ->and(array_slice(streamBatchingUuids('run-bytes-structural'), 0, 3))->toBe(['first-000', 'held-0001', 'held-0002'])
+        ->and(DB::table('swarm_stream_events')->where('run_id', 'run-bytes-structural')->orderBy('id')->pluck('event_type')->last())->toBe('swarm_tool_call');
+
+    foreach (DB::table('swarm_stream_events')->where('run_id', 'run-bytes-structural')->where('event_type', 'swarm_text_delta')->orderBy('id')->get()->skip(1)->chunk(2) as $pair) {
+        expect($pair->sum(fn ($r) => strlen($r->payload)))->toBeLessThanOrEqual($budget);
+    }
+});
+
 test('max_age_ms writes the held deltas when a delta arrives and the oldest held one is that old', function (float $arrival, int $expectedRows) {
     enableStreamBatching();
     seedStreamBatchingRun('run-age');
@@ -398,8 +422,77 @@ test('max_age_ms writes the held deltas when a delta arrives and the oldest held
     expect(streamBatchingUuids('run-age'))->toHaveCount($expectedRows);
 })->with([
     'before the oldest is 250 ms old' => [240.0, 1],
-    'once the oldest is 250 ms old' => [260.0, 5],
+    'when the oldest is exactly 250 ms old' => [250.0, 5],
+    'after the oldest is 250 ms old' => [260.0, 5],
 ]);
+
+test('max_age_ms of 0 writes the held deltas on every next delta', function () {
+    enableStreamBatching();
+    seedStreamBatchingRun('run-age-zero');
+    $inserts = recordStreamEventInserts();
+    $sink = batchingSink('run-age-zero', maxAgeMs: 0, clock: fn (): float => 0.0);
+
+    foreach (range(0, 4) as $i) {
+        $sink(batchingDelta('run-age-zero', "zero-{$i}"));
+    }
+
+    // The first event alone, then each held delta goes out with the next one.
+    expect($inserts->getArrayCopy())->toBe([1, 2, 2]);
+});
+
+test('out-of-range batching settings are clamped: at most 100 rows per INSERT, at least 1 byte, no negative age', function () {
+    config()->set('swarm.durable.stream_batching', [
+        'enabled' => true,
+        'max_events' => 500,
+        'max_bytes' => 10_000_000,
+        'max_age_ms' => 600_000,
+    ]);
+    seedStreamBatchingRun('run-clamp');
+    $inserts = recordStreamEventInserts();
+    $sink = app(DurableNodeStreamRecorder::class)->sinkFor('run-clamp', 'step:0', 0);
+
+    foreach (range(0, 250) as $i) {
+        $sink(batchingDelta('run-clamp', "clamp-{$i}"));
+    }
+    $sink->flush();
+
+    expect($inserts->getArrayCopy())->toBe([1, 100, 100, 50]);
+
+    config()->set('swarm.durable.stream_batching', [
+        'enabled' => true,
+        'max_events' => 0,
+        'max_bytes' => -5,
+        'max_age_ms' => -5,
+    ]);
+    seedStreamBatchingRun('run-clamp-low');
+    $inserts->exchangeArray([]);
+    $sink = app(DurableNodeStreamRecorder::class)->sinkFor('run-clamp-low', 'step:0', 0);
+
+    foreach (range(0, 3) as $i) {
+        $sink(batchingDelta('run-clamp-low', "low-{$i}"));
+    }
+
+    // max_events 1 and max_bytes 1: nothing is ever held.
+    expect($inserts->getArrayCopy())->toBe([1, 1, 1, 1])
+        ->and(streamBatchingUuids('run-clamp-low'))->toHaveCount(4);
+});
+
+test('turning batching off mid-attempt does not change that attempt: deltas stay held and come out in order', function () {
+    enableStreamBatching();
+    seedStreamBatchingRun('run-flip');
+    $sink = app(DurableNodeStreamRecorder::class)->sinkFor('run-flip', 'step:0', 0);
+
+    $sink(batchingDelta('run-flip', 'first'));
+    $sink(batchingDelta('run-flip', 'held-1'));
+    config()->set('swarm.durable.stream_batching.enabled', false);
+    $sink(batchingDelta('run-flip', 'held-2'));
+
+    expect(streamBatchingUuids('run-flip'))->toBe(['first']);
+
+    $sink->flush();
+
+    expect(streamBatchingUuids('run-flip'))->toBe(['first', 'held-1', 'held-2']);
+});
 
 test('while a provider is silent, held deltas wait for its next event (the documented limit)', function () {
     enableStreamBatching();
@@ -614,6 +707,39 @@ test('a fan-out branch\'s held deltas are all written before it is marked comple
         ->and($atCompletion)->toBe(streamBatchingUuids($runId, 'research_node'));
     assertNodeWrittenBeforeItsSeal($runId, 'research_node', $snapshots, 4);
 });
+
+test('a fan-out branch that fails holding deltas leaves exactly what it wrote, and nothing after the throw', function (string $failWith) {
+    enableStreamBatching(maxEvents: 3);
+    BatchingStreamEditor::reset(failuresBeforeSuccess: 1, failAfter: 5, failWith: $failWith);
+
+    $runId = BatchingFanOutStreamingSwarm::make()->dispatchDurable('fan-out-task')->runId;
+    $manager = app(DurableSwarmManager::class);
+
+    $guard = 0;
+    while (($current = $manager->find($runId))['status'] !== 'waiting') {
+        if ($guard++ > 10) {
+            throw new RuntimeException('Fan-out batching run never reached its branches.');
+        }
+        (new AdvanceDurableSwarm($runId, (int) $current['next_step_index']))->handle($manager);
+    }
+
+    $research = collect(app(DurableRunStore::class)->branchesFor($runId, $current['current_node_id']))
+        ->firstWhere('node_id', 'research_node');
+    (new AdvanceDurableBranch($runId, $research['branch_id']))->handle($manager);
+
+    // The first delta alone, d2-d4 as one batch; d5 was held when the branch
+    // threw. (The plan resolves the agent from the container, so its label is
+    // the default `batch`.)
+    $deltas = DB::table('swarm_stream_events')->where('run_id', $runId)->where('node_id', 'research_node')
+        ->where('event_type', 'swarm_text_delta')->orderBy('id')->pluck('event_uuid')->all();
+
+    expect(BatchingStreamEditor::$attempts)->toBe(1)
+        ->and($deltas)->toBe(['batch-a1-d1', 'batch-a1-d2', 'batch-a1-d3', 'batch-a1-d4'])
+        ->and(DB::table('swarm_durable_branches')->where('run_id', $runId)->where('node_id', 'research_node')->value('status'))->not->toBe('completed');
+})->with([
+    'a failure' => [RuntimeException::class],
+    'a lost lease' => [LostDurableLeaseException::class],
+]);
 
 test('a step that crashes holding deltas leaves exactly what it wrote, and resume retracts it', function () {
     enableStreamBatching(maxEvents: 3);

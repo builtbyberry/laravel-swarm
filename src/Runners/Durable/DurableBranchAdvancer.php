@@ -196,6 +196,7 @@ class DurableBranchAdvancer
 
                     $startedAt = MonotonicTime::now();
                     $step = null;
+                    $sink = null;
 
                     try {
                         $this->stepsRecorder->started($state, (int) $branch['step_index'], $branch['agent_class'], $branch['input']);
@@ -227,10 +228,6 @@ class DurableBranchAdvancer
                             if ($this->nodeStream->streamingActive($durableStreaming)) {
                                 $sink = $this->nodeStream->sinkFor($runId, $branchNodeId, $branchEpoch);
                                 [$output, $usage, $snapshot, $citationEvidence, $nativeResult] = $this->streamBranchAgent($state, $agent, $branch, $snapshot, $sink);
-                                // Write any batched deltas before the branch is marked
-                                // completed below: completion makes the join eligible, and
-                                // the join's checkpoint seals this branch's rows.
-                                $sink->flush();
                             } else {
                                 [$output, $usage, $snapshot, $citationEvidence, $nativeResult] = $this->promptBranchAgent($state, $agent, $branch, $snapshot);
                             }
@@ -267,6 +264,10 @@ class DurableBranchAdvancer
                             nativeResult: $nativeResult,
                         );
                         $this->coordinator->commitMemory($replay, $runId);
+                        // Write any batched deltas before the branch is marked completed
+                        // below: completion makes the join eligible, and the join's
+                        // checkpoint seals this branch's rows.
+                        $sink?->flush();
 
                         $this->connection->transaction(function () use ($runId, $branch, $branchId, $token, $output, $usage, $durationMs, $step, $context, $state): void {
                             $evidence = $this->capture->citationEvidence($step->citationEvidence, $context);

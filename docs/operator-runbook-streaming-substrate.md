@@ -40,6 +40,20 @@ per event too. If that write rate makes the table hot, turn on
 and writes deltas as multi-row `INSERT`s. Rows, order, seal barriers and
 compaction are unchanged.
 
+- **Rolling it out.** Workers read the setting from their booted configuration,
+  once per node attempt. After changing the environment, run
+  `php artisan config:cache` and `php artisan queue:restart`. Nodes already
+  streaming finish with the setting they started with.
+- **Checking it worked.** Batching writes the same rows, so the table looks the
+  same. Compare your database's `INSERT` statement rate on `swarm_stream_events`
+  with its row rate. They are about equal with batching off, and the statement
+  rate drops well below the row rate once batching is on. If it does not drop,
+  fall back to the kill switch.
+- **What readers notice.** While a provider is silent mid-text, a live reader can
+  trail it by up to one held batch (at most `max_age_ms` of emitted text and
+  `max_events` deltas) until the provider's next event. Lower those settings, or
+  turn batching off, if that matters more than the write load.
+
 Three pieces do that:
 
 - **A seal barrier.** Durable per-node streaming emits a `SwarmCausalSealBarrier`
@@ -279,6 +293,7 @@ event types will not crash a co-deployed v0.15.0 worker.
 | `swarm:compact` exits with a no-op message | Cache persistence driver | Compaction requires the database driver; nothing to do. |
 | Quarantine `exception_class` is a decrypt error | `APP_KEY` rotated after graduation | [APP_KEY Rotation](app-key-rotation.md), then §6. |
 | v0.14.x worker throwing after a v0.15.0 stream | Pre-sentinel worker hit a seal barrier | §7 — finish the fleet upgrade. |
+| Live or replayed durable text arrives in bursts, or pauses mid-sentence and then catches up | `SWARM_DURABLE_STREAM_BATCHING` is on | Expected: §1, [batched causal-log writes](durable-execution.md#batched-causal-log-writes). Lower `max_age_ms` / `max_events`, or turn batching off. |
 
 ---
 
