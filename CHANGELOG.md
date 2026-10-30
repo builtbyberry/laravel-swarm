@@ -87,7 +87,11 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   run in each drain and reuses the result for the run's other entries, so a
   batch of N entries from M runs costs M context reads instead of N. Nothing is
   kept between drains: the next drain reads every run fresh, and a read that
-  fails is not reused. No flag, config key, contract change or migration.
+  fails is not reused. This covers the step, branch and queued-resume lanes.
+  No flag, config key, contract change or migration. A test double bound for
+  `DurableJobDispatcher` that extends the class needs no change; a Mockery mock
+  of it must now also stub `forDrain()` to return the mock, because the drain
+  calls it before dispatching.
 
 ### Fixed
 

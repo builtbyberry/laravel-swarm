@@ -106,15 +106,17 @@ final class MemoCountingStores
 }
 
 /**
- * Four runs, one per version path: no native input, native input v1, native
- * agent settings v2, and no context row at all.
+ * Five runs, one per version path: no native input, native input v1, native
+ * agent settings v2, a native-input ref whose row is gone (read as v1), and no
+ * context row at all.
  */
-function memoStoresWithFourRuns(): MemoCountingStores
+function memoStoresWithRuns(): MemoCountingStores
 {
     $stores = new MemoCountingStores;
     $stores->contexts['run-base'] = ['run_id' => 'run-base'];
     $stores->contexts['run-native'] = ['run_id' => 'run-native', 'native_input_ref' => 'ref-native'];
     $stores->contexts['run-settings'] = ['run_id' => 'run-settings', 'native_input_ref' => 'ref-settings'];
+    $stores->contexts['run-gone'] = ['run_id' => 'run-gone', 'native_input_ref' => 'ref-gone'];
     $stores->nativeInputs['ref-native'] = ['format_version' => 1];
     $stores->nativeInputs['ref-settings'] = ['format_version' => 2];
 
@@ -226,7 +228,7 @@ beforeEach(function (): void {
 
     // Outbox rows reference their durable run; the context stores themselves are fakes.
     $now = now('UTC');
-    foreach (['run-base', 'run-native', 'run-settings', 'run-missing'] as $runId) {
+    foreach (['run-base', 'run-native', 'run-settings', 'run-gone', 'run-missing'] as $runId) {
         DB::table('swarm_durable_runs')->insert([
             'run_id' => $runId,
             'swarm_class' => 'ExampleSwarm',
@@ -243,28 +245,30 @@ beforeEach(function (): void {
 });
 
 test('a drain reads each run context once, not once per entry, and still picks every job variant', function (): void {
-    $stores = memoStoresWithFourRuns();
+    $stores = memoStoresWithRuns();
     $outbox = memoOutbox(memoDispatcher($stores));
-    memoEnqueueEveryLane($outbox, ['run-base', 'run-native', 'run-settings', 'run-missing']);
+    memoEnqueueEveryLane($outbox, ['run-base', 'run-native', 'run-settings', 'run-gone', 'run-missing']);
 
     $result = $outbox->drain([], 100);
 
-    // 24 entries across 4 runs: 4 context reads, and one native-input read per run with a ref.
-    expect($result->dispatched)->toBe(24)
+    // 30 entries across 5 runs: 5 context reads, and one native-input read per run with a ref.
+    expect($result->dispatched)->toBe(30)
         ->and($result->failed)->toBe(0)
-        ->and($stores->contextReads)->toBe(['run-base' => 1, 'run-native' => 1, 'run-settings' => 1, 'run-missing' => 1])
-        ->and($stores->nativeInputReads)->toBe(['ref-native' => 1, 'ref-settings' => 1])
+        ->and($stores->contextReads)->toBe(['run-base' => 1, 'run-native' => 1, 'run-settings' => 1, 'run-gone' => 1, 'run-missing' => 1])
+        ->and($stores->nativeInputReads)->toBe(['ref-native' => 1, 'ref-settings' => 1, 'ref-gone' => 1])
         ->and(memoPushedJobs())->toBe(memoExpectedJobs([
             'run-base' => memoBaseVariants(),
             'run-native' => memoNativeVariants(),
             'run-settings' => memoSettingsVariants(),
+            // A ref whose native-input row is gone is read as version 1, as before.
+            'run-gone' => memoNativeVariants(),
             // No context row: the null version path, exactly as before — the base jobs.
             'run-missing' => memoBaseVariants(),
         ]));
 });
 
 test('the memo does not outlive a drain: the next drain reads again and sees a changed native input', function (): void {
-    $stores = memoStoresWithFourRuns();
+    $stores = memoStoresWithRuns();
     $dispatcher = memoDispatcher($stores);
     $outbox = memoOutbox($dispatcher);
 
@@ -293,7 +297,7 @@ test('the memo does not outlive a drain: the next drain reads again and sees a c
 });
 
 test('two drain scopes taken from one dispatcher keep separate memos', function (): void {
-    $stores = memoStoresWithFourRuns();
+    $stores = memoStoresWithRuns();
     $dispatcher = memoDispatcher($stores);
 
     $first = $dispatcher->forDrain();
@@ -313,7 +317,7 @@ test('two drain scopes taken from one dispatcher keep separate memos', function 
 });
 
 test('a context read that fails is not memoized: the next entry of the run reads again', function (): void {
-    $stores = memoStoresWithFourRuns();
+    $stores = memoStoresWithRuns();
     $stores->contextFailures['run-native'] = 1;
     $outbox = memoOutbox(memoDispatcher($stores));
 
@@ -334,7 +338,7 @@ test('a context read that fails is not memoized: the next entry of the run reads
 });
 
 test('a native input read that fails is not memoized: the next entry of the run reads again', function (): void {
-    $stores = memoStoresWithFourRuns();
+    $stores = memoStoresWithRuns();
     $stores->nativeInputFailures['ref-settings'] = 1;
     $outbox = memoOutbox(memoDispatcher($stores));
 

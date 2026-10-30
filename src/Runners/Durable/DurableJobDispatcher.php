@@ -44,6 +44,8 @@ class DurableJobDispatcher
      * A copy that reads each run's native-input version once and reuses it for
      * every later job it builds for that run. Hold it for one outbox drain and
      * then drop it: the next drain takes a new copy and reads the versions fresh.
+     * Within the drain a run's first result is reused, a null one (no context row)
+     * included. The copy shares this instance's stores; only the memo is its own.
      * This instance is left as it was, so it never memoizes.
      */
     public function forDrain(): static
@@ -167,6 +169,9 @@ class DurableJobDispatcher
         return $this->nativeInputVersions[$runId] = $this->readNativeInputVersion($runId);
     }
 
+    /**
+     * Read the run's context and, when it names one, its native-input row: no memo.
+     */
     protected function readNativeInputVersion(string $runId): ?int
     {
         $context = ($this->contexts ?? Container::getInstance()->make(ContextStore::class))->find($runId);
