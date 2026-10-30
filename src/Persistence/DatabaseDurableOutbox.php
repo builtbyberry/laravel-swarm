@@ -153,9 +153,13 @@ class DatabaseDurableOutbox implements DurableOutbox
         $failed = 0;
         $dispatchedIds = [];
 
+        // One dispatcher copy per drain: entries of the same run share a single read of
+        // its native-input version, and the next drain reads it fresh.
+        $jobs = $this->jobs->forDrain();
+
         foreach ($entries as $entry) {
             try {
-                $this->dispatchEntry($entry, $knownConnections);
+                $this->dispatchEntry($entry, $knownConnections, $jobs);
                 $dispatchedIds[] = $entry->id;
                 $dispatched++;
             } catch (UnexpectedValueException $e) {
@@ -186,7 +190,7 @@ class DatabaseDurableOutbox implements DurableOutbox
      * @throws UnexpectedValueException For permanently invalid entries: unknown dispatch_type,
      *                                  unknown queue_connection, or malformed/missing payload fields.
      */
-    protected function dispatchEntry(object $entry, array $knownConnections): void
+    protected function dispatchEntry(object $entry, array $knownConnections, DurableJobDispatcher $jobs): void
     {
         // A misrouted audit row is a distinct, diagnosable failure: audit evidence
         // belongs in swarm_audit_outbox and is drained by AuditOutbox, never here.
@@ -242,19 +246,19 @@ class DatabaseDurableOutbox implements DurableOutbox
         $queue = $entry->queue_name ?: null;
 
         match ($type) {
-            DurableDispatchType::Step => $this->jobs->dispatchStep(
+            DurableDispatchType::Step => $jobs->dispatchStep(
                 $entry->run_id,
                 $this->extractStepIndex($entry->id, $payload),
                 $connection,
                 $queue,
             ),
-            DurableDispatchType::Branch => $this->jobs->dispatchBranch(
+            DurableDispatchType::Branch => $jobs->dispatchBranch(
                 $entry->run_id,
                 $this->extractBranchId($entry->id, $payload),
                 $connection,
                 $queue,
             ),
-            DurableDispatchType::QueuedResume => $this->jobs->dispatchQueuedResumeById(
+            DurableDispatchType::QueuedResume => $jobs->dispatchQueuedResumeById(
                 $entry->run_id,
                 $connection,
                 $queue,

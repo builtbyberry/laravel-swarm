@@ -81,6 +81,13 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   so they take disjoint batches under the existing at-least-once contract. No
   flag, config key or migration. See
   [Command overlap leases](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/maintenance.md#command-overlap-leases).
+- **A relay drain reads each run's context once, not once per outbox entry.**
+  To pick the job class for an entry, the drain reads the run's context and,
+  for a run with native input, its native-input row. It now does that once per
+  run in each drain and reuses the result for the run's other entries, so a
+  batch of N entries from M runs costs M context reads instead of N. Nothing is
+  kept between drains: the next drain reads every run fresh, and a read that
+  fails is not reused. No flag, config key, contract change or migration.
 
 ### Fixed
 
