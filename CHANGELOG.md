@@ -27,6 +27,28 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   that does nothing. No data is lost and there is no schema change. See
   [Durable Eager Dispatch](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/configuration.md#durable-eager-dispatch).
 
+- **Durable branch fan-out cap.** New `swarm.durable.parallel.max_concurrent_branches`
+  key (`SWARM_DURABLE_PARALLEL_MAX_CONCURRENT_BRANCHES`, default `null` =
+  unlimited, so nothing changes until you set it). With it set to `N`, a
+  step-durable hierarchical parallel node dispatches its first `N` branches and
+  holds the rest as outbox rows; each time a branch finishes, one held branch is
+  released into its slot, so at most `N` branches of the fan-out are admitted and
+  unfinished at once. The cap is per fan-out, not global: concurrent runs each get
+  their own `N`, so a limit across all runs still comes from branch-queue workers or
+  queue rate limiting. Every branch is still recorded at the fan-out and the join
+  waits for all of them; failure policies are unchanged; held branches are never
+  released by the clock, and no stray or duplicate job can run one. Works on the
+  relay and eager-dispatch paths. `swarm:recover` also releases held branches a
+  crashed worker left behind, and `swarm:health --durable` gains a **Held
+  branches** line; held rows no longer count as relay backlog. Requires the
+  bundled database run store and outbox on one connection, and rejects any other
+  pairing — or a value that is not a positive integer — when a durable run
+  starts. Set it only after every worker and `swarm:recover` run this version;
+  before rolling back, set it to `null` and run `swarm:recover` until no branches
+  are held. Top-level parallel, `queue()` `multi_worker` and the streaming branch
+  cap are unaffected. No schema change. See
+  [Capping branch fan-out](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-execution.md#capping-branch-fan-out).
+
 - **`swarm:relay --daemon`: one long-lived relay process.** Instead of a
   framework boot per scheduled tick, the relay can run as one process under a
   supervisor, in the style of `queue:work`. Each cycle drains every selected

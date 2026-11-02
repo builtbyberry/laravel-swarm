@@ -8,10 +8,12 @@ use BuiltByBerry\LaravelSwarm\Audit\Actor;
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Commands\Concerns\CommandOverlapGuard;
 use BuiltByBerry\LaravelSwarm\Commands\Concerns\ResolvesStringConsoleInput;
+use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableOutbox;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
+use Illuminate\Database\Query\Builder;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Throwable;
 
@@ -34,6 +36,10 @@ class SwarmRecoverCommand extends Command
         supervisor invocation. Configure swarm.commands.overlap.store with an
         atomic lock-capable cache store and size lease_seconds above the worst-case
         recovery duration. Lock contention warns, exits non-zero, and performs no sweep.
+
+        With swarm.durable.parallel.max_concurrent_branches set, recover also releases
+        held branches into the free slots of every run holding some. That sweep is not
+        bounded by --limit: it never admits a run past its cap.
         HELP;
 
     public function handle(DurableSwarmManager $manager, SwarmAuditDispatcher $audit, ConfigRepository $config, Connection $connection, CommandOverlapGuard $overlap): int
@@ -129,9 +135,12 @@ class SwarmRecoverCommand extends Command
                 return;
             }
 
+            // Aged by available_at (when the row became dispatchable); branches held by
+            // the fan-out cap are not relay work and never count.
             $agingCount = $connection->table($outboxTable)
-                ->where('created_at', '<', $warningThreshold)
+                ->where('available_at', '<', $warningThreshold)
                 ->where(fn ($q) => $q->whereNull('reserved_at')->orWhere('reserved_at', '<', $staleThreshold))
+                ->where(fn (Builder $q) => DatabaseDurableOutbox::constrainNotHeld($q))
                 ->count();
 
             if ($agingCount > 0) {

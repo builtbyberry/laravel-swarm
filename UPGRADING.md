@@ -2,6 +2,20 @@
 
 ## Upgrading to realtime-dispatch
 
+### Durable branch fan-out cap (`swarm.durable.parallel.max_concurrent_branches`)
+
+Off by default; nothing changes until you set it. If you do:
+
+- **Turn it on last.** Set the cap only after every queue worker and the
+  `swarm:recover` scheduler run this version. Older workers neither release held
+  branches nor refuse to run them.
+- **Drain before rolling back.** Set the cap to `null`, resume or cancel any paused
+  capped runs, run `swarm:recover`, and confirm `swarm:health --durable` shows no
+  held branches before deploying a version without the cap.
+
+See [Capping branch fan-out](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-execution.md#capping-branch-fan-out),
+including how to release held branches by hand after a rollback.
+
 ### Custom `DurableOutbox` implementations
 
 The `DurableOutbox` contract changed to support eager durable dispatch

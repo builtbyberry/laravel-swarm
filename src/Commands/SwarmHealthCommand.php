@@ -17,6 +17,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamStepCheckpointStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
+use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableOutbox;
 use BuiltByBerry\LaravelSwarm\Streaming\Parallel\ParallelProcessStreamTransport;
 use BuiltByBerry\LaravelSwarm\Streaming\Parallel\ParallelStreamLimits;
 use Carbon\CarbonInterface;
@@ -27,6 +28,7 @@ use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Filesystem\Factory;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Database\Connection;
+use Illuminate\Database\Query\Builder;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Throwable;
 
@@ -94,6 +96,7 @@ class SwarmHealthCommand extends Command
                     'details' => 'swarm:relay must drain the durable lane (a bare swarm:relay, or --type=step --type=branch --type=queued_resume) every minute for durable execution to advance — derive withoutOverlapping() minutes from swarm.commands.overlap.lease_seconds',
                 ];
                 $results[] = $this->runOutboxStalenessCheck($config, $connection);
+                $results[] = $this->runHeldBranchesCheck($config, $connection);
                 $results[] = $this->runQueueRoutingCheck($config, $connection);
             }
 
@@ -613,9 +616,12 @@ class SwarmHealthCommand extends Command
                 ];
             }
 
-            // Total pending: unclaimed or with an expired reservation.
+            // Total pending: unclaimed or with an expired reservation. Branches held by
+            // the fan-out cap (swarm.durable.parallel.max_concurrent_branches) are not
+            // relay work and are reported on their own line.
             $totalPending = $connection->table($outboxTable)
                 ->where(fn ($q) => $q->whereNull('reserved_at')->orWhere('reserved_at', '<', $staleThreshold))
+                ->where(fn (Builder $q) => DatabaseDurableOutbox::constrainNotHeld($q))
                 ->count();
 
             if ($totalPending === 0) {
@@ -628,10 +634,13 @@ class SwarmHealthCommand extends Command
                 ];
             }
 
-            // Aging: pending AND older than the warning threshold.
+            // Aging: pending AND due for longer than the warning threshold. Aged by
+            // available_at — the moment the row became dispatchable, which equals
+            // created_at for every row except a branch the fan-out cap released later.
             $agingCount = $connection->table($outboxTable)
-                ->where('created_at', '<', $warningThreshold)
+                ->where('available_at', '<', $warningThreshold)
                 ->where(fn ($q) => $q->whereNull('reserved_at')->orWhere('reserved_at', '<', $staleThreshold))
+                ->where(fn (Builder $q) => DatabaseDurableOutbox::constrainNotHeld($q))
                 ->count();
 
             if ($agingCount > 0) {
@@ -654,6 +663,54 @@ class SwarmHealthCommand extends Command
         } catch (Throwable $exception) {
             return [
                 'component' => 'Outbox relay',
+                'driver' => 'database',
+                'store' => 'n/a',
+                'status' => 'failed',
+                'details' => $exception->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * Branches held back by the durable fan-out cap. Informational: held branches are
+     * released as running branches finish. Before rolling back to a version without
+     * the cap, set the cap to null and run swarm:recover until this shows none.
+     *
+     * @return array{component: string, driver: string, store: string, status: string, details: string}
+     */
+    protected function runHeldBranchesCheck(ConfigRepository $config, Connection $connection): array
+    {
+        $outboxTable = (string) $config->get('swarm.tables.durable_outbox', 'swarm_durable_outbox');
+
+        try {
+            if (! $connection->getSchemaBuilder()->hasTable($outboxTable)) {
+                return [
+                    'component' => 'Held branches',
+                    'driver' => 'database',
+                    'store' => 'n/a',
+                    'status' => 'failed',
+                    'details' => "Outbox table [{$outboxTable}] does not exist. Run migrations.",
+                ];
+            }
+
+            $row = DatabaseDurableOutbox::constrainHeld($connection->table($outboxTable))
+                ->selectRaw('count(*) as held, count(distinct run_id) as runs, min(created_at) as oldest')
+                ->first();
+            $held = (int) ($row->held ?? 0);
+
+            return [
+                'component' => 'Held branches',
+                'driver' => 'database',
+                'store' => 'n/a',
+                'status' => 'ok',
+                'details' => $held === 0
+                    ? 'none held by the fan-out cap'
+                    : "{$held} branch(es) held across ".(int) $row->runs.' run(s), oldest since '.(string) $row->oldest.' UTC'
+                        .' — released as running branches finish; if this does not shrink, check that swarm:recover is scheduled and that no capped run is paused',
+            ];
+        } catch (Throwable $exception) {
+            return [
+                'component' => 'Held branches',
                 'driver' => 'database',
                 'store' => 'n/a',
                 'status' => 'failed',

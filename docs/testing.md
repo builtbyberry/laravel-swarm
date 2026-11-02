@@ -164,6 +164,13 @@ Common patterns:
   observe them with `Queue::fake()` instead.
 - Bind `BuiltByBerry\LaravelSwarm\Runners\DurableRunRecorder` if you need to spy
   checkpoint writes; the service provider documents `makeWith` parameters.
+- With `swarm.durable.parallel.max_concurrent_branches` set, held branches are
+  released only after a finished branch's transaction really commits. Suites that
+  wrap each test in a transaction that never commits (`RefreshDatabase`,
+  `DatabaseTransactions`) will see capped fan-outs stall: leave the cap unset there
+  (`<env name="SWARM_DURABLE_PARALLEL_MAX_CONCURRENT_BRANCHES" value=""/>` in
+  `phpunit.xml`) or use `DatabaseMigrations`. See
+  [Capping branch fan-out](durable-execution.md#capping-branch-fan-out).
 
 For the full collaborator graph, container singleton rules, and which types
 must not be registered globally, read
