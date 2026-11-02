@@ -26,6 +26,7 @@ use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Exceptions;
 use Illuminate\Support\Facades\Queue;
 
 /**
@@ -664,13 +665,29 @@ test('recovery skips held branches before its limit, so a crashed admitted branc
         ->and(array_filter($recovered, fn (string $id): bool => str_starts_with($id, $runId.'|') && $id !== $runId.'|parallel_node:w0'))->toBe([]);
 });
 
-test('recover without the bundled persistence pair behaves exactly as before', function (): void {
+test('recover without the bundled persistence pair recovers branches exactly as before and never touches the outbox table', function (): void {
     capSet(null);
+    $runId = capStartFanOut(3);
+    $old = now('UTC')->subHour();
+    DB::table('swarm_durable_branches')->where('run_id', $runId)->where('branch_id', 'parallel_node:w1')
+        ->update(['status' => 'running', 'leased_until' => $old, 'updated_at' => $old]);
+
+    // A custom outbox, and no bundled outbox table at all.
     app()->bind(DurableOutbox::class, fn () => Mockery::mock(DurableOutbox::class)->shouldIgnoreMissing());
     app()->forgetInstance(DurableSwarmManager::class);
     DB::statement('drop table swarm_durable_outbox');
+    Exceptions::fake();
+    $before = count(capPendingJobs([]));
 
-    expect(app(DurableSwarmManager::class)->recover())->toBe([]);
+    $recovered = app(DurableSwarmManager::class)->recover();
+
+    $redispatched = array_values(array_filter(
+        array_slice(capPendingJobs([]), $before),
+        fn (object $job): bool => $job instanceof AdvanceDurableBranch,
+    ));
+    expect($recovered)->toBe([$runId])
+        ->and(array_map(fn (AdvanceDurableBranch $job): string => $job->branchId, $redispatched))->toBe(['parallel_node:w1']);
+    Exceptions::assertNothingReported();
 });
 
 // ---------------------------------------------------------------------------
@@ -808,20 +825,17 @@ test('swarm:health shows no held branches when the cap is off', function (): voi
 // Configuration fails loudly at run start
 // ---------------------------------------------------------------------------
 
-test('an invalid cap throws when a durable run starts and creates no run', function (mixed $value): void {
+test('an invalid cap throws when a durable run starts and creates no run', function (string $swarm, mixed $value): void {
     capSet($value);
     capPlan(4);
 
-    expect(fn () => FakeWideHierarchicalSwarm::make()->dispatchDurable('cap-task'))
+    expect(fn () => $swarm::make()->dispatchDurable('cap-task'))
         ->toThrow(SwarmException::class, 'max_concurrent_branches');
     expect(DB::table('swarm_durable_runs')->count())->toBe(0);
-})->with([0, -1, 'abc', '1.5', 1.5, '4x']);
-
-test('an invalid cap also throws for a sequential durable run', function (): void {
-    capSet(0);
-
-    expect(fn () => FakeSequentialSwarm::make()->dispatchDurable('task'))->toThrow(SwarmException::class);
-});
+})->with([
+    'hierarchical' => FakeWideHierarchicalSwarm::class,
+    'sequential' => FakeSequentialSwarm::class,
+])->with([0, -1, 'abc', '1.5', 1.5, '4x']);
 
 test('a numeric string cap is accepted', function (): void {
     capSet('4');
@@ -914,4 +928,110 @@ test('a release that fails part-way rolls back: every row it touched is still he
 
     expect(capHeldRows($runId))->toHaveCount(3)
         ->and(capAdmittedUnfinished($runId))->toBe(0);
+});
+
+test('a branch waiting for its retry keeps its slot: reconcile and recover release nothing until it finishes', function (): void {
+    capSet(2);
+    $runId = capStartFanOut(4);
+    $manager = app(DurableSwarmManager::class);
+
+    // w0 finishes and frees one slot (w2 is released); w1 fails into a scheduled retry.
+    (new AdvanceDurableBranch($runId, 'parallel_node:w0'))->handle($manager);
+    DB::table('swarm_durable_branches')->where('run_id', $runId)->where('branch_id', 'parallel_node:w1')
+        ->update(['status' => 'pending', 'next_retry_at' => now('UTC')->addHour(), 'execution_token' => null, 'leased_until' => null]);
+
+    expect(capHeldBranchIds($runId))->toBe(['parallel_node:w3']);
+
+    $manager->recover();
+    app(DurableBranchAdmission::class)->reconcile($runId);
+
+    expect(capHeldBranchIds($runId))->toBe(['parallel_node:w3'])
+        ->and(capAdmittedUnfinished($runId))->toBe(2);
+
+    DB::table('swarm_durable_branches')->where('run_id', $runId)->where('branch_id', 'parallel_node:w1')
+        ->update(['status' => 'completed', 'next_retry_at' => null]);
+    $manager->recover();
+
+    expect(capHeldBranchIds($runId))->toBe([]);
+});
+
+test('the recovery sweep keeps going past a run whose release fails, and honours the swarm filter', function (): void {
+    app()->singleton(DurableOutbox::class, CapFlakyOutbox::class);
+    app()->forgetInstance(DurableSwarmManager::class);
+    capSet(1);
+    $first = capStartFanOut(3);
+    $second = capStartFanOut(3);
+
+    foreach ([$first, $second] as $runId) {
+        DB::table('swarm_durable_branches')->where('run_id', $runId)->where('branch_id', 'parallel_node:w0')->update(['status' => 'completed']);
+    }
+
+    // Another swarm class: nothing is released.
+    app(DurableSwarmManager::class)->recover(swarmClass: FakeSequentialSwarm::class);
+    expect(capHeldRows($first))->toHaveCount(2)
+        ->and(capHeldRows($second))->toHaveCount(2);
+
+    Exceptions::fake();
+    CapFlakyOutbox::$failReleases = 1;
+    app(DurableSwarmManager::class)->recover(swarmClass: FakeWideHierarchicalSwarm::class);
+
+    // One run's release failed and was reported; the other was still released.
+    expect(count(capHeldRows($first)) + count(capHeldRows($second)))->toBe(3);
+    Exceptions::assertReported(fn (RuntimeException $e): bool => str_contains($e->getMessage(), 'failed to reconcile run'));
+});
+
+test('recover right after a release does not redispatch the released branch as crashed work', function (): void {
+    capSet(1);
+    $runId = capStartFanOut(3);
+    // The fan-out happened long ago, past the recovery grace period.
+    DB::table('swarm_durable_branches')->where('run_id', $runId)->update(['updated_at' => now('UTC')->subHour()]);
+    app(DurableOutbox::class)->drain();
+
+    (new AdvanceDurableBranch($runId, 'parallel_node:w0'))->handle(app(DurableSwarmManager::class));
+    $before = count(capPendingJobs([]));
+
+    app(DurableSwarmManager::class)->recover();
+
+    $recovered = array_filter(
+        array_slice(capPendingJobs([]), $before),
+        fn (object $job): bool => $job instanceof AdvanceDurableBranch && $job->branchId === 'parallel_node:w1',
+    );
+    expect($recovered)->toBe([]);
+});
+
+test('without a cap, branch leases and completions take no lock and open no admission transaction', function (): void {
+    capSet(null);
+    $runId = capStartFanOut(4);
+    $locking = 0;
+    DB::listen(function ($query) use (&$locking): void {
+        if (preg_match('/for update|for share|lock in share mode/i', $query->sql) === 1) {
+            $locking++;
+        }
+    });
+
+    expect(app(DurableBranchAdmission::class)->leaseNeedsHeldCheck($runId))->toBeFalse();
+
+    capDrive($runId);
+
+    expect(app(DurableSwarmManager::class)->find($runId)['status'])->toBe('completed')
+        ->and($locking)->toBe(0);
+});
+
+test('with held rows left after the cap is turned off, leases are still checked', function (): void {
+    capSet(2);
+    $runId = capStartFanOut(4);
+    capSet(null);
+
+    expect(app(DurableBranchAdmission::class)->leaseNeedsHeldCheck($runId))->toBeTrue();
+});
+
+test('swarm:recover does not warn about held rows as aging relay work', function (): void {
+    capSet(4);
+    $runId = capStartFanOut(16);
+    app(DurableOutbox::class)->drain();
+    DB::table('swarm_durable_outbox')->where('run_id', $runId)->update(['created_at' => now('UTC')->subHour()]);
+
+    Artisan::call('swarm:recover');
+
+    expect(Artisan::output())->not->toContain('aging');
 });
