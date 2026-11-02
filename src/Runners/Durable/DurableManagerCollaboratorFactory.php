@@ -73,6 +73,14 @@ class DurableManagerCollaboratorFactory
             'outbox' => $outbox,
             'container' => $this->application,
         ]);
+        $admission = $this->application->makeWith(DurableBranchAdmission::class, [
+            'config' => $config,
+            'durableRuns' => $durableRuns,
+            'outbox' => $outbox,
+            'connection' => $connection,
+            'eager' => $eager,
+            'container' => $this->application,
+        ]);
 
         $runContext = $this->application->makeWith(DurableRunContext::class, [
             'config' => $config,
@@ -131,6 +139,7 @@ class DurableManagerCollaboratorFactory
             'limits' => $limits,
             'runs' => $runContext,
             'jobs' => $jobs,
+            'admission' => $admission,
         ]);
         $children = $this->application->makeWith(DurableChildSwarmCoordinator::class, [
             'durableRuns' => $durableRuns,
@@ -184,6 +193,7 @@ class DurableManagerCollaboratorFactory
             'runs' => $runContext,
             'jobs' => $jobs,
             'children' => $children,
+            'admission' => $admission,
         ]);
         $memoryReplayCoordinator = $this->application->make(MemoryReplayCoordinator::class);
         $hierarchical = $this->application->makeWith(DurableHierarchicalCoordinator::class, [
@@ -199,6 +209,7 @@ class DurableManagerCollaboratorFactory
             'outbox' => $outbox,
             'coordinator' => $memoryReplayCoordinator,
             'eager' => $eager,
+            'admission' => $admission,
         ]);
         $staticHierarchical = $this->application->makeWith(DurableStaticHierarchicalCoordinator::class, [
             'durableRuns' => $durableRuns,
@@ -258,6 +269,7 @@ class DurableManagerCollaboratorFactory
             'hierarchical' => $hierarchical,
             'outbox' => $outbox,
             'eager' => $eager,
+            'admission' => $admission,
         ]);
         $advancer = $this->application->makeWith(DurableStepAdvancer::class, [
             'durableRuns' => $durableRuns,
@@ -290,6 +302,7 @@ class DurableManagerCollaboratorFactory
             'terminal' => $terminal,
             'coordinator' => $memoryReplayCoordinator,
             'nodeStream' => $this->application->make(DurableNodeStreamRecorder::class),
+            'admission' => $admission,
         ]);
 
         return new DurableManagerCollaborators(

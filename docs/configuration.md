@@ -369,6 +369,7 @@ for what a reader of the table sees, and when.
 | Key | Type | Default | Env Var | Description |
 |-----|------|---------|---------|-------------|
 | `swarm.durable.parallel.failure_policy` | string | `collect_failures` | `SWARM_DURABLE_PARALLEL_FAILURE_POLICY` | How parallel branch failures are handled in durable runs. `collect_failures` — all branches run to completion; failures are collected and the run fails after all branches finish. |
+| `swarm.durable.parallel.max_concurrent_branches` | int\|null | `null` | `SWARM_DURABLE_PARALLEL_MAX_CONCURRENT_BRANCHES` | Cap on how many branches of one step-durable hierarchical fan-out are admitted and unfinished at once. `null` (or an empty value) is unlimited: every branch is dispatched at the fan-out, as before. Set to `N`, the first `N` branches are dispatched and the rest are held; each time a branch finishes, one held branch is released into its slot. Must be a positive integer — anything else throws when a durable run starts. Requires the bundled database run store and outbox on one connection. Size it from your branch-queue workers and provider rate limits. See [Capping branch fan-out](durable-execution.md#capping-branch-fan-out). |
 | `swarm.durable.parallel.queue.connection` | string\|null | `null` | `SWARM_DURABLE_PARALLEL_QUEUE_CONNECTION` | Queue connection for durable parallel branch jobs. `null` falls back to `swarm.durable.queue.connection`. |
 | `swarm.durable.parallel.queue.name` | string\|null | `null` | `SWARM_DURABLE_PARALLEL_QUEUE` | Queue name for durable parallel branch jobs. |
 

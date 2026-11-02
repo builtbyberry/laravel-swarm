@@ -106,6 +106,7 @@ use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
 use BuiltByBerry\LaravelSwarm\Persistence\TieredStreamEventStore;
 use BuiltByBerry\LaravelSwarm\Runners\DispatchValidator;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableBoundaryCoordinator;
+use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableBranchAdmission;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableBranchAdvancer;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableBranchCoordinator;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableChildSwarmCoordinator;
@@ -338,6 +339,7 @@ class SwarmServiceProvider extends ServiceProvider
         $this->app->bind(DurableBoundaryCoordinator::class);
         $this->app->bind(DurableRunContext::class);
         $this->app->bind(DurableBranchCoordinator::class);
+        $this->app->bind(DurableBranchAdmission::class);
         $this->app->bind(DurableChildSwarmCoordinator::class);
         $this->app->bind(DurableLifecycleController::class);
         $this->app->bind(DurableRecoveryCoordinator::class);

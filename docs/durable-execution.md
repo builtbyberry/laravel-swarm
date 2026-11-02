@@ -408,6 +408,81 @@ See [Durable Hierarchical Approval](../examples/durable-hierarchical-approval/RE
 for a copy-paste example with a coordinator, two branch reviewers, and a join
 summarizer.
 
+### Capping branch fan-out
+
+By default every branch of a parallel node is dispatched the moment the parent
+reaches it, so a wide fan-out lands on the queue — and on your provider — as one
+burst. `swarm.durable.parallel.max_concurrent_branches`
+(`SWARM_DURABLE_PARALLEL_MAX_CONCURRENT_BRANCHES`) caps that:
+
+```env
+SWARM_DURABLE_PARALLEL_MAX_CONCURRENT_BRANCHES=4
+```
+
+It is off by default (`null`, unlimited). With it set to `N`:
+
+- the first `N` branches are dispatched at the fan-out, and the rest are written
+  as **held** outbox rows;
+- each time a branch finishes — completes, or fails for good — one held branch is
+  released into its slot, on the relay or by eager dispatch, whichever applies;
+- so at most `N` branches of the fan-out are **in flight**: admitted and not yet
+  finished. A branch waiting for its retry still holds its slot.
+
+Every branch row is still recorded at the fan-out, so the parent waits for all of
+them at the join exactly as before. The cap governs concurrency only: the
+configured failure policy (`collect_failures`, `partial_success`, `fail_run`)
+decides the outcome the same way it does uncapped. Held branches are never
+released by the clock — not at the run's deadline either — only into a free slot.
+No job can run a held branch: a stray or duplicate job for one is refused before
+its agent starts.
+
+**Sizing.** Choose `N` from what the branches consume: no more than the workers
+serving the branch queue (`swarm.durable.parallel.queue.*`), and low enough that
+`N` concurrent agent calls stay inside your provider's rate limits. The cap is per
+fan-out, not global: two capped runs can each have `N` branches in flight.
+
+**What it does not cap.** Only step-durable hierarchical fan-outs (dynamic and
+static hierarchical). Top-level `parallel` durable runs, `queue()`
+`multi_worker` coordination, and the streaming branch cap
+(`SWARM_PARALLEL_STREAMING_MAX_BRANCHES`) are unaffected.
+
+**Requirements.**
+
+- The bundled database run store and outbox, on the same database connection as
+  the durable runtime. A cap with a custom `DurableRunStore` or `DurableOutbox`
+  binding is rejected when a durable run starts. A value that is not a positive
+  integer is rejected there too.
+- `swarm:recover` scheduled. Releasing happens after a finished branch commits; if
+  a worker dies in between, `swarm:recover` releases the held branches into the
+  free slots (never past the cap — this sweep is not bounded by `--limit`).
+  Without it, a capped run can wait until another of its branches finishes.
+
+**Operating it.** `swarm:health --durable` shows a **Held branches** line (count,
+runs, oldest). Held rows are not relay work, so they never count toward the
+**Outbox relay** pending or aging warning.
+
+**Turning it on, and rolling back.**
+
+- Set the cap only after every worker and the `swarm:recover` scheduler run this
+  version. Older code does not release held branches.
+- Turning the cap off (`null`) is safe at any time on this version: the next
+  release — when a branch finishes, on resume, or from `swarm:recover` — releases
+  everything held.
+- Before rolling back to a version without the cap, drain held branches: set the
+  cap to `null`, run `swarm:recover`, and confirm `swarm:health --durable` shows
+  none held. If you already rolled back, older `swarm:recover` still picks the
+  held branches up after its grace period and runs them, without the cap. With
+  recovery not scheduled, release them by hand:
+
+  ```sql
+  UPDATE swarm_durable_outbox
+     SET available_at = CURRENT_TIMESTAMP
+   WHERE dispatch_type = 'branch'
+     AND available_at = '2038-01-01 00:00:00';
+  ```
+
+  The relay then dispatches them, uncapped.
+
 ## Operational State
 
 Durable runs persist neutral operational state in the database so applications

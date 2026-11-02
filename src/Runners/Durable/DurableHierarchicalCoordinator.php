@@ -42,6 +42,7 @@ class DurableHierarchicalCoordinator
         protected DurableOutbox $outbox,
         protected DurableEagerDispatcher $eager,
         protected MemoryReplayCoordinator $coordinator,
+        protected DurableBranchAdmission $admission,
     ) {}
 
     /**
@@ -143,14 +144,22 @@ class DurableHierarchicalCoordinator
             return;
         }
 
+        // Branches the fan-out cap holds are not redispatched: the reconcile below
+        // releases them into free slots (and the lease refuses them regardless).
+        $held = $this->admission->heldBranchIds($run['run_id']);
+
         foreach ($branches as $branch) {
-            if (! $this->branches->branchShouldBeRedispatched($branch)) {
+            if (! $this->branches->branchShouldBeRedispatched($branch) || in_array((string) $branch['branch_id'], $held, true)) {
                 continue;
             }
 
             $connection = $branch['queue_connection'] ?? $run['queue_connection'];
             $queue = $branch['queue_name'] ?? $run['queue_name'];
             $this->eager->enqueueBranch($run['run_id'], (string) $branch['branch_id'], $connection, $queue);
+        }
+
+        if ($held !== []) {
+            $this->admission->reconcileAfterCommit($run['run_id']);
         }
     }
 

@@ -939,6 +939,89 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStep
 
     public function recoverableBranches(?string $runId = null, ?string $swarmClass = null, int $limit = 50, int $graceSeconds = 300): array
     {
+        $query = $this->recoverableBranchesQuery($runId, $swarmClass, $graceSeconds)
+            ->orderBy('branches.updated_at')
+            ->limit($limit);
+
+        // Cross-run recovery sweep: the coordinator re-dispatches by id and reads
+        // only status/queue fields, never the branch payload. Decrypt non-strictly
+        // so one undecryptable row (a single run's key mismatch) cannot abort the
+        // whole sweep and starve every healthy run in the batch. The branch input is
+        // re-read strictly per-row in findBranch when the redispatched job resumes.
+        return $query->get()
+            ->map(fn (object $record): array => $this->mapBranch($record, strict: false))
+            ->all();
+    }
+
+    /**
+     * recoverableBranches() for runs that may hold branches back under the fan-out
+     * cap: a held branch is pending and unleased, so it would otherwise look
+     * recoverable. Held branches are excluded BEFORE the limit is applied, paging
+     * by (updated_at, id), so a backlog of held rows can never fill the batch and
+     * hide a crashed admitted branch or another run behind it.
+     *
+     * @param  callable(list<string>): array<string, list<string>>  $heldFor  run ids => that run's held branch ids
+     * @return array<int, array<string, mixed>>
+     */
+    public function recoverableBranchesExcluding(callable $heldFor, ?string $runId = null, ?string $swarmClass = null, int $limit = 50, int $graceSeconds = 300): array
+    {
+        if ($limit < 1) {
+            return [];
+        }
+
+        $eligible = [];
+        $after = null;
+
+        while (count($eligible) < $limit) {
+            $query = $this->recoverableBranchesQuery($runId, $swarmClass, $graceSeconds)
+                ->orderBy('branches.updated_at')
+                ->orderBy('branches.id')
+                ->limit($limit);
+
+            if ($after !== null) {
+                [$afterUpdatedAt, $afterId] = $after;
+                $query->where(function (Builder $query) use ($afterUpdatedAt, $afterId): void {
+                    $query->where('branches.updated_at', '>', $afterUpdatedAt)
+                        ->orWhere(function (Builder $query) use ($afterUpdatedAt, $afterId): void {
+                            $query->where('branches.updated_at', $afterUpdatedAt)
+                                ->where('branches.id', '>', $afterId);
+                        });
+                });
+            }
+
+            $page = $query->get();
+
+            if ($page->isEmpty()) {
+                break;
+            }
+
+            $held = $heldFor(array_values(array_unique($page->pluck('run_id')->map(static fn (mixed $id): string => (string) $id)->all())));
+
+            foreach ($page as $record) {
+                if (in_array((string) $record->branch_id, $held[(string) $record->run_id] ?? [], true)) {
+                    continue;
+                }
+
+                $eligible[] = $this->mapBranch($record, strict: false);
+
+                if (count($eligible) >= $limit) {
+                    break;
+                }
+            }
+
+            $last = $page->last();
+            $after = [$last->updated_at, $last->id];
+
+            if ($page->count() < $limit) {
+                break;
+            }
+        }
+
+        return $eligible;
+    }
+
+    protected function recoverableBranchesQuery(?string $runId, ?string $swarmClass, int $graceSeconds): Builder
+    {
         $now = Carbon::now('UTC');
         $threshold = $now->copy()->subSeconds($graceSeconds);
         $branchTable = (string) $this->config->get('swarm.tables.durable_branches', 'swarm_durable_branches');
@@ -954,8 +1037,6 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStep
                     ->orWhere('branches.leased_until', '<', $now);
             })
             ->whereNull('runs.finished_at')
-            ->orderBy('branches.updated_at')
-            ->limit($limit)
             ->select('branches.*');
 
         if ($runId !== null) {
@@ -966,14 +1047,58 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStep
             $query->where('runs.swarm_class', $swarmClass);
         }
 
-        // Cross-run recovery sweep: the coordinator re-dispatches by id and reads
-        // only status/queue fields, never the branch payload. Decrypt non-strictly
-        // so one undecryptable row (a single run's key mismatch) cannot abort the
-        // whole sweep and starve every healthy run in the batch. The branch input is
-        // re-read strictly per-row in findBranch when the redispatched job resumes.
-        return $query->get()
-            ->map(fn (object $record): array => $this->mapBranch($record, strict: false))
+        return $query;
+    }
+
+    /**
+     * Lock the run row for the fan-out cap's admission reconcile and return the
+     * fields it decides on, or null when the run is gone. Call as the FIRST
+     * statement of a top-level transaction: the lock serializes reconcilers of one
+     * run, and every later read in that transaction sees state committed before it.
+     *
+     * @return array{status: string, current_node_id: ?string}|null
+     */
+    public function lockRunForAdmission(string $runId): ?array
+    {
+        $query = $this->table()->where('run_id', $runId);
+
+        if ($this->connection->getDriverName() !== 'sqlite') {
+            $query->lockForUpdate();
+        }
+
+        $row = $query->first(['status', 'current_node_id']);
+
+        if ($row === null) {
+            return null;
+        }
+
+        return [
+            'status' => (string) $row->status,
+            'current_node_id' => is_string($row->current_node_id) ? $row->current_node_id : null,
+        ];
+    }
+
+    /**
+     * Branch id => status for one fan-out, without hydrating or decrypting payloads.
+     *
+     * @return array<string, string>
+     */
+    public function branchStatusesFor(string $runId, string $parentNodeId): array
+    {
+        return $this->branchTable()
+            ->where('run_id', $runId)
+            ->where('parent_node_id', $parentNodeId)
+            ->pluck('status', 'branch_id')
+            ->map(static fn (mixed $status): string => (string) $status)
             ->all();
+    }
+
+    /**
+     * Whether this store writes through the given connection instance.
+     */
+    public function usesConnection(Connection $connection): bool
+    {
+        return $this->connection === $connection;
     }
 
     public function dueRetryBranches(?string $runId = null, ?string $swarmClass = null, int $limit = 50): array

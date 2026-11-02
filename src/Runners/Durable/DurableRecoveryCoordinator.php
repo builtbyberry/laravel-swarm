@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
 use BuiltByBerry\LaravelSwarm\Events\SwarmWaitTimedOut;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
@@ -31,6 +32,7 @@ class DurableRecoveryCoordinator
         protected DurableJobDispatcher $jobs,
         protected DurableChildSwarmCoordinator $children,
         protected LoggerInterface $logger,
+        protected DurableBranchAdmission $admission,
     ) {}
 
     /**
@@ -52,12 +54,25 @@ class DurableRecoveryCoordinator
             $this->durableRuns->markRecoveryDispatched($run['run_id']);
         }
 
-        $branches = $this->durableRuns->recoverableBranches(
-            runId: $runId,
-            swarmClass: $swarmClass,
-            limit: $limit,
-            graceSeconds: (int) $this->config->get('swarm.durable.recovery.grace_seconds', 300),
-        );
+        $graceSeconds = (int) $this->config->get('swarm.durable.recovery.grace_seconds', 300);
+
+        // With the bundled persistence, branches the fan-out cap is holding look
+        // pending and unleased; exclude them before the limit applies. Any other
+        // persistence recovers exactly as before.
+        $branches = $this->admission->supported() && $this->durableRuns instanceof DatabaseDurableRunStore
+            ? $this->durableRuns->recoverableBranchesExcluding(
+                fn (array $runIds): array => $this->admission->heldBranchIdsFor($runIds),
+                runId: $runId,
+                swarmClass: $swarmClass,
+                limit: $limit,
+                graceSeconds: $graceSeconds,
+            )
+            : $this->durableRuns->recoverableBranches(
+                runId: $runId,
+                swarmClass: $swarmClass,
+                limit: $limit,
+                graceSeconds: $graceSeconds,
+            );
 
         foreach ($branches as $branch) {
             $dispatch = $dispatchBranch($branch['run_id'], $branch['branch_id'], $branch['queue_connection'], $branch['queue_name']);
@@ -193,7 +208,13 @@ class DurableRecoveryCoordinator
             }
         }
 
+        // Fan-out cap liveness net: release held branches into free slots of every
+        // run holding some, e.g. after a worker died between a branch's commit and
+        // its reconcile. Never releases past a run's cap.
+        $admitted = $this->admission->reconcileHeldRuns($runId, $swarmClass);
+
         return array_values(array_unique(array_merge(
+            $admitted,
             array_map(static fn (array $run): string => $run['run_id'], $runs),
             array_map(static fn (array $branch): string => $branch['run_id'], $branches),
             array_map(static fn (array $run): string => $run['run_id'], $dueRetryRuns),

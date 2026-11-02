@@ -88,6 +88,7 @@ class DurableBranchAdvancer
         protected NativeOutcomeValidator $outcomes,
         protected NativeCitationEvidence $citations,
         protected NativeInputManager $nativeInputs,
+        protected DurableBranchAdmission $admission,
     ) {}
 
     public function advanceBranch(string $runId, string $branchId, ?int $outboxEntryId = null): void
@@ -110,7 +111,7 @@ class DurableBranchAdvancer
         }
 
         $stepLeaseSeconds = $this->runs->validateStepTimeoutSeconds((int) $run['step_timeout_seconds']);
-        $token = $this->durableRuns->acquireBranchLease($runId, $branchId, $stepLeaseSeconds);
+        $token = $this->acquireAdmittedBranchLease($runId, $branchId, $stepLeaseSeconds);
 
         if ($token === null) {
             return;
@@ -339,6 +340,11 @@ class DurableBranchAdvancer
             );
 
             if ($shouldDispatch) {
+                // The branch's terminal write has been made: free its slot under the
+                // fan-out cap. Runs after the swarm connection's outermost commit, in its
+                // own transaction, and never throws — a lost reconcile is repaired by the
+                // next one or by swarm:recover.
+                $this->admission->reconcileAfterCommit($runId);
                 $run = $this->runs->requireRun($runId);
                 $this->hierarchical->dispatchWaitingBoundary($run, false);
             }
@@ -346,6 +352,35 @@ class DurableBranchAdvancer
         } finally {
             // Never let a failure in fenced persistence or parent/join dispatch restore retries.
             NativeOutcomeValidator::rethrowIfUnsupported($unsupportedOutcome);
+        }
+    }
+
+    /**
+     * Lease the branch unless the fan-out cap is holding it. The held check is a
+     * locking read made after the lease UPDATE, in the same transaction, so it sees
+     * committed state even when this runs inside a caller's older snapshot; a held
+     * branch rolls the lease back (fields and attempt count) before anything else
+     * happens — no settle, no agent. Covers stale and duplicate deliveries, including
+     * a job from an earlier loop pass that reuses the branch id.
+     */
+    protected function acquireAdmittedBranchLease(string $runId, string $branchId, int $stepLeaseSeconds): ?string
+    {
+        if (! $this->admission->supported()) {
+            return $this->durableRuns->acquireBranchLease($runId, $branchId, $stepLeaseSeconds);
+        }
+
+        try {
+            return $this->connection->transaction(function () use ($runId, $branchId, $stepLeaseSeconds): ?string {
+                $token = $this->durableRuns->acquireBranchLease($runId, $branchId, $stepLeaseSeconds);
+
+                if ($token !== null && $this->admission->isHeld($runId, $branchId)) {
+                    throw new DurableBranchHeldException;
+                }
+
+                return $token;
+            });
+        } catch (DurableBranchHeldException) {
+            return null;
         }
     }
 

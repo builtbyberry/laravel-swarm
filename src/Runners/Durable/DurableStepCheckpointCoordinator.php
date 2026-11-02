@@ -30,6 +30,7 @@ class DurableStepCheckpointCoordinator
         protected DurableOutbox $outbox,
         protected NativeInputManager $nativeInputs,
         protected DurableEagerDispatcher $eager,
+        protected DurableBranchAdmission $admission,
     ) {}
 
     public function afterStepCheckpointForTesting(?callable $hook): void
@@ -110,7 +111,13 @@ class DurableStepCheckpointCoordinator
         $stepEntries = [];
         $branchEntries = [];
 
-        $withTransaction = function () use ($run, $runId, $nextStepIndex, $hierarchicalResult, $context, $nativeSettingsAttempt, &$stepEntries, &$branchEntries): void {
+        // Fan-out cap (swarm.durable.parallel.max_concurrent_branches): validated here,
+        // before the checkpoint writes anything, so an invalid or unsupported cap
+        // rolls nothing back half-way. Branches past the cap are written HELD; the
+        // join still sees every branch row, so the parent waits for all of them.
+        $cap = $isBranchWait ? $this->admission->capForFanOut() : null;
+
+        $withTransaction = function () use ($run, $runId, $nextStepIndex, $hierarchicalResult, $context, $nativeSettingsAttempt, $cap, &$stepEntries, &$branchEntries): void {
             // Reset in case the surrounding transaction is retried.
             $stepEntries = [];
             $branchEntries = [];
@@ -121,10 +128,17 @@ class DurableStepCheckpointCoordinator
             if ($hierarchicalResult !== null && $hierarchicalResult->branches !== []) {
                 $branches = $this->durableRuns->branchesFor($runId, $hierarchicalResult->waitingParentNodeId);
 
-                foreach ($branches as $branch) {
+                foreach (array_values($branches) as $index => $branch) {
                     $branchId = (string) $branch['branch_id'];
                     $connection = $branch['queue_connection'] ?? $run['queue_connection'];
                     $queue = $branch['queue_name'] ?? $run['queue_name'];
+
+                    if ($cap !== null && $index >= $cap) {
+                        $this->admission->hold($runId, $branchId, $connection, $queue);
+
+                        continue;
+                    }
+
                     $direct = $this->eager->directFor($connection);
                     $entryId = $this->outbox->enqueueBranch($runId, $branchId, $connection, $queue, $direct);
 
