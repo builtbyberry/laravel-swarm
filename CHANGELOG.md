@@ -33,7 +33,9 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   step-durable hierarchical parallel node dispatches its first `N` branches and
   holds the rest as outbox rows; each time a branch finishes, one held branch is
   released into its slot, so at most `N` branches of the fan-out are admitted and
-  unfinished at once. Every branch is still recorded at the fan-out and the join
+  unfinished at once. The cap is per fan-out, not global: concurrent runs each get
+  their own `N`, so a limit across all runs still comes from branch-queue workers or
+  queue rate limiting. Every branch is still recorded at the fan-out and the join
   waits for all of them; failure policies are unchanged; held branches are never
   released by the clock, and no stray or duplicate job can run one. Works on the
   relay and eager-dispatch paths. `swarm:recover` also releases held branches a
