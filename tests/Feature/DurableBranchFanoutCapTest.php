@@ -1002,9 +1002,11 @@ test('recover right after a release does not redispatch the released branch as c
 test('without a cap, branch leases and completions take no lock and open no admission transaction', function (): void {
     capSet(null);
     $runId = capStartFanOut(4);
+    // Locking clauses are not emitted on SQLite, so watch for the admission
+    // statements themselves: the run-row lock read and any locking held read.
     $locking = 0;
     DB::listen(function ($query) use (&$locking): void {
-        if (preg_match('/for update|for share|lock in share mode/i', $query->sql) === 1) {
+        if (preg_match('/for update|for share|lock in share mode|select "status", "current_node_id" from "swarm_durable_runs"/i', $query->sql) === 1) {
             $locking++;
         }
     });
