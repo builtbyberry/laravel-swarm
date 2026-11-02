@@ -31,6 +31,7 @@ class DurableSignalHandler
         protected SwarmAuditDispatcher $audit,
         protected Connection $connection,
         protected DurableEagerDispatcher $eager,
+        protected DurableJoinRelease $joinRelease,
     ) {}
 
     public function signal(string $runId, string $name, mixed $payload = null, ?string $idempotencyKey = null): DurableSignalResult
@@ -56,11 +57,19 @@ class DurableSignalHandler
                     'durable_wait_outcomes' => $outcomes,
                 ]);
                 $this->contextStore->put($this->capture->activeContext($context), $this->runs->ttlSeconds());
-                $this->historyStore->syncDurableState($runId, 'pending', $this->capture->context($context), $context->metadata, $this->runs->ttlSeconds(), false);
 
+                // History follows the run: it stays waiting while another wait is open or the
+                // run is still at its branch boundary — which is what a queued-hierarchical
+                // continuation lease requires — and is written before any join is released.
                 $updated = $this->runs->requireRun($runId);
+                $this->historyStore->syncDurableState($runId, $updated['status'], $this->capture->context($context), $context->metadata, $this->runs->ttlSeconds(), false);
+
                 if ($updated['status'] === 'pending') {
                     $this->eager->enqueueStep($runId, (int) $updated['next_step_index'], $updated['queue_connection'], $updated['queue_name']);
+                } elseif ($updated['status'] === 'waiting') {
+                    // Never inside this transaction: the join release locks the run's other
+                    // open waits, and this transaction already holds the run row.
+                    $this->joinRelease->releaseAfterCommit($runId);
                 }
 
                 return true;

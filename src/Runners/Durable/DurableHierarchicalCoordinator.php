@@ -5,15 +5,14 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
-use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
-use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
 use BuiltByBerry\LaravelSwarm\Enums\DurableParallelFailurePolicy;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryReplayCoordinator;
 use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
 use BuiltByBerry\LaravelSwarm\Memory\ReplaySwarmMemory;
+use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Runners\DurableHierarchicalStepResult;
 use BuiltByBerry\LaravelSwarm\Runners\HierarchicalRunner;
@@ -39,10 +38,10 @@ class DurableHierarchicalCoordinator
         protected DurableRunContext $runs,
         protected DurableBranchCoordinator $branches,
         protected HierarchicalRunner $hierarchical,
-        protected DurableOutbox $outbox,
         protected DurableEagerDispatcher $eager,
         protected MemoryReplayCoordinator $coordinator,
         protected DurableBranchAdmission $admission,
+        protected DurableJoinRelease $joinRelease,
     ) {}
 
     /**
@@ -121,21 +120,7 @@ class DurableHierarchicalCoordinator
         $branches = $this->durableRuns->branchesFor($run['run_id'], $parentNodeId);
 
         if ($this->branches->branchesAreTerminal($branches)) {
-            $this->connection->transaction(function () use ($run): void {
-                if (! $this->durableRuns->releaseWaitingRunForJoin($run['run_id'], (int) $run['next_step_index'])) {
-                    return;
-                }
-
-                $updated = $this->runs->requireRun($run['run_id']);
-
-                if (($run['coordination_profile'] ?? CoordinationProfile::StepDurable->value) === CoordinationProfile::QueueHierarchicalParallel->value) {
-                    // Queued-hierarchical resume stays relay-driven; only its branches are eager.
-                    $this->outbox->enqueueQueuedResume($run['run_id'], $updated['queue_connection'], $updated['queue_name']);
-                } else {
-                    $nextStepIndex = (int) $updated['next_step_index'];
-                    $this->eager->enqueueStep($run['run_id'], $nextStepIndex, $updated['queue_connection'], $updated['queue_name']);
-                }
-            });
+            $this->joinRelease->releaseIfReady($run);
 
             return;
         }
@@ -180,7 +165,13 @@ class DurableHierarchicalCoordinator
             return;
         }
 
-        if (! $this->durableRuns->releaseWaitingRunForJoin($run['run_id'], (int) $run['next_step_index'])) {
+        // fail_run fails the parent at once, even while it has an open wait: failing is
+        // terminal, not a move past the wait. Only the successful join waits for waits.
+        $released = $this->durableRuns instanceof DatabaseDurableRunStore
+            ? $this->durableRuns->releaseWaitingRunForFailure($run['run_id'], (int) $run['next_step_index'])
+            : $this->durableRuns->releaseWaitingRunForJoin($run['run_id'], (int) $run['next_step_index']);
+
+        if (! $released) {
             return;
         }
 

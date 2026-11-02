@@ -507,6 +507,43 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStep
 
     public function releaseWaitingRunForJoin(string $runId, int $nextStepIndex): bool
     {
+        return $this->connection->transaction(function () use ($runId, $nextStepIndex): bool {
+            // An open wait (a signal wait, or a child swarm's child:<id> wait) holds the run
+            // at its join: releasing it would run the join past an unsignalled wait. The wait
+            // rows are read before the run row is written — the order every wait release
+            // takes (wait UPDATE, then syncRunWaitSummary on the run) and the order resume()
+            // takes — with a shared lock, so a release of the same wait in flight is waited
+            // for and then read as closed. Every open row is read and locked, not just the
+            // first.
+            $openWaitIds = $this->waitTable()
+                ->where('run_id', $runId)
+                ->where('status', 'waiting')
+                ->orderBy('id')
+                ->sharedLock()
+                ->pluck('id')
+                ->all();
+
+            if ($openWaitIds !== []) {
+                return false;
+            }
+
+            return $this->releaseWaitingRun($runId, $nextStepIndex);
+        });
+    }
+
+    /**
+     * Move a run waiting at its branch boundary to `pending` so its failure can be
+     * recorded under a fresh lease, whatever waits are still open: a `fail_run` branch
+     * failure fails the parent at once. Concrete-only — the open-wait check of
+     * {@see releaseWaitingRunForJoin()} guards the successful join, not this.
+     */
+    public function releaseWaitingRunForFailure(string $runId, int $nextStepIndex): bool
+    {
+        return $this->releaseWaitingRun($runId, $nextStepIndex);
+    }
+
+    private function releaseWaitingRun(string $runId, int $nextStepIndex): bool
+    {
         $timestamp = Carbon::now('UTC');
 
         return $this->table()
@@ -1416,12 +1453,22 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStep
     public function recoverableWaitingJoins(?string $runId = null, ?string $swarmClass = null, int $limit = 50, int $graceSeconds = 300): array
     {
         $threshold = Carbon::now('UTC')->subSeconds($graceSeconds);
+        $durableTable = (string) $this->config->get('swarm.tables.durable', 'swarm_durable_runs');
+        $waitTable = (string) $this->config->get('swarm.tables.durable_waits', 'swarm_durable_waits');
 
         $query = $this->table()
             ->where('status', 'waiting')
             ->whereNull('finished_at')
             ->whereNotNull('current_node_id')
             ->where('updated_at', '<=', $threshold)
+            // A run with an open wait is held at its join until the wait closes, so it is
+            // not a candidate — excluded here, before the limit, so blocked runs neither
+            // get reselected every sweep nor crowd eligible runs out of it.
+            ->whereNotExists(fn (Builder $waits) => $waits
+                ->select($this->connection->raw('1'))
+                ->from($waitTable)
+                ->whereColumn($waitTable.'.run_id', $durableTable.'.run_id')
+                ->where($waitTable.'.status', 'waiting'))
             ->orderBy('updated_at')
             ->limit($limit);
 
@@ -2505,12 +2552,24 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStep
             ->first();
 
         if ($latestOpenWait === null) {
+            // A run at a branch boundary stays waiting when its last wait closes: it is
+            // still waiting on its branches, and its join is released through
+            // releaseWaitingRunForJoin() — by the last branch to finish, or by the closer
+            // once it has committed — never by the wait closing on its own. This is the
+            // row shape waitForBranches() leaves: it never writes the wait columns.
+            $run = $this->table()->where('run_id', $runId)->first(['current_node_id']);
+            $nodeId = is_string($run->current_node_id ?? null) ? $run->current_node_id : null;
+            $atBranchBoundary = $nodeId !== null && $this->branchTable()
+                ->where('run_id', $runId)
+                ->where('parent_node_id', $nodeId)
+                ->exists();
+
             $this->table()
                 ->where('run_id', $runId)
                 ->where('status', 'waiting')
                 ->whereNull('finished_at')
                 ->update([
-                    'status' => 'pending',
+                    'status' => $atBranchBoundary ? 'waiting' : 'pending',
                     'wait_reason' => null,
                     'waiting_since' => null,
                     'wait_timeout_at' => null,

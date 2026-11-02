@@ -248,6 +248,14 @@ class DurableSwarmManager
             $limit,
             fn (string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null) => $this->jobs->dispatchStep($runId, $stepIndex, $connection, $queue),
             fn (string $runId, string $branchId, ?string $connection = null, ?string $queue = null) => $this->jobs->dispatchBranch($runId, $branchId, $connection, $queue),
+            // A fail_run branch failure whose worker never failed the parent: fail it the
+            // same way that worker would have.
+            fn (array $run, RunContext $context, int $stepLeaseSeconds) => $this->hierarchicalCoordinator->failWaitingParentFromBranches(
+                $run,
+                $context,
+                $stepLeaseSeconds,
+                fn (array $freshRun, string $token, RunContext $context, int $stepLeaseSeconds, ?string $parentNodeId) => $this->advancer->failCurrentRunFromBranchFailures($freshRun, $token, $context, $stepLeaseSeconds, $parentNodeId),
+            ),
         );
     }
 

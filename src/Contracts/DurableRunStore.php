@@ -32,6 +32,14 @@ interface DurableRunStore
 
     public function waitForBranches(string $runId, BranchWaitPayload $payload): void;
 
+    /**
+     * Move a run waiting at its branch boundary to `pending` so its join can run.
+     * Refuse (return false) while the run has an open wait — a signal wait, or a child
+     * swarm's `child:<id>` wait: the join must not run past it. Decide from a locked read
+     * of the run's open waits taken before the run row is written (the order the wait
+     * releases use). Also returns false when the run is not waiting at `$nextStepIndex`.
+     * See docs/durable-waits-and-signals.md for how runs at a join are released.
+     */
     public function releaseWaitingRunForJoin(string $runId, int $nextStepIndex): bool;
 
     /**

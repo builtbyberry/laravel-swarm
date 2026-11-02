@@ -11,9 +11,11 @@ use BuiltByBerry\LaravelSwarm\Events\SwarmWaitTimedOut;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Events\Dispatcher;
+use Illuminate\Database\Connection;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -33,12 +35,19 @@ class DurableRecoveryCoordinator
         protected DurableChildSwarmCoordinator $children,
         protected LoggerInterface $logger,
         protected DurableBranchAdmission $admission,
+        protected Connection $connection,
+        protected DurableJoinRelease $joinRelease,
     ) {}
 
     /**
+     * $failParentFromBranches fails a run waiting at its join whose `fail_run` branch
+     * failure was never settled (its branch worker stopped before failing the parent):
+     * such a run is failed, never released to its join.
+     *
+     * @param  (callable(array<string, mixed>, RunContext, int): void)|null  $failParentFromBranches
      * @return array<int, string>
      */
-    public function recover(?string $runId, ?string $swarmClass, int $limit, callable $dispatchStep, callable $dispatchBranch): array
+    public function recover(?string $runId, ?string $swarmClass, int $limit, callable $dispatchStep, callable $dispatchBranch, ?callable $failParentFromBranches = null): array
     {
         $runs = $this->durableRuns->recoverable(
             runId: $runId,
@@ -112,6 +121,17 @@ class DurableRecoveryCoordinator
         );
 
         foreach ($waitingJoins as $run) {
+            if ($failParentFromBranches !== null && $this->joinRelease->owesFailure($run)) {
+                $failParentFromBranches(
+                    $run,
+                    $this->runs->loadContext($run['run_id']),
+                    $this->runs->validateStepTimeoutSeconds((int) $run['step_timeout_seconds']),
+                );
+                $this->durableRuns->markRecoveryDispatched($run['run_id']);
+
+                continue;
+            }
+
             if ($this->durableRuns->releaseWaitingRunForJoin($run['run_id'], (int) $run['next_step_index'])) {
                 if (($run['coordination_profile'] ?? CoordinationProfile::StepDurable->value) === CoordinationProfile::QueueHierarchicalParallel->value) {
                     $this->jobs->dispatchQueuedHierarchicalResume($run);
@@ -145,7 +165,14 @@ class DurableRecoveryCoordinator
         foreach ($timedOutWaits as $wait) {
             $waitName = (string) $wait['wait_name'];
 
-            if ($this->durableRuns->releaseTimedOutWait($wait['run_id'], $waitName)) {
+            // Closing the wait and publishing its outcome commit together: a join released
+            // in between could start a continuation whose history lease this run's history
+            // write would then clobber.
+            $updated = $this->connection->transaction(function () use ($wait, $waitName): ?array {
+                if (! $this->durableRuns->releaseTimedOutWait($wait['run_id'], $waitName)) {
+                    return null;
+                }
+
                 $updated = $this->runs->requireRun($wait['run_id']);
                 $context = $this->runs->loadContext($wait['run_id']);
                 $outcomes = is_array($context->metadata['durable_wait_outcomes'] ?? null) ? $context->metadata['durable_wait_outcomes'] : [];
@@ -154,19 +181,29 @@ class DurableRecoveryCoordinator
                 $this->contextStore->put($this->capture->activeContext($context), $this->runs->ttlSeconds());
                 $this->historyStore->syncDurableState($wait['run_id'], $updated['status'], $this->capture->context($context), $context->metadata, $this->runs->ttlSeconds(), false);
 
-                $this->events->dispatch(new SwarmWaitTimedOut(
-                    runId: $wait['run_id'],
-                    swarmClass: $wait['swarm_class'],
-                    topology: $wait['topology'],
-                    waitName: $waitName,
-                    executionMode: $this->runs->publicLifecycleExecutionMode($wait),
-                ));
+                return $updated;
+            });
 
-                if ($updated['status'] === 'pending') {
-                    $dispatch = $dispatchStep($wait['run_id'], (int) $updated['next_step_index'], $updated['queue_connection'], $updated['queue_name']);
-                    unset($dispatch);
-                    $this->durableRuns->markRecoveryDispatched($wait['run_id']);
-                }
+            if ($updated === null) {
+                continue;
+            }
+
+            $this->events->dispatch(new SwarmWaitTimedOut(
+                runId: $wait['run_id'],
+                swarmClass: $wait['swarm_class'],
+                topology: $wait['topology'],
+                waitName: $waitName,
+                executionMode: $this->runs->publicLifecycleExecutionMode($wait),
+            ));
+
+            if ($updated['status'] === 'pending') {
+                $dispatch = $dispatchStep($wait['run_id'], (int) $updated['next_step_index'], $updated['queue_connection'], $updated['queue_name']);
+                unset($dispatch);
+                $this->durableRuns->markRecoveryDispatched($wait['run_id']);
+            } elseif ($updated['status'] === 'waiting') {
+                // Still at its branch boundary (or another wait is open): release the join
+                // if it is ready, now that the closure has committed.
+                $this->joinRelease->releaseAfterCommit($wait['run_id']);
             }
         }
 
