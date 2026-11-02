@@ -460,11 +460,12 @@ class DatabaseDurableOutbox implements DurableOutbox
     }
 
     /**
-     * Run ids with at least one held row, oldest held row first.
+     * Run ids with at least one held row, in run id order, for the recovery sweep;
+     * optionally only runs of one swarm class (joined in SQL).
      *
      * @return list<string>
      */
-    public function runsWithHeldBranches(?string $runId = null, int $limit = 500, ?string $afterRunId = null): array
+    public function runsWithHeldBranches(?string $runId = null, int $limit = 500, ?string $afterRunId = null, ?string $swarmClass = null): array
     {
         $query = $this->heldQuery()->select('run_id')->groupBy('run_id')->orderBy('run_id')->limit($limit);
 
@@ -476,25 +477,35 @@ class DatabaseDurableOutbox implements DurableOutbox
             $query->where('run_id', '>', $afterRunId);
         }
 
+        if ($swarmClass !== null) {
+            $query->whereIn('run_id', fn (Builder $runs) => $runs
+                ->from((string) $this->config->get('swarm.tables.durable', 'swarm_durable_runs'))
+                ->select('run_id')
+                ->where('swarm_class', $swarmClass));
+        }
+
         return array_values($query->pluck('run_id')->map(static fn (mixed $id): string => (string) $id)->all());
     }
 
     /**
-     * Operator summary of held rows for swarm:health.
+     * Held branch ids for many runs in one query, as run id => branch ids.
      *
-     * @return array{held: int, runs: int, oldest: ?string}
+     * @param  list<string>  $runIds
+     * @return array<string, list<string>>
      */
-    public function heldSummary(): array
+    public function heldBranchesForRuns(array $runIds): array
     {
-        $row = $this->heldQuery()
-            ->selectRaw('count(*) as held, count(distinct run_id) as runs, min(created_at) as oldest')
-            ->first();
+        $held = [];
 
-        return [
-            'held' => (int) ($row->held ?? 0),
-            'runs' => (int) ($row->runs ?? 0),
-            'oldest' => isset($row->oldest) ? (string) $row->oldest : null,
-        ];
+        foreach ($this->heldQuery()->whereIn('run_id', $runIds)->orderBy('id')->get(['run_id', 'payload']) as $row) {
+            $branchId = $this->payloadBranchId($row);
+
+            if ($branchId !== null) {
+                $held[(string) $row->run_id][] = $branchId;
+            }
+        }
+
+        return $held;
     }
 
     /**

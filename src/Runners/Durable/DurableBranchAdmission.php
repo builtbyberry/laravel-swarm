@@ -47,6 +47,9 @@ class DurableBranchAdmission
 {
     use SafeReporting;
 
+    /** Runs per page of the recovery sweep over runs that hold branches. */
+    protected const SWEEP_PAGE = 500;
+
     public function __construct(
         protected ConfigRepository $config,
         protected DurableRunStore $durableRuns,
@@ -124,9 +127,44 @@ class DurableBranchAdmission
     }
 
     /**
-     * Whether the branch is held — a current read of committed state, even inside a
-     * transaction with an older snapshot. Call after the branch lease UPDATE, inside
-     * the same transaction, and roll back when it returns true.
+     * Whether a branch lease must be checked against held rows. False only when no
+     * cap is configured, the lease is not nested in a caller's transaction, and the
+     * run holds no branches — the default install, which then pays one indexed read
+     * and takes no lock. Held rows only ever come from a committed capped fan-out, so
+     * a plain read at the top level sees every one that could matter.
+     */
+    public function leaseNeedsHeldCheck(string $runId): bool
+    {
+        if (! $this->supported()) {
+            return false;
+        }
+
+        if ($this->connection->transactionLevel() > 0) {
+            return true;
+        }
+
+        try {
+            if ($this->cap() !== null) {
+                return true;
+            }
+        } catch (Throwable) {
+            // An invalid cap appeared mid-run: keep refusing held branches.
+            return true;
+        }
+
+        return $this->databaseOutbox()->heldBranches($runId) !== [];
+    }
+
+    /**
+     * Whether the branch is held. Call after the branch lease UPDATE, inside the same
+     * transaction, and roll back when it returns true.
+     *
+     * When that transaction is the outermost one, an ordinary read is already current:
+     * the lease UPDATE was its first statement, so MySQL REPEATABLE READ takes the
+     * snapshot after it and PostgreSQL READ COMMITTED reads per statement. Only when
+     * the lease is nested in a caller's transaction — whose snapshot may predate the
+     * hold — is a locking (current) read needed, so the shared lock is confined to
+     * that rare case.
      */
     public function isHeld(string $runId, string $branchId): bool
     {
@@ -134,7 +172,9 @@ class DurableBranchAdmission
             return false;
         }
 
-        return in_array($branchId, $this->databaseOutbox()->heldBranches($runId, lock: true), true);
+        $lock = $this->connection->transactionLevel() > 1;
+
+        return in_array($branchId, $this->databaseOutbox()->heldBranches($runId, lock: $lock), true);
     }
 
     /**
@@ -152,24 +192,19 @@ class DurableBranchAdmission
     }
 
     /**
-     * Run ids => held branch ids, for recovery's held-branch exclusion.
+     * Run ids => held branch ids, for recovery's held-branch exclusion: one query
+     * for the whole set.
      *
      * @param  list<string>  $runIds
      * @return array<string, list<string>>
      */
     public function heldBranchIdsFor(array $runIds): array
     {
-        $held = [];
-
-        foreach ($runIds as $runId) {
-            $ids = $this->heldBranchIds($runId);
-
-            if ($ids !== []) {
-                $held[$runId] = $ids;
-            }
+        if (! $this->supported() || $runIds === []) {
+            return [];
         }
 
-        return $held;
+        return $this->databaseOutbox()->heldBranchesForRuns($runIds);
     }
 
     /**
@@ -238,7 +273,7 @@ class DurableBranchAdmission
 
         do {
             try {
-                $page = $outbox->runsWithHeldBranches($runId, 500, $after);
+                $page = $outbox->runsWithHeldBranches($runId, self::SWEEP_PAGE, $after, $swarmClass);
             } catch (Throwable $e) {
                 // The sweep is recovery's liveness net for the cap; it must never stop
                 // the rest of swarm:recover (e.g. a misconfigured outbox table).
@@ -248,17 +283,13 @@ class DurableBranchAdmission
             }
 
             foreach ($page as $heldRunId) {
-                if ($swarmClass !== null && ($this->durableRuns->find($heldRunId)['swarm_class'] ?? null) !== $swarmClass) {
-                    continue;
-                }
-
                 if ($this->reconcileReporting($heldRunId) > 0) {
                     $released[] = $heldRunId;
                 }
             }
 
             $after = $page === [] ? null : $page[array_key_last($page)];
-        } while (count($page) === 500);
+        } while (count($page) === self::SWEEP_PAGE);
 
         return $released;
     }
@@ -280,6 +311,13 @@ class DurableBranchAdmission
 
         $store = $this->databaseRunStore();
         $outbox = $this->databaseOutbox();
+
+        // Cheap exit before any lock: a run with no held rows has nothing to release,
+        // which is every run when the cap is unset. Held rows are only written by a
+        // committed fan-out, so a plain read cannot miss one that matters here.
+        if ($outbox->heldBranches($runId) === []) {
+            return 0;
+        }
 
         $released = $this->connection->transaction(function () use ($runId, $store, $outbox): array {
             $run = $store->lockRunForAdmission($runId);
@@ -336,8 +374,16 @@ class DurableBranchAdmission
                 return [];
             }
 
+            $toRelease = array_slice(array_keys($waiting), 0, $free);
+
+            // Restart the released branches' recovery grace now: otherwise they still
+            // carry the fan-out's updated_at and swarm:recover would treat them as
+            // crashed and dispatch duplicates before they are leased. Branch rows are
+            // written before outbox rows, the order a lease takes them in.
+            $store->touchBranches($runId, array_values(array_intersect_key($waiting, array_flip($toRelease))));
+
             $released = $outbox->releaseHeldBranches(
-                array_slice(array_keys($waiting), 0, $free),
+                $toRelease,
                 fn (?string $connection): bool => $this->eager->directFor($connection),
             );
 

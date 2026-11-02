@@ -59,17 +59,20 @@ function capConcurrencyPlan(int $width): void
 /**
  * A worker that drains the relay and runs whatever it claimed until the run ends.
  */
-function capConcurrencyWorker(string $label, string $runId, string $barrierPath): Closure
+function capConcurrencyWorker(string $label, string $runId, string $barrierPath, int $cap, int $workers): Closure
 {
-    return static function () use ($label, $runId, $barrierPath): array {
-        FanoutCapConcurrency::boot(4);
+    return static function () use ($label, $runId, $barrierPath, $cap, $workers): array {
+        FanoutCapConcurrency::boot($cap);
         Queue::fake();
 
-        FakeWriter::fake(static function (string $prompt) use ($label): string {
+        FakeWriter::fake(static function (string $prompt) use ($label, $runId): string {
             preg_match('/cap-branch-(\d+)-end/', $prompt, $m);
-            $id = DB::table('cap_race_executions')->insertGetId(['worker' => $label, 'branch' => 'w'.($m[1] ?? '?'), 'running' => 0]);
+            $id = DB::table('cap_race_executions')->insertGetId(['worker' => $label, 'branch' => 'w'.($m[1] ?? '?'), 'running' => 0, 'admitted' => 0]);
             $running = DB::table('cap_race_executions')->whereNull('finished_at')->count();
-            DB::table('cap_race_executions')->where('id', $id)->update(['running' => $running]);
+            DB::table('cap_race_executions')->where('id', $id)->update([
+                'running' => $running,
+                'admitted' => FanoutCapConcurrency::admittedUnfinished($runId),
+            ]);
             // Longer than a second: see DurableEagerDispatchConcurrencyTest (MYSQL-LEASE).
             usleep(1_100_000);
             DB::table('cap_race_executions')->where('id', $id)->update(['finished_at' => now('UTC')]);
@@ -77,7 +80,7 @@ function capConcurrencyWorker(string $label, string $runId, string $barrierPath)
             return 'out';
         });
 
-        FanoutCapConcurrency::barrier($barrierPath, $label, 4);
+        FanoutCapConcurrency::barrier($barrierPath, $label, $workers);
 
         $manager = app(DurableSwarmManager::class);
         $outbox = app(DurableOutbox::class);
@@ -237,14 +240,18 @@ function capSnapshotWorker(string $runId, string $barrier, string $go): Closure
                 usleep(1_000);
             }
 
-            $token = app(DurableRunStore::class)->acquireBranchLease($runId, 'parallel_node:w9', 60);
+            // The advancer's lease transaction, nested in this older-snapshot one.
+            return DB::transaction(function () use ($runId, $before, $outbox): array {
+                $token = app(DurableRunStore::class)->acquireBranchLease($runId, 'parallel_node:w9', 60);
 
-            return [
-                'before' => $before,
-                'leased' => $token !== null,
-                'plain_read' => array_values($outbox->heldBranches($runId)),
-                'held' => app(DurableBranchAdmission::class)->isHeld($runId, 'parallel_node:w9'),
-            ];
+                return [
+                    'before' => $before,
+                    'leased' => $token !== null,
+                    'plain_read' => array_values($outbox->heldBranches($runId)),
+                    'needs_check' => app(DurableBranchAdmission::class)->leaseNeedsHeldCheck($runId),
+                    'held' => app(DurableBranchAdmission::class)->isHeld($runId, 'parallel_node:w9'),
+                ];
+            });
         });
     };
 }
@@ -315,6 +322,7 @@ beforeEach(function (): void {
         $table->string('worker');
         $table->string('branch');
         $table->unsignedInteger('running');
+        $table->unsignedInteger('admitted');
         $table->timestamp('finished_at')->nullable();
     });
 });
@@ -325,21 +333,21 @@ afterEach(function (): void {
     }
 });
 
-test('four workers running a 16-branch fan-out capped at 4 never execute more than 4 branch agents at once', function (): void {
+test('six workers running a 16-branch fan-out capped at 3 never execute or admit more than 3 branches at once', function (): void {
     FakeWriter::fake(['unused']);
+    config()->set('swarm.durable.parallel.max_concurrent_branches', 3);
     $runId = capConcurrencyFanOut(16);
 
-    expect(capConcurrencyAdmitted($runId))->toBe(4);
+    expect(capConcurrencyAdmitted($runId))->toBe(3);
 
     $barrier = capConcurrencyTempDir('cap-race');
 
     try {
-        $results = $this->app->make(ConcurrencyManager::class)->driver('process')->run([
-            capConcurrencyWorker('a', $runId, $barrier),
-            capConcurrencyWorker('b', $runId, $barrier),
-            capConcurrencyWorker('c', $runId, $barrier),
-            capConcurrencyWorker('d', $runId, $barrier),
-        ]);
+        // More workers than the cap: only the cap can keep concurrency at 3.
+        $results = $this->app->make(ConcurrencyManager::class)->driver('process')->run(array_map(
+            fn (string $label): Closure => capConcurrencyWorker($label, $runId, $barrier, 3, 6),
+            ['a', 'b', 'c', 'd', 'e', 'f'],
+        ));
     } finally {
         capConcurrencyCleanup($barrier);
     }
@@ -348,7 +356,8 @@ test('four workers running a 16-branch fan-out capped at 4 never execute more th
 
     expect($executions)->toHaveCount(16)
         ->and($executions->pluck('branch')->unique())->toHaveCount(16)
-        ->and($executions->max('running'))->toBeLessThanOrEqual(4)
+        ->and($executions->max('running'))->toBeLessThanOrEqual(3)
+        ->and($executions->max('admitted'))->toBeLessThanOrEqual(3)
         ->and($executions->max('running'))->toBeGreaterThan(1)
         ->and(DB::table('swarm_durable_branches')->where('run_id', $runId)->where('status', 'completed')->count())->toBe(16)
         ->and(array_sum(array_column($results, 'handled')))->toBeGreaterThanOrEqual(16);
@@ -401,6 +410,7 @@ test('a lease inside a transaction whose snapshot predates the hold still sees t
     }
 
     expect($results[0]['before'])->toBe([])
+        ->and($results[0]['needs_check'])->toBeTrue()
         ->and($results[0]['held'])->toBeTrue();
 
     if (DB::connection()->getDriverName() === 'mysql') {

@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Tests\Fixtures\Durable;
 
+use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableOutbox;
 use BuiltByBerry\LaravelSwarm\SwarmServiceProvider;
 use Illuminate\Bus\BusServiceProvider;
+use Illuminate\Support\Facades\DB;
 use Laravel\Ai\AiServiceProvider;
 use RuntimeException;
 
@@ -33,6 +35,25 @@ final class FanoutCapConcurrency
                 app()->register($provider);
             }
         }
+    }
+
+    /**
+     * Admitted and unfinished branches of the run's fan-out — what the cap bounds.
+     */
+    public static function admittedUnfinished(string $runId): int
+    {
+        $held = [];
+
+        foreach (DatabaseDurableOutbox::constrainHeld(DB::table('swarm_durable_outbox'))->where('run_id', $runId)->get(['payload']) as $row) {
+            $held[] = json_decode((string) $row->payload, true)['branch_id'] ?? null;
+        }
+
+        return DB::table('swarm_durable_branches')
+            ->where('run_id', $runId)
+            ->whereNotIn('status', ['completed', 'failed', 'cancelled'])
+            ->pluck('branch_id')
+            ->reject(fn (string $id): bool => in_array($id, $held, true))
+            ->count();
     }
 
     public static function barrier(string $path, string $label, int $parties): void

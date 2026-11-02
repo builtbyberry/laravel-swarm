@@ -356,16 +356,16 @@ class DurableBranchAdvancer
     }
 
     /**
-     * Lease the branch unless the fan-out cap is holding it. The held check is a
-     * locking read made after the lease UPDATE, in the same transaction, so it sees
-     * committed state even when this runs inside a caller's older snapshot; a held
+     * Lease the branch unless the fan-out cap is holding it. The held check is made
+     * after the lease UPDATE, in the same transaction, and reads committed state even
+     * when this runs inside a caller's older snapshot (see isHeld()); a held
      * branch rolls the lease back (fields and attempt count) before anything else
      * happens — no settle, no agent. Covers stale and duplicate deliveries, including
      * a job from an earlier loop pass that reuses the branch id.
      */
     protected function acquireAdmittedBranchLease(string $runId, string $branchId, int $stepLeaseSeconds): ?string
     {
-        if (! $this->admission->supported()) {
+        if (! $this->admission->leaseNeedsHeldCheck($runId)) {
             return $this->durableRuns->acquireBranchLease($runId, $branchId, $stepLeaseSeconds);
         }
 

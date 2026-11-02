@@ -971,6 +971,8 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStep
 
         $eligible = [];
         $after = null;
+        /** @var array<string, list<string>> $held run id => held branch ids, read once per run */
+        $held = [];
 
         while (count($eligible) < $limit) {
             $query = $this->recoverableBranchesQuery($runId, $swarmClass, $graceSeconds)
@@ -995,7 +997,15 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStep
                 break;
             }
 
-            $held = $heldFor(array_values(array_unique($page->pluck('run_id')->map(static fn (mixed $id): string => (string) $id)->all())));
+            $unseen = array_values(array_diff(
+                array_unique($page->pluck('run_id')->map(static fn (mixed $id): string => (string) $id)->all()),
+                array_keys($held),
+            ));
+
+            if ($unseen !== []) {
+                $held += array_fill_keys($unseen, []);
+                $held = array_replace($held, $heldFor($unseen));
+            }
 
             foreach ($page as $record) {
                 if (in_array((string) $record->branch_id, $held[(string) $record->run_id] ?? [], true)) {
@@ -1091,6 +1101,24 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStep
             ->pluck('status', 'branch_id')
             ->map(static fn (mixed $status): string => (string) $status)
             ->all();
+    }
+
+    /**
+     * Restart the recovery grace period of branches the fan-out cap just released,
+     * so swarm:recover does not mistake them for crashed work before they are leased.
+     *
+     * @param  list<string>  $branchIds
+     */
+    public function touchBranches(string $runId, array $branchIds): void
+    {
+        if ($branchIds === []) {
+            return;
+        }
+
+        $this->branchTable()
+            ->where('run_id', $runId)
+            ->whereIn('branch_id', $branchIds)
+            ->update(['updated_at' => Carbon::now('UTC')]);
     }
 
     /**
