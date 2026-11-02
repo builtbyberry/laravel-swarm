@@ -483,14 +483,21 @@ runs, oldest). Held rows are not relay work, so they never count toward the
 held branches it released together with the runs it redispatched, in its output and
 in the `command.recover` audit event's `recovered_run_ids`.
 
-**If the value goes bad mid-run.** A cap that becomes invalid (say, `0`) or
-unsupported (a custom store or outbox binding) after runs have started does not fail
-those runs. Instead, every release fails and is reported as *Durable branch admission
-failed to reconcile run […]*, so held branches stay held, and the next fan-out's step
-job fails with the configuration error and is retried by the queue and
-`swarm:recover`. Nothing is lost: correct the value or unset it, then run
-`swarm:recover`, which releases the held branches and lets the stalled fan-outs
-proceed.
+**If the configuration changes under running runs.** Two cases behave differently:
+
+- *The value becomes invalid* (say, `0`). Capped runs are not failed. Every release
+  fails and is reported as *Durable branch admission failed to reconcile run […]*,
+  so held branches stay held, and the next fan-out's step job fails with the
+  configuration error and is retried by the queue and `swarm:recover`. Nothing is
+  lost: correct the value or unset it, then run `swarm:recover`, which releases the
+  held branches and lets the stalled fan-outs proceed.
+- *The persistence becomes unsupported* (a custom `DurableRunStore` or
+  `DurableOutbox` binding, or a different connection). Admission switches off
+  without an error: held branches are no longer released, refused or excluded from
+  recovery, so after its grace period `swarm:recover` redispatches them like any
+  other pending branch — without the cap — and new capped fan-outs fail. Unsetting
+  the cap does not undo this; restore the bundled bindings on one connection. Their
+  held outbox rows stay behind in the bundled table until the run is pruned.
 
 **Turning it on, and rolling back.**
 

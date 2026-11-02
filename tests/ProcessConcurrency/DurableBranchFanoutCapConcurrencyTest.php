@@ -25,9 +25,9 @@ use Illuminate\Support\Facades\Schema;
  * Process-concurrency coverage for swarm.durable.parallel.max_concurrent_branches:
  * real worker processes against a shared MySQL/Postgres database.
  *
- *   - Four workers drain and run a 16-branch fan-out capped at 4. Every agent start
- *     records how many branch agents are executing at that instant (a table both
- *     processes write to); it never exceeds 4, and all 16 complete.
+ *   - Six workers drain and run a 16-branch fan-out capped at 3. Every agent start
+ *     records how many branch agents are executing, and how many branches are
+ *     admitted and unfinished, at that instant; neither exceeds 3, and all 16 complete.
  *   - Two reconcilers race on one run: together they release exactly the free slots.
  *   - A lease taken inside a transaction whose snapshot predates the hold still sees
  *     the hold (the held lookup is a locking, current read).
