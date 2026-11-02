@@ -238,7 +238,9 @@ Each command also acquires finite atomic leases from
 `swarm.commands.overlap.store` (`SWARM_COMMAND_OVERLAP_STORE`; `null` uses the
 default cache store). `swarm.commands.overlap.lease_seconds` defaults to 3600.
 `swarm:recover` holds its lease for the whole sweep, so set the duration longer
-than the worst-case recovery sweep; `swarm:relay` holds a lane's lease for one
+than the worst-case recovery sweep — with
+`swarm.durable.parallel.max_concurrent_branches` set, that sweep also reconciles
+every run holding branches, outside `--limit`, so count those runs too; `swarm:relay` holds a lane's lease for one
 drain batch (below), so it must also exceed the worst-case single batch. Work that
 outlives its lease is no longer protected from overlap, while a hard-crashed
 process becomes startable when the lease expires. Array, null, failover, and non-lock-capable

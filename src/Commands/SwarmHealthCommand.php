@@ -705,7 +705,8 @@ class SwarmHealthCommand extends Command
                 'status' => 'ok',
                 'details' => $held === 0
                     ? 'none held by the fan-out cap'
-                    : "{$held} branch(es) held across ".(int) $row->runs.' run(s), oldest since '.(string) $row->oldest.' UTC',
+                    : "{$held} branch(es) held across ".(int) $row->runs.' run(s), oldest since '.(string) $row->oldest.' UTC'
+                        .' — released as running branches finish; if this does not shrink, check that swarm:recover is scheduled and that no capped run is paused',
             ];
         } catch (Throwable $exception) {
             return [

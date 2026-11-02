@@ -913,9 +913,11 @@ return [
              * for a retry still holds its slot. Held branches are never released by
              * the clock, and the join still waits for every branch.
              *
-             * Size it from your queue workers and provider rate limits: N at or below
-             * the workers serving the branch queue, and low enough that N concurrent
-             * agent calls stay inside the provider's limits.
+             * It is per fan-out, not global: it keeps one wide fan-out from taking every
+             * branch-queue worker. Choose N below the workers serving the branch queue,
+             * and size the swarm timeout for roughly ceil(branches / N) branch
+             * durations. A limit across all runs (a provider's rate limit) comes from
+             * the worker count or queue rate limiting, not from this key.
              *
              * Requirements: the bundled database run store and outbox on one database
              * connection (a cap with anything else is rejected when the run starts),
@@ -923,7 +925,8 @@ return [
              * and swarm:recover scheduled — it releases branches a crashed worker
              * left held. Applies to step-durable hierarchical fan-outs only, not
              * top-level parallel or queue() multi_worker coordination. A value that
-             * is not a positive integer throws when a durable run starts.
+             * is not a positive integer throws when a durable run starts; one that
+             * turns bad mid-run stalls capped fan-outs until it is corrected.
              */
             'max_concurrent_branches' => env('SWARM_DURABLE_PARALLEL_MAX_CONCURRENT_BRANCHES'),
             'queue' => [
