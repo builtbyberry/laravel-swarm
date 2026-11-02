@@ -778,8 +778,23 @@ test('swarm:health does not report held rows as stuck relay work and shows them 
     Artisan::call('swarm:health', ['--durable' => true, '--json' => true]);
     $checks = collect(json_decode(Artisan::output(), true)['checks']);
 
+    // The four admitted rows were drained; only the 12 held rows remain, and they
+    // are neither pending nor aging relay work.
     expect($checks->firstWhere('component', 'Outbox relay')['status'])->toBe('ok')
+        ->and($checks->firstWhere('component', 'Outbox relay')['details'])->toBe('no pending rows')
         ->and($checks->firstWhere('component', 'Held branches')['details'])->toContain('12 branch(es) held across 1 run(s)');
+
+    // Ordinary relay work next to the held rows is still counted, and only it.
+    DB::table('swarm_durable_outbox')->insert([
+        'run_id' => $runId, 'dispatch_type' => 'step', 'payload' => json_encode(['step_index' => 9]),
+        'queue_connection' => null, 'queue_name' => null,
+        'available_at' => now('UTC'), 'reserved_at' => null, 'created_at' => now('UTC'),
+    ]);
+    Artisan::call('swarm:health', ['--durable' => true, '--json' => true]);
+    $relay = collect(json_decode(Artisan::output(), true)['checks'])->firstWhere('component', 'Outbox relay');
+
+    expect($relay['status'])->toBe('ok')
+        ->and($relay['details'])->toBe('1 pending row(s), relay appears active');
 });
 
 test('swarm:health shows no held branches when the cap is off', function (): void {
