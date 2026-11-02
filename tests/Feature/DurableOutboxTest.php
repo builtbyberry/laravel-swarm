@@ -486,10 +486,11 @@ test('swarm:health --durable warns when outbox has stale unclaimed rows', functi
     // Manually insert an outbox row (dispatchDurable uses direct dispatch, not the DB outbox)
     $outbox->enqueueStep($response->runId, 1, null, null);
 
-    // Age the outbox rows past the staleness threshold
+    // Age the outbox rows past the staleness threshold (a row is due from its
+    // available_at, which every ordinary write sets equal to created_at)
     DB::table('swarm_durable_outbox')
         ->where('run_id', $response->runId)
-        ->update(['created_at' => now()->subMinutes(5)]);
+        ->update(['created_at' => now()->subMinutes(5), 'available_at' => now()->subMinutes(5)]);
 
     $exitCode = Artisan::call('swarm:health', ['--durable' => true, '--json' => true]);
     $output = json_decode(Artisan::output(), true);
