@@ -13,7 +13,7 @@ Off by default; nothing changes until you set it. If you do:
   capped runs, run `swarm:recover`, and confirm `swarm:health --durable` shows no
   held branches before deploying a version without the cap.
 
-See [Capping branch fan-out](docs/durable-execution.md#capping-branch-fan-out),
+See [Capping branch fan-out](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-execution.md#capping-branch-fan-out),
 including how to release held branches by hand after a rollback.
 
 ### Custom `DurableOutbox` implementations
