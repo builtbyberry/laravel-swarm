@@ -124,7 +124,8 @@ class DurableRecoveryCoordinator
             graceSeconds: (int) $this->config->get('swarm.durable.recovery.grace_seconds', 300),
         );
 
-        // Runs failed here, not released to a join: kept out of the redispatched set.
+        // Runs this pass failed, tried to fail, or skipped — never released to a join:
+        // kept out of the redispatched set.
         $failedJoinRunIds = [];
 
         foreach ($waitingJoins as $run) {
@@ -141,12 +142,17 @@ class DurableRecoveryCoordinator
                         $this->runs->validateStepTimeoutSeconds((int) $run['step_timeout_seconds']),
                     );
                     $this->durableRuns->markRecoveryDispatched($run['run_id']);
+                    // Never released to its join, whether or not this pass failed it (the
+                    // fail path returns without failing a run another worker moved first).
                     $failedJoinRunIds[] = (string) $run['run_id'];
-                    $this->safeLog($this->logger, 'warning', 'laravel-swarm: recovery failed a durable parent whose fail_run branch failure was never settled; it was not released to its join.', [
-                        'run_id' => $run['run_id'],
-                        'swarm_class' => $run['swarm_class'] ?? null,
-                        'current_node_id' => $run['current_node_id'] ?? null,
-                    ]);
+
+                    if (($this->durableRuns->find($run['run_id'])['status'] ?? null) === 'failed') {
+                        $this->safeLog($this->logger, 'warning', 'laravel-swarm: recovery failed a durable parent whose fail_run branch failure was never settled; it was not released to its join.', [
+                            'run_id' => $run['run_id'],
+                            'swarm_class' => $run['swarm_class'] ?? null,
+                            'current_node_id' => $run['current_node_id'] ?? null,
+                        ]);
+                    }
                 }
             } catch (Throwable $exception) {
                 $this->safeLog($this->logger, 'warning', 'laravel-swarm: skipping a durable waiting join during recovery; it is retried on the next sweep.', [

@@ -382,6 +382,41 @@ function joinOpenWaitDbSnapshotSignaller(string $runId, string $wait, string $di
     };
 }
 
+/**
+ * Plays a fan-out (waitForBranches) on a run: inserts its branch rows and moves the
+ * run to `waiting` at the parallel node, then holds that uncommitted transaction —
+ * so it holds the run row — until the closer is observed blocked on it.
+ *
+ * @param  array<int, array<string, mixed>>  $branchRows
+ */
+function joinOpenWaitDbHoldingFanOut(string $runId, array $branchRows, string $dir): Closure
+{
+    return static function () use ($runId, $branchRows, $dir): array {
+        JoinOpenWaitWorker::boot();
+        $me = LockBarrier::connectionId();
+
+        DB::beginTransaction();
+        DB::table('swarm_durable_branches')->insert($branchRows);
+        DB::table('swarm_durable_runs')->where('run_id', $runId)->update([
+            'status' => 'waiting',
+            'current_node_id' => 'parallel',
+            'next_step_index' => 3,
+        ]);
+        LockBarrier::signal($dir, 'fanout-holds-run');
+
+        if (! LockBarrier::awaitBlockedBy((int) LockBarrier::await($dir, 'signaller-id'), $me)) {
+            $locks = LockBarrier::lockWaitSnapshot();
+            DB::rollBack();
+
+            return ['outcome' => 'no-contention', 'locks' => $locks];
+        }
+
+        DB::commit();
+
+        return ['outcome' => 'committed'];
+    };
+}
+
 beforeEach(function (): void {
     if (in_array(DB::connection()->getDriverName(), ['sqlite', 'sqlsrv'], true)) {
         $this->markTestSkipped(
@@ -486,8 +521,10 @@ test('queued-hierarchical fail_run: a signal between the branch failure and the 
     ]);
     $runId = 'join-open-wait-db-fail-'.bin2hex(random_bytes(4));
     $logger = Mockery::mock(LoggerInterface::class)->shouldIgnoreMissing();
-    $logger->shouldReceive('error')->andReturnUsing(function (string|Stringable $message) use ($runId): void {
+    $hookRan = false;
+    $logger->shouldReceive('error')->andReturnUsing(function (string|Stringable $message) use ($runId, &$hookRan): void {
         if (str_contains((string) $message, 'branch failed')) {
+            $hookRan = true;
             app(DurableSwarmManager::class)->signal($runId, 'approval');
         }
     });
@@ -506,7 +543,8 @@ test('queued-hierarchical fail_run: a signal between the branch failure and the 
         // released for failure and its lease guard then throws. It is never joined.
         expect(fn () => (new AdvanceDurableBranch($runId, (string) $branches->firstWhere('agent_class', FailingPromptAgent::class)['branch_id']))->handle($manager))
             ->toThrow(LostDurableLeaseException::class);
-        expect(joinOpenWaitDbResumeRows($runId))->toBe(0)
+        expect($hookRan)->toBeTrue()
+            ->and(joinOpenWaitDbResumeRows($runId))->toBe(0)
             ->and(app(RunHistoryStore::class)->find($runId)['status'])->not->toBe('completed');
 
         return;
@@ -514,7 +552,8 @@ test('queued-hierarchical fail_run: a signal between the branch failure and the 
 
     (new AdvanceDurableBranch($runId, (string) $branches->firstWhere('agent_class', FailingPromptAgent::class)['branch_id']))->handle($manager);
 
-    expect(joinOpenWaitDbRunStatus($runId))->toBe('failed')
+    expect($hookRan)->toBeTrue()
+        ->and(joinOpenWaitDbRunStatus($runId))->toBe('failed')
         ->and(app(RunHistoryStore::class)->find($runId)['status'])->toBe('failed')
         ->and(joinOpenWaitDbResumeRows($runId))->toBe(0);
 });
@@ -621,4 +660,38 @@ test('a signal inside an application transaction whose snapshot predates the las
         ])
         ->and(joinOpenWaitDbRunStatus($runId))->toBe('pending')
         ->and(joinOpenWaitDbStepRows($runId))->toBe($stepRows + 1);
+});
+
+test('a last wait closing while the run fans out waits for the fan-out and leaves the run waiting on its branches', function (): void {
+    // The branch rows a real fan-out of this swarm writes, taken from a template run.
+    $template = FakeParallelSwarm::make()->dispatchDurable('parallel-durable-task')->runId;
+    (new AdvanceDurableSwarm($template, 0))->handle(app(DurableSwarmManager::class));
+
+    // The target: a run waiting on an application wait, not yet fanned out.
+    $runId = FakeParallelSwarm::make()->dispatchDurable('parallel-durable-task')->runId;
+    app(DurableSwarmManager::class)->wait($runId, 'approval');
+    $branchRows = DB::table('swarm_durable_branches')->where('run_id', $template)->get()
+        ->map(function (object $row) use ($runId): array {
+            $row = (array) $row;
+            unset($row['id']);
+            $row['run_id'] = $runId;
+
+            return $row;
+        })
+        ->all();
+    $stepRows = joinOpenWaitDbStepRows($runId);
+    $dir = joinOpenWaitDbBarrierDir();
+
+    [$fanOut, $signaller] = $this->app->make(ConcurrencyManager::class)->driver('process')->run([
+        joinOpenWaitDbHoldingFanOut($runId, $branchRows, $dir),
+        joinOpenWaitDbSignaller($runId, 'approval', $dir, 'fanout-holds-run'),
+    ]);
+
+    // The closer read the run after the fan-out committed: it is at its branch
+    // boundary with branches still to run, so it stays waiting and nothing is queued.
+    expect($fanOut)->toBe(['outcome' => 'committed'], json_encode($fanOut))
+        ->and($signaller)->toBe(['outcome' => 'accepted'])
+        ->and(joinOpenWaitDbRunStatus($runId))->toBe('waiting')
+        ->and(app(RunHistoryStore::class)->find($runId)['status'])->toBe('waiting')
+        ->and(joinOpenWaitDbStepRows($runId))->toBe($stepRows);
 });

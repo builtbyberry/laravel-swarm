@@ -2556,15 +2556,35 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStep
             // still waiting on its branches, and its join is released through
             // releaseWaitingRunForJoin() — by the last branch to finish, or by the closer
             // once it has committed — never by the wait closing on its own. This is the
-            // row shape waitForBranches() leaves: it never writes the wait columns. The
-            // boundary is decided inside the UPDATE, against the row it writes, so a
-            // fan-out committing between a separate probe and this write cannot be missed.
+            // row shape waitForBranches() leaves: it never writes the wait columns.
+            //
+            // The run row is locked first: a fan-out (waitForBranches) holds it until it
+            // commits, so this waits for it and then reads the row as committed. Only a
+            // waiting run is touched, and a waiting run is never mid fan-out (fanning out
+            // needs the step lease), so the branch read below never waits on a fan-out's
+            // uncommitted rows. That read is a locking (current) read: under MySQL's
+            // REPEATABLE READ an ordinary read could still see the transaction's older
+            // snapshot, and under Postgres an UPDATE's subquery would.
+            /** @var object|null $run */
+            $run = $this->table()->where('run_id', $runId)->lockForUpdate()->first(['status', 'current_node_id']);
+
+            if (($run->status ?? null) !== 'waiting') {
+                return;
+            }
+
+            $nodeId = is_string($run->current_node_id ?? null) ? $run->current_node_id : null;
+            $atBranchBoundary = $nodeId !== null && $this->branchTable()
+                ->where('run_id', $runId)
+                ->where('parent_node_id', $nodeId)
+                ->sharedLock()
+                ->first(['branch_id']) !== null;
+
             $this->table()
                 ->where('run_id', $runId)
                 ->where('status', 'waiting')
                 ->whereNull('finished_at')
                 ->update([
-                    'status' => $this->branchBoundaryStatusQuery(),
+                    'status' => $atBranchBoundary ? 'waiting' : 'pending',
                     'wait_reason' => null,
                     'waiting_since' => null,
                     'wait_timeout_at' => null,
@@ -3044,22 +3064,6 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStep
     protected function nodeOutputTable(): Builder
     {
         return $this->connection->table((string) $this->config->get('swarm.tables.durable_node_outputs', 'swarm_durable_node_outputs'));
-    }
-
-    /**
-     * A run's status when its last wait closes: `waiting` when it has branch rows under
-     * its current node, `pending` otherwise — a subquery correlated on the run row
-     * being updated.
-     */
-    protected function branchBoundaryStatusQuery(): Builder
-    {
-        $runs = (string) $this->config->get('swarm.tables.durable', 'swarm_durable_runs');
-        $branches = (string) $this->config->get('swarm.tables.durable_branches', 'swarm_durable_branches');
-
-        return $this->branchTable()
-            ->selectRaw("CASE WHEN COUNT(*) > 0 THEN 'waiting' ELSE 'pending' END")
-            ->whereColumn($branches.'.run_id', $runs.'.run_id')
-            ->whereColumn($branches.'.parent_node_id', $runs.'.current_node_id');
     }
 
     protected function branchTable(): Builder
