@@ -107,6 +107,54 @@ finished) has nothing left to wait on and resumes to `pending` as before.
 - During a rolling deploy, workers still on the old code keep the old behaviour
   until they are replaced.
 
+### A branch join waits for open waits
+
+A durable run waiting at a parallel join is no longer released to its join while
+it has an open wait (an application `wait()`, or a child swarm's `child:<id>`
+wait); the join runs once every wait is closed and every branch is done.
+
+- **Waits nobody closes now hold the run.** Code that opened a wait at a branch
+  boundary and relied on the branches finishing to move the run on must now
+  close it: deliver the signal, let the child finish, or give the wait a timeout
+  so `swarm:recover` times it out. Find runs held this way with:
+
+  ```sql
+  select w.run_id, w.name, w.created_at
+  from swarm_durable_waits w
+  join swarm_durable_runs r on r.run_id = w.run_id
+  where w.status = 'waiting'
+    and r.status = 'waiting'
+    and r.finished_at is null
+    and exists (
+      select 1 from swarm_durable_branches b
+      where b.run_id = r.run_id and b.parent_node_id = r.current_node_id
+    );
+  ```
+
+  Use your configured table names (`swarm.tables.durable_waits`,
+  `swarm.tables.durable`, `swarm.tables.durable_branches`) if you changed them.
+- **`fail_run` is unchanged:** a branch failure fails the parent at once even
+  while a wait is open. If the worker that failed the branch dies before failing
+  the parent, `swarm:recover` now fails the parent instead of releasing it to its
+  join. With an open wait, that happens once the wait closes.
+- **History status.** After a signal is accepted while another wait is still
+  open, or while the run is still at its branch boundary, the run's history
+  status stays `waiting` instead of `pending`. Monitoring that keyed on `pending`
+  after a signal should read the durable run status instead.
+- **Custom `DurableRunStore` implementations**, and classes extending
+  `DatabaseDurableRunStore` that override `releaseWaitingRunForJoin()`,
+  `recoverableWaitingJoins()` or `syncRunWaitSummary()`, must follow the same
+  rules or keep the old behaviour silently: `releaseWaitingRunForJoin()` refuses
+  while the run has an open wait, deciding from a shared-lock read of its open
+  waits taken before the run row is written; `recoverableWaitingJoins()` excludes
+  runs with an open wait; closing a run's last wait leaves it `waiting` when it has
+  branch rows under its current node. The immediate `fail_run` failure with an
+  open wait needs the bundled `DatabaseDurableRunStore`: another store fails the
+  parent through `swarm:recover` once the wait has closed, and only if it also
+  keeps the run `waiting` at its branch boundary when its last wait closes.
+- During a rolling deploy, workers still on the old code keep the old behaviour
+  until they are replaced.
+
 ## Upgrading to v0.28.1
 
 This patch deliberately departs from the additive-only patch policy stated

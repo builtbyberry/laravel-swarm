@@ -186,6 +186,23 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   with a new idempotency key. That is interim until
   [#601](https://github.com/builtbyberry/laravel-swarm/issues/601) accepts it on resume. See
   [UPGRADING](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#resuming-a-run-that-was-paused-while-waiting).
+- **A branch join no longer runs past an open signal or child-swarm wait
+  (#600).** A durable parent waiting at a parallel join that also had an open
+  wait (an application `wait()`, or a child swarm's wait) was released to its
+  join as soon as its branches finished, or by `resume()` or `swarm:recover`, and
+  the join ran without the signal or the child's outcome. The join now waits
+  until every wait is closed; when the last wait closes, the join is released the
+  moment the branches are done, through the profile's own continuation (the
+  queued-hierarchical `multi_worker` resume included). `swarm:recover` no longer
+  selects a run with an open wait, so it neither releases nor re-sweeps it every
+  pass. Under `fail_run`, a branch that fails still fails the parent at once, open
+  wait or not, as `Bus::batch()` fails on its first failure; a join is never
+  released past that failure, and if the failing worker dies before failing the
+  parent, `swarm:recover` fails it instead of joining it. Accepting a signal
+  while another wait is still open now leaves the run's history `waiting`
+  instead of `pending`. A wait that times out now closes, records its outcome and
+  updates history in one transaction. No configuration or schema change. See
+  [UPGRADING](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#a-branch-join-waits-for-open-waits).
 - A paused durable run is no longer put back to `waiting` when one of several
   open waits is released while it is paused, for example by a child finishing
   (#592). It stays paused, with its wait summary updated, until it is resumed.

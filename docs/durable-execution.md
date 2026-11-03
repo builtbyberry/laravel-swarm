@@ -399,6 +399,17 @@ Recovery also understands this boundary. If a branch checkpoints successfully
 but the worker exits before dispatching the parent join, `swarm:recover` can
 release the waiting parent once every branch row is terminal.
 
+A parent at this boundary that also has an open wait (an application `wait()`,
+or a child swarm's wait) is not released to its join until every wait is closed:
+branch completion, resume and `swarm:recover` all leave it `waiting`, and
+recovery does not select it. When the last wait closes, by signal, by timeout or
+by the child finishing, the join is released if the branches are done, or by the
+last branch to finish otherwise. The one exception is `fail_run`: a branch that
+fails still fails the parent at once, open wait or not, and no join is released
+past that failure; if the failing worker dies before failing the parent,
+`swarm:recover` fails it (once any open wait has closed). See
+[Durable Waits And Signals](durable-waits-and-signals.md#edge-cases).
+
 Active route plans and branch outputs can contain worker prompts and
 intermediate outputs. Treat durable runtime tables as sensitive operational
 storage and keep capture settings and retention windows aligned with the data
