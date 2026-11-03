@@ -30,6 +30,14 @@ interface DurableRunStore
 
     public function releaseForNextStep(string $runId, string $executionToken, int $nextStepIndex): void;
 
+    /**
+     * Move a leased run to `waiting` at a branch boundary: write its context and branch
+     * rows and release its lease. Lock the run row before writing anything else — the
+     * order the wait releases take (wait row, then run row, then the context and history
+     * they publish) — so a wait closing while the run fans out waits for the fan-out
+     * instead of deadlocking with it. A caller must not write the run's context or history
+     * row earlier in the same transaction.
+     */
     public function waitForBranches(string $runId, BranchWaitPayload $payload): void;
 
     /**

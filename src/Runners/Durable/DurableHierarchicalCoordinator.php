@@ -84,7 +84,9 @@ class DurableHierarchicalCoordinator
         $branches = array_map(fn (array $branch): array => $this->branches->withBranchRouting($swarm, $context, $branch, $run), $result->branches);
 
         $this->connection->transaction(function () use ($run, $token, $nextStepIndex, $context, $stepLeaseSeconds, $result, $branches, $withTransaction): void {
-            $this->historyStore->syncDurableState($run['run_id'], 'running', $this->capture->context($context), $context->metadata, $this->runs->ttlSeconds(), false, $token, $stepLeaseSeconds);
+            // waitForBranches() first, and the history row after it: nothing the wait
+            // closers write may be written before it in this transaction (the lock-order
+            // rule on DurableRunStore::waitForBranches()).
             $this->durableRuns->waitForBranches($run['run_id'], new BranchWaitPayload(
                 executionToken: $token,
                 nextStepIndex: $nextStepIndex,
@@ -96,6 +98,7 @@ class DurableHierarchicalCoordinator
                 totalSteps: $result->totalSteps,
                 branches: $branches,
             ));
+            $this->historyStore->syncDurableState($run['run_id'], 'running', $this->capture->context($context), $context->metadata, $this->runs->ttlSeconds(), false, $token, $stepLeaseSeconds);
             if ($withTransaction !== null) {
                 ($withTransaction)();
             }

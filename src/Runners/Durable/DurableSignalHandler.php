@@ -5,21 +5,29 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
+use BuiltByBerry\LaravelSwarm\Contracts\AcceptsDurableSignals;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Events\SwarmSignalled;
 use BuiltByBerry\LaravelSwarm\Events\SwarmWaiting;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\DurableSignalResult;
+use BuiltByBerry\LaravelSwarm\Support\ApplicationTransactionBoundary;
+use BuiltByBerry\LaravelSwarm\Support\SafeReporting;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
+use Closure;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Database\Connection;
+use Psr\Log\LoggerInterface;
+use Throwable;
 
 /**
  * @internal
  */
 class DurableSignalHandler
 {
+    use SafeReporting;
+
     public function __construct(
         protected DurableRunStore $durableRuns,
         protected DatabaseRunHistoryStore $historyStore,
@@ -32,49 +40,17 @@ class DurableSignalHandler
         protected Connection $connection,
         protected DurableEagerDispatcher $eager,
         protected DurableJoinRelease $joinRelease,
+        protected LoggerInterface $logger,
     ) {}
 
     public function signal(string $runId, string $name, mixed $payload = null, ?string $idempotencyKey = null): DurableSignalResult
     {
         $run = $this->runs->requireRun($runId);
         $capturedPayload = $this->payloads->payload($payload);
-        $signal = $this->durableRuns->recordSignal($runId, $name, $capturedPayload, $idempotencyKey);
-        $accepted = false;
 
-        if (($signal['duplicate'] ?? false) !== true && $run['status'] === 'waiting') {
-            $accepted = $this->connection->transaction(function () use ($runId, $name, $signal, $capturedPayload): bool {
-                if (! $this->durableRuns->releaseWaitWithSignal($runId, $name, (int) $signal['id'])) {
-                    return false;
-                }
-
-                $context = $this->runs->loadContext($runId);
-                $signals = is_array($context->metadata['durable_signals'] ?? null) ? $context->metadata['durable_signals'] : [];
-                $outcomes = is_array($context->metadata['durable_wait_outcomes'] ?? null) ? $context->metadata['durable_wait_outcomes'] : [];
-                $signals[$name] = ['payload' => $capturedPayload, 'signal_id' => $signal['id']];
-                $outcomes[$name] = ['status' => 'signalled', 'payload' => $capturedPayload, 'timed_out' => false];
-                $context->mergeMetadata([
-                    'durable_signals' => $signals,
-                    'durable_wait_outcomes' => $outcomes,
-                ]);
-                $this->contextStore->put($this->capture->activeContext($context), $this->runs->ttlSeconds());
-
-                // History follows the run: it stays waiting while another wait is open or the
-                // run is still at its branch boundary — which is what a queued-hierarchical
-                // continuation lease requires — and is written before any join is released.
-                $updated = $this->runs->requireRun($runId);
-                $this->historyStore->syncDurableState($runId, $updated['status'], $this->capture->context($context), $context->metadata, $this->runs->ttlSeconds(), false);
-
-                if ($updated['status'] === 'pending') {
-                    $this->eager->enqueueStep($runId, (int) $updated['next_step_index'], $updated['queue_connection'], $updated['queue_name']);
-                } elseif ($updated['status'] === 'waiting') {
-                    // Never inside this transaction: the join release locks the run's other
-                    // open waits, and this transaction already holds the run row.
-                    $this->joinRelease->releaseAfterCommit($runId);
-                }
-
-                return true;
-            });
-        }
+        [$signal, $accepted] = $this->durableRuns instanceof AcceptsDurableSignals
+            ? $this->acceptAtomically($this->durableRuns, $run, $runId, $name, $capturedPayload, $idempotencyKey)
+            : $this->recordThenAccept($run, $runId, $name, $capturedPayload, $idempotencyKey);
 
         $this->events->dispatch(new SwarmSignalled(
             runId: $runId,
@@ -104,6 +80,136 @@ class DurableSignalHandler
             signal: $signal,
             swarmClass: (string) $run['swarm_class'],
         );
+    }
+
+    /**
+     * A store that records the signal in its acceptance transaction: an acceptance that
+     * aborts leaves no signal behind, so the same idempotency key is accepted when it is
+     * sent again.
+     *
+     * @param  array<string, mixed>  $run
+     * @return array{0: array<string, mixed>, 1: bool}
+     */
+    protected function acceptAtomically(AcceptsDurableSignals $store, array $run, string $runId, string $name, mixed $capturedPayload, ?string $idempotencyKey): array
+    {
+        if ($run['status'] === 'waiting') {
+            // A key already recorded is answered without taking a lock — a webhook's
+            // retries would otherwise each lock the wait and run rows — but only outside an
+            // application transaction: inside one this read would fix MySQL's snapshot
+            // before the acceptance locks the run row. The acceptance's own check, under
+            // the run lock, stays the one that decides.
+            if ($idempotencyKey !== null && $this->connection->transactionLevel() === 0) {
+                $existing = $store->signalForIdempotencyKey($runId, $idempotencyKey);
+
+                if ($existing !== null) {
+                    return [array_merge($existing, ['duplicate' => true]), false];
+                }
+            }
+
+            $accepted = ApplicationTransactionBoundary::run(
+                $this->connection,
+                fn (): ?array => $this->connection->transaction(function () use ($store, $runId, $name, $capturedPayload, $idempotencyKey): ?array {
+                    $signal = $store->acceptSignal($runId, $name, $capturedPayload, $idempotencyKey);
+
+                    if ($signal !== null && $signal['released']) {
+                        $this->publishAcceptance($runId, $name, $signal['id'], $capturedPayload);
+                    }
+
+                    return $signal;
+                }),
+                $this->reportRollbackFailure($runId, $name),
+            );
+
+            if ($accepted !== null) {
+                $released = $accepted['released'];
+                unset($accepted['released']);
+
+                return [$accepted, $released];
+            }
+        }
+
+        // No open wait of this name, or a run that is not waiting: recorded, not accepted.
+        return [$this->durableRuns->recordSignal($runId, $name, $capturedPayload, $idempotencyKey), false];
+    }
+
+    /**
+     * A store without atomic acceptance: the signal is recorded first and accepted in its
+     * own transaction, so an acceptance that aborts leaves the recorded signal behind and
+     * the same idempotency key is then a duplicate (see AcceptsDurableSignals).
+     *
+     * @param  array<string, mixed>  $run
+     * @return array{0: array<string, mixed>, 1: bool}
+     */
+    protected function recordThenAccept(array $run, string $runId, string $name, mixed $capturedPayload, ?string $idempotencyKey): array
+    {
+        $signal = $this->durableRuns->recordSignal($runId, $name, $capturedPayload, $idempotencyKey);
+
+        if (($signal['duplicate'] ?? false) === true || $run['status'] !== 'waiting') {
+            return [$signal, false];
+        }
+
+        $accepted = ApplicationTransactionBoundary::run(
+            $this->connection,
+            fn (): bool => $this->connection->transaction(function () use ($runId, $name, $signal, $capturedPayload): bool {
+                if (! $this->durableRuns->releaseWaitWithSignal($runId, $name, (int) $signal['id'])) {
+                    return false;
+                }
+
+                $this->publishAcceptance($runId, $name, (int) $signal['id'], $capturedPayload);
+
+                return true;
+            }),
+            $this->reportRollbackFailure($runId, $name),
+        );
+
+        return [$signal, $accepted];
+    }
+
+    /**
+     * @return Closure(Throwable): void
+     */
+    protected function reportRollbackFailure(string $runId, string $name): Closure
+    {
+        return function (Throwable $rollbackFailure) use ($runId, $name): void {
+            $this->safeLog($this->logger, 'warning', 'laravel-swarm: could not roll a failed durable signal acceptance back to its savepoint inside the application transaction; do not commit that transaction.', [
+                'run_id' => $runId,
+                'signal_name' => $name,
+                'exception' => $rollbackFailure::class,
+                'message' => $rollbackFailure->getMessage(),
+            ]);
+        };
+    }
+
+    /**
+     * Publish an accepted signal to the context and history and move the run on. Runs
+     * inside the acceptance transaction.
+     */
+    protected function publishAcceptance(string $runId, string $name, int $signalId, mixed $capturedPayload): void
+    {
+        $context = $this->runs->loadContext($runId);
+        $signals = is_array($context->metadata['durable_signals'] ?? null) ? $context->metadata['durable_signals'] : [];
+        $outcomes = is_array($context->metadata['durable_wait_outcomes'] ?? null) ? $context->metadata['durable_wait_outcomes'] : [];
+        $signals[$name] = ['payload' => $capturedPayload, 'signal_id' => $signalId];
+        $outcomes[$name] = ['status' => 'signalled', 'payload' => $capturedPayload, 'timed_out' => false];
+        $context->mergeMetadata([
+            'durable_signals' => $signals,
+            'durable_wait_outcomes' => $outcomes,
+        ]);
+        $this->contextStore->put($this->capture->activeContext($context), $this->runs->ttlSeconds());
+
+        // History follows the run: it stays waiting while another wait is open or the
+        // run is still at its branch boundary — which is what a queued-hierarchical
+        // continuation lease requires — and is written before any join is released.
+        $updated = $this->runs->requireRun($runId);
+        $this->historyStore->syncDurableState($runId, $updated['status'], $this->capture->context($context), $context->metadata, $this->runs->ttlSeconds(), false);
+
+        if ($updated['status'] === 'pending') {
+            $this->eager->enqueueStep($runId, (int) $updated['next_step_index'], $updated['queue_connection'], $updated['queue_name']);
+        } elseif ($updated['status'] === 'waiting') {
+            // Never inside this transaction: the join release locks the run's other
+            // open waits, and this transaction already holds the run row.
+            $this->joinRelease->releaseAfterCommit($runId);
+        }
     }
 
     /**

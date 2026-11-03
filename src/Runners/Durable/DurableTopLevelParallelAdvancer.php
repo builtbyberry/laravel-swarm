@@ -66,7 +66,9 @@ class DurableTopLevelParallelAdvancer
         }
 
         $this->connection->transaction(function () use ($token, $state, $stepLeaseSeconds, $branches, $run): void {
-            $this->historyStore->syncDurableState($state->context->runId, 'running', $this->capture->context($state->context), $state->context->metadata, $this->runs->ttlSeconds(), false, $token, $stepLeaseSeconds);
+            // waitForBranches() first, and the history row after it: nothing the wait
+            // closers write may be written before it in this transaction (the lock-order
+            // rule on DurableRunStore::waitForBranches()).
             $this->durableRuns->waitForBranches($state->context->runId, new BranchWaitPayload(
                 executionToken: $token,
                 nextStepIndex: count($branches),
@@ -75,6 +77,7 @@ class DurableTopLevelParallelAdvancer
                 ttlSeconds: $this->runs->ttlSeconds(),
                 branches: $branches,
             ));
+            $this->historyStore->syncDurableState($state->context->runId, 'running', $this->capture->context($state->context), $state->context->metadata, $this->runs->ttlSeconds(), false, $token, $stepLeaseSeconds);
 
             foreach ($branches as $branch) {
                 $connection = $branch['queue_connection'] ?? $run['queue_connection'];
