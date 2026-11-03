@@ -275,6 +275,23 @@ function signalAbortRepeatSender(string $runId, string $dir): Closure
     };
 }
 
+/**
+ * Accepts a signal and kills its own process (SIGKILL) inside the acceptance transaction:
+ * the wait is closed, the run locked, the signal inserted and consumed, nothing committed.
+ */
+function signalAbortKilledSender(string $runId): Closure
+{
+    return static function () use ($runId): string {
+        $store = FanoutCloserWorker::bootHooked();
+        $store->beforeSync = static function (): void {
+            posix_kill(getmypid(), SIGKILL);
+        };
+        app(DurableSwarmManager::class)->signal($runId, 'approval', ['approved' => true], 'key-1');
+
+        return 'not killed';
+    };
+}
+
 beforeEach(function (): void {
     if (in_array(DB::connection()->getDriverName(), ['sqlite', 'sqlsrv'], true)) {
         $this->markTestSkipped(
@@ -414,4 +431,36 @@ test('a repeated idempotency key is answered as a duplicate without waiting on t
     expect($repeat)->toBe(['outcome' => 'returned', 'duplicate' => true, 'accepted' => false], json_encode($repeat))
         ->and(DB::table('swarm_durable_signals')->where('run_id', $runId)->count())->toBe(1)
         ->and(DB::table('swarm_durable_waits')->where('run_id', $runId)->where('name', 'second')->value('status'))->toBe('waiting');
+});
+
+test('a worker killed partway through accepting a signal leaves nothing behind, and the same key is accepted once', function (): void {
+    if (! function_exists('posix_kill') || ! defined('SIGKILL')) {
+        $this->markTestSkipped('Requires POSIX SIGKILL.');
+    }
+
+    // A crash, not a database error: the uncommitted acceptance (closed wait, consumed
+    // signal) dies with its connection, so no signal row outlives it.
+    $runId = FakeSequentialSwarm::make()->dispatchDurable('killed-acceptance-task')->runId;
+    app(DurableSwarmManager::class)->wait($runId, 'approval');
+
+    $died = null;
+
+    try {
+        $this->app->make(ConcurrencyManager::class)->driver('process')->run([signalAbortKilledSender($runId)]);
+    } catch (Throwable $e) {
+        $died = $e->getMessage();
+    }
+
+    expect($died)->toContain('signal "9"')
+        ->and(DB::table('swarm_durable_signals')->where('run_id', $runId)->count())->toBe(0)
+        ->and(DB::table('swarm_durable_waits')->where('run_id', $runId)->value('status'))->toBe('waiting')
+        ->and(DB::table('swarm_durable_runs')->where('run_id', $runId)->value('status'))->toBe('waiting');
+
+    $resent = app(DurableSwarmManager::class)->signal($runId, 'approval', ['approved' => true], 'key-1');
+    $again = app(DurableSwarmManager::class)->signal($runId, 'approval', ['approved' => true], 'key-1');
+
+    expect($resent->accepted)->toBeTrue()
+        ->and($resent->duplicate)->toBeFalse()
+        ->and($again->duplicate)->toBeTrue()
+        ->and(DB::table('swarm_durable_signals')->where('run_id', $runId)->count())->toBe(1);
 });
