@@ -123,6 +123,26 @@ test('without a transaction manager tracking the swarm connection nothing is att
     expect($release->attempts)->toBe([]);
 });
 
+test('when the transaction manager does not track every open level, nothing is attached', function () {
+    $release = recordingJoinRelease();
+    $connection = DB::connection();
+    $manager = app('db.transactions');
+
+    // An outer transaction the manager never saw (begun with no manager set), then a
+    // nested one it does see: attaching to that inner record would run the attempt
+    // at the inner level's "commit", before the outer transaction commits.
+    $connection->unsetTransactionManager();
+    $connection->beginTransaction();
+    $connection->setTransactionManager($manager);
+
+    $connection->transaction(function () use ($release): void {
+        $release->releaseAfterCommit('run-a');
+    });
+    $connection->commit();
+
+    expect($release->attempts)->toBe([]);
+});
+
 test('a failing attempt is reported, does not escape the commit, and later callbacks still run', function () {
     Exceptions::fake();
     $release = recordingJoinRelease(throw: true);
