@@ -97,6 +97,12 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   whether or not `swarm.durable.eager_dispatch` is on: PHP rejects the old
   signatures when the class loads. The bundled `DatabaseDurableOutbox` is
   updated; code that only injects the contract is unaffected. See [UPGRADING.md](UPGRADING.md#custom-durableoutbox-implementations).
+- **Custom `DurableRunStore` implementations, and classes extending
+  `DatabaseDurableRunStore`,** have new rules to follow, or they keep the
+  behaviour #600 fixes: `releaseWaitingRunForJoin()` refuses while the run has an open
+  wait, `recoverableWaitingJoins()` excludes runs with an open wait, and closing
+  a run's last wait leaves it `waiting` when it is at a branch boundary. See
+  [UPGRADING.md](UPGRADING.md#a-branch-join-waits-for-open-waits).
 - `DrainResult::$reclaimed` (and the `command.relay` audit event's
   `reclaimed_count`) now also counts eager-dispatch rows whose pushed job did not
   settle them before the reservation went stale, not only rows a relay claimed
@@ -191,17 +197,19 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   wait (an application `wait()`, or a child swarm's wait) was released to its
   join as soon as its branches finished, or by `resume()` or `swarm:recover`, and
   the join ran without the signal or the child's outcome. The join now waits
-  until every wait is closed; when the last wait closes, the join is released the
-  moment the branches are done, through the profile's own continuation (the
-  queued-hierarchical `multi_worker` resume included). `swarm:recover` no longer
-  selects a run with an open wait, so it neither releases nor re-sweeps it every
-  pass. Under `fail_run`, a branch that fails still fails the parent at once, open
+  until every wait is closed and every branch is done; then it is released
+  through the profile's own continuation (the queued-hierarchical `multi_worker`
+  resume included), or by a later `swarm:recover` sweep if that hand-off cannot
+  run. A wait that is never signalled and has no timeout now keeps such a run
+  `waiting`: give it a timeout, or close it. `swarm:recover` no longer selects a
+  run with an open wait, so it neither releases nor re-sweeps it every pass.
+  Under `fail_run`, a branch that fails still fails the parent at once, open
   wait or not, as `Bus::batch()` fails on its first failure; a join is never
   released past that failure, and if the failing worker dies before failing the
-  parent, `swarm:recover` fails it instead of joining it. Accepting a signal
-  while another wait is still open now leaves the run's history `waiting`
-  instead of `pending`. A wait that times out now closes, records its outcome and
-  updates history in one transaction. No configuration or schema change. See
+  parent, `swarm:recover` fails it instead of joining it. After a signal is
+  accepted, a child swarm finishes, or a wait times out while another wait is
+  still open or the run is still at its branch boundary, the run's history now
+  stays `waiting` instead of `pending`. No configuration or schema change. See
   [UPGRADING](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#a-branch-join-waits-for-open-waits).
 - A paused durable run is no longer put back to `waiting` when one of several
   open waits is released while it is paused, for example by a child finishing

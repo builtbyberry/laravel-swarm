@@ -8,12 +8,16 @@ use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Enums\DurableDispatchType;
+use BuiltByBerry\LaravelSwarm\Events\SwarmChildCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableBranch;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\InvokeSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\ResumeQueuedHierarchicalSwarm;
+use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableChildSwarmCoordinator;
+use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableJoinRelease;
+use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRunContext;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Runners\QueuedHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
@@ -23,6 +27,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Persistence\DecoratingDurableRunStore;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalFullSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalParallelFailBranchSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelFailingSwarm;
@@ -32,6 +37,7 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Exceptions;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
 use Psr\Log\LoggerInterface;
 
@@ -88,6 +94,23 @@ function joinWaitDispatches(string $runId): array
 function joinWaitAgeRun(string $runId): void
 {
     DB::table('swarm_durable_runs')->where('run_id', $runId)->update(['updated_at' => now('UTC')->subMinutes(10)]);
+}
+
+/**
+ * Every branch of the run written terminal straight to the table: no branch
+ * completion runs, so nothing dispatches the join.
+ */
+function joinWaitMarkBranchesCompleted(string $runId): void
+{
+    DB::table('swarm_durable_branches')->where('run_id', $runId)->update([
+        'status' => 'completed',
+        'output' => 'branch-out',
+        'usage' => json_encode([]),
+        'duration_ms' => 1,
+        'finished_at' => now('UTC'),
+        'execution_token' => null,
+        'leased_until' => null,
+    ]);
 }
 
 function joinWaitAgeBranches(string $runId): void
@@ -199,15 +222,7 @@ describe('step-durable top-level parallel', function () {
         // Branches reach their terminal state while the run is paused, so no branch
         // completion dispatches anything: resume is the only path left to the join.
         $manager->pause($runId);
-        DB::table('swarm_durable_branches')->where('run_id', $runId)->update([
-            'status' => 'completed',
-            'output' => 'branch-out',
-            'usage' => json_encode([]),
-            'duration_ms' => 1,
-            'finished_at' => now('UTC'),
-            'execution_token' => null,
-            'leased_until' => null,
-        ]);
+        joinWaitMarkBranchesCompleted($runId);
         $before = joinWaitDispatches($runId);
 
         $result = $manager->resume($runId);
@@ -232,15 +247,7 @@ describe('step-durable top-level parallel', function () {
 
         // Terminal branches written straight to the table: no branch completion runs,
         // so recovery is the only path left to the join.
-        DB::table('swarm_durable_branches')->where('run_id', $runId)->update([
-            'status' => 'completed',
-            'output' => 'branch-out',
-            'usage' => json_encode([]),
-            'duration_ms' => 1,
-            'finished_at' => now('UTC'),
-            'execution_token' => null,
-            'leased_until' => null,
-        ]);
+        joinWaitMarkBranchesCompleted($runId);
         joinWaitAgeBranches($runId);
         joinWaitAgeRun($runId);
         $before = joinWaitDispatches($runId);
@@ -419,15 +426,7 @@ describe('queued-hierarchical multi_worker', function () {
         $manager = app(DurableSwarmManager::class);
 
         $manager->pause($runId);
-        DB::table('swarm_durable_branches')->where('run_id', $runId)->update([
-            'status' => 'completed',
-            'output' => 'branch-out',
-            'usage' => json_encode([]),
-            'duration_ms' => 1,
-            'finished_at' => now('UTC'),
-            'execution_token' => null,
-            'leased_until' => null,
-        ]);
+        joinWaitMarkBranchesCompleted($runId);
 
         $manager->resume($runId);
 
@@ -448,15 +447,7 @@ describe('queued-hierarchical multi_worker', function () {
         joinWaitQueuedRun($runId, completeBranches: false);
         $manager = app(DurableSwarmManager::class);
 
-        DB::table('swarm_durable_branches')->where('run_id', $runId)->update([
-            'status' => 'completed',
-            'output' => 'branch-out',
-            'usage' => json_encode([]),
-            'duration_ms' => 1,
-            'finished_at' => now('UTC'),
-            'execution_token' => null,
-            'leased_until' => null,
-        ]);
+        joinWaitMarkBranchesCompleted($runId);
         joinWaitAgeBranches($runId);
         joinWaitAgeRun($runId);
 
@@ -503,11 +494,14 @@ describe('queued-hierarchical multi_worker', function () {
  */
 function joinWaitBranchFailureLogger(?Closure $onBranchFailed = null, bool $throw = false): void
 {
+    joinWaitBranchFailureHookRan(reset: true);
     $logger = Mockery::mock(LoggerInterface::class)->shouldIgnoreMissing();
     $logger->shouldReceive('error')->andReturnUsing(function (string|Stringable $message) use ($onBranchFailed, $throw): void {
         if (! str_contains((string) $message, 'branch failed')) {
             return;
         }
+
+        joinWaitBranchFailureHookRan(ran: true);
 
         if ($onBranchFailed !== null) {
             $onBranchFailed();
@@ -519,6 +513,25 @@ function joinWaitBranchFailureLogger(?Closure $onBranchFailed = null, bool $thro
     });
     app()->instance(LoggerInterface::class, $logger);
     app()->forgetInstance(DurableSwarmManager::class);
+}
+
+/**
+ * Whether the branch-failure hook fired: a race set up inside it proves nothing if
+ * the log line it keys on ever moves, so every test using it asserts this.
+ */
+function joinWaitBranchFailureHookRan(bool $ran = false, bool $reset = false): bool
+{
+    static $fired = false;
+
+    if ($reset) {
+        $fired = false;
+    }
+
+    if ($ran) {
+        $fired = true;
+    }
+
+    return $fired;
 }
 
 function joinWaitFailingPlan(): array
@@ -617,9 +630,10 @@ describe('fail_run ownership', function () {
         (new AdvanceDurableBranch($runId, $failingBranchId))->handle(app(DurableSwarmManager::class));
 
         joinWaitAssertFailedNotJoined($runId, $before);
+        expect(joinWaitBranchFailureHookRan())->toBeTrue();
     })->with(['step-durable parallel' => 'sd', 'queued-hierarchical' => 'qh']);
 
-    test('a sibling finishing between the branch failure and the parent failure does not release the join', function (string $profile) {
+    test('a sibling finishing between the branch failure and the parent failure does not release the join', function () {
         $manager = app(DurableSwarmManager::class);
         $runId = FakeParallelFailingSwarm::make()->dispatchDurable('parallel-durable-task')->runId;
         (new AdvanceDurableSwarm($runId, 0))->handle($manager);
@@ -636,7 +650,8 @@ describe('fail_run ownership', function () {
         (new AdvanceDurableBranch($runId, $failing['branch_id']))->handle(app(DurableSwarmManager::class));
 
         joinWaitAssertFailedNotJoined($runId, $before);
-    })->with(['step-durable parallel' => 'sd']);
+        expect(joinWaitBranchFailureHookRan())->toBeTrue();
+    });
 
     test('a failing worker that never reaches the parent leaves it to swarm:recover, which fails it', function (string $profile, bool $openWait) {
         joinWaitBranchFailureLogger(throw: true);
@@ -645,7 +660,8 @@ describe('fail_run ownership', function () {
         $before = joinWaitDispatches($runId);
 
         expect(fn () => (new AdvanceDurableBranch($runId, $failingBranchId))->handle($manager))->toThrow(RuntimeException::class, 'logging unavailable');
-        expect($manager->find($runId)['status'])->toBe('waiting');
+        expect(joinWaitBranchFailureHookRan())->toBeTrue()
+            ->and($manager->find($runId)['status'])->toBe('waiting');
 
         if ($openWait) {
             joinWaitAgeRun($runId);
@@ -678,6 +694,7 @@ describe('fail_run ownership', function () {
         (new AdvanceDurableBranch($runId, $failingBranchId))->handle(app(DurableSwarmManager::class));
 
         joinWaitAssertFailedNotJoined($runId, $before);
+        expect(joinWaitBranchFailureHookRan())->toBeTrue();
         Event::assertDispatchedTimes(SwarmFailed::class, 1);
     })->with(['step-durable parallel' => 'sd', 'queued-hierarchical' => 'qh']);
 });
@@ -771,6 +788,7 @@ describe('wait timeouts and child outcomes at a join', function () {
     })->with(['step-durable parallel' => 'sd', 'queued-hierarchical' => 'qh']);
 
     test('a child finishing while the branches still run leaves the parent waiting for them', function (string $profile, bool $branchesFirst) {
+        Event::fake([SwarmChildCompleted::class]);
         $manager = app(DurableSwarmManager::class);
 
         if ($profile === 'qh') {
@@ -803,6 +821,13 @@ describe('wait timeouts and child outcomes at a join', function () {
         }
 
         expect($manager->find($childRunId)['status'])->toBe('completed');
+
+        // Reconciling the parent again (a duplicate delivery, or swarm:recover) neither
+        // re-dispatches the child's terminal event nor writes a second continuation.
+        $afterChild = joinWaitDispatches($runId);
+        app(DurableChildSwarmCoordinator::class)->reconcileTerminalChildrenForParent($manager->find($runId));
+        expect(joinWaitDispatches($runId))->toBe($afterChild);
+        Event::assertDispatchedTimes(SwarmChildCompleted::class, 1);
 
         if (! $branchesFirst) {
             expect($manager->find($runId)['status'])->toBe('waiting')
@@ -925,4 +950,126 @@ describe('failure boundaries', function () {
             ->and($read($read($manager, 'recovery'), 'joinRelease'))->toBe($joinRelease)
             ->and($read($joinRelease, 'runs'))->toBe($read($read($manager, 'signalHandler'), 'runs'));
     });
+});
+
+/**
+ * Every AdvanceDurableSwarm pushed onto the fake queue for the run.
+ *
+ * @return array<int, int> the step index of each push
+ */
+function joinWaitPushedSteps(string $runId): array
+{
+    $steps = [];
+
+    foreach (Queue::pushedJobs() as $pushes) {
+        foreach ($pushes as $push) {
+            if ($push['job'] instanceof AdvanceDurableSwarm && $push['job']->runId === $runId) {
+                $steps[] = $push['job']->stepIndex;
+            }
+        }
+    }
+
+    return $steps;
+}
+
+describe('recovery and dispatch boundaries', function () {
+    beforeEach(function () {
+        joinWaitRuntime();
+        Artisan::call('migrate:fresh', ['--database' => 'testing']);
+        FakeResearcher::fake(['research-out']);
+        FakeWriter::fake(['writer-out']);
+        FakeEditor::fake(['editor-out']);
+    });
+
+    test('one waiting join whose context cannot be read does not stop the rest of swarm:recover', function () {
+        $manager = app(DurableSwarmManager::class);
+
+        // The older candidate: a failed branch (so recovery reads its context) and no
+        // context row left to read.
+        $broken = joinWaitParallelRun(completeBranches: false);
+        DB::table('swarm_durable_waits')->where('run_id', $broken)->delete();
+        joinWaitMarkBranchesCompleted($broken);
+        DB::table('swarm_durable_branches')->where('run_id', $broken)->where('branch_id', 'parallel:0')->update(['status' => 'failed', 'failure' => json_encode(['message' => 'boom'])]);
+        DB::table('swarm_contexts')->where('run_id', $broken)->delete();
+        DB::table('swarm_durable_runs')->where('run_id', $broken)->update(['updated_at' => now('UTC')->subMinutes(30)]);
+
+        // A younger, healthy candidate in the same sweep.
+        $healthy = joinWaitParallelRun(completeBranches: false);
+        DB::table('swarm_durable_waits')->where('run_id', $healthy)->delete();
+        joinWaitMarkBranchesCompleted($healthy);
+        joinWaitAgeRun($healthy);
+
+        $recovered = $manager->recover();
+
+        expect($manager->find($healthy)['status'])->toBe('pending')
+            ->and($manager->find($broken)['status'])->toBe('waiting')
+            ->and($recovered)->toContain($healthy)
+            ->and($recovered)->not->toContain($broken);
+    });
+
+    test('a parent swarm:recover fails for an unsettled fail_run failure is not reported as redispatched', function () {
+        config()->set('swarm.durable.parallel.failure_policy', 'fail_run');
+        $manager = app(DurableSwarmManager::class);
+        $runId = joinWaitParallelRun(completeBranches: false);
+        DB::table('swarm_durable_waits')->where('run_id', $runId)->delete();
+        joinWaitMarkBranchesCompleted($runId);
+        DB::table('swarm_durable_branches')->where('run_id', $runId)->where('branch_id', 'parallel:0')->update(['status' => 'failed', 'failure' => json_encode(['message' => 'boom'])]);
+        joinWaitAgeRun($runId);
+        $before = joinWaitDispatches($runId);
+
+        $recovered = $manager->recover();
+
+        expect($manager->find($runId)['status'])->toBe('failed')
+            ->and($recovered)->not->toContain($runId)
+            ->and(joinWaitDispatches($runId))->toBe($before);
+    });
+
+    test('with eager dispatch on, the join released after a signal is pushed once — bare or inside an application transaction', function (bool $inTransaction) {
+        config()->set('swarm.durable.eager_dispatch', true);
+        Queue::fake();
+        $manager = app(DurableSwarmManager::class);
+        $runId = joinWaitParallelRun();
+        $before = joinWaitDispatches($runId);
+
+        expect(joinWaitPushedSteps($runId))->not->toContain(3);
+
+        $signal = fn () => $manager->signal($runId, 'approval');
+        $inTransaction ? DB::transaction($signal) : $signal();
+
+        expect($manager->find($runId)['status'])->toBe('pending')
+            ->and(array_values(array_filter(joinWaitPushedSteps($runId), fn (int $step): bool => $step === 3)))->toBe([3])
+            ->and(joinWaitDispatches($runId)['step'])->toBe($before['step'] + 1);
+    })->with(['bare' => false, 'inside an application transaction' => true]);
+
+    test('the fail_run release falls back to the open-wait-checked join release for a store that is not the bundled one', function (bool $replacementStore) {
+        config()->set('swarm.durable.parallel.failure_policy', 'fail_run');
+        $manager = app(DurableSwarmManager::class);
+        $runId = FakeParallelFailingSwarm::make()->dispatchDurable('parallel-durable-task')->runId;
+        (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+        $manager->wait($runId, 'approval');
+        joinWaitMarkBranchesCompleted($runId);
+        DB::table('swarm_durable_branches')->where('run_id', $runId)->where('branch_id', 'parallel:1')->update(['status' => 'failed', 'failure' => json_encode(['message' => 'boom'])]);
+
+        // The durable manager itself requires the bundled store (DurableRunInspector), so
+        // the fallback is reached only by a coordinator built over another store.
+        $store = $replacementStore
+            ? new DecoratingDurableRunStore(app(DurableRunStore::class))
+            : app(DurableRunStore::class);
+        $coordinator = app()->makeWith(DurableHierarchicalCoordinator::class, ['durableRuns' => $store]);
+        $failed = false;
+
+        $coordinator->failWaitingParentFromBranches(
+            $store->find($runId),
+            app(DurableRunContext::class)->loadContext($runId),
+            300,
+            function () use (&$failed): void {
+                $failed = true;
+            },
+        );
+
+        // The bundled store fails the parent at once despite the open wait; another store
+        // goes through releaseWaitingRunForJoin(), which refuses while the wait is open.
+        expect($failed)->toBe(! $replacementStore)
+            ->and($store->find($runId)['status'])->toBe($replacementStore ? 'waiting' : 'pending');
+    })->with(['bundled store' => false, 'replacement store' => true]);
 });

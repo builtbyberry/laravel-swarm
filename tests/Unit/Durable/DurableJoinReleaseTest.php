@@ -37,7 +37,7 @@ function recordingJoinRelease(?Illuminate\Contracts\Container\Container $contain
             parent::__construct($store, $runs, $branches, $outbox, $eager, $connection, $container);
         }
 
-        public function releaseIfReady(array $run): bool
+        public function releaseIfReady(array $run, ?array $branches = null): bool
         {
             if ($this->throw) {
                 throw new RuntimeException('release failed');

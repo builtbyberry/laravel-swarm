@@ -120,7 +120,9 @@ class DurableHierarchicalCoordinator
         $branches = $this->durableRuns->branchesFor($run['run_id'], $parentNodeId);
 
         if ($this->branches->branchesAreTerminal($branches)) {
-            $this->joinRelease->releaseIfReady($run);
+            // The join release owns the rest of the decision (open waits, an owed
+            // fail_run failure); it reuses the branch rows read here.
+            $this->joinRelease->releaseIfReady($run, $branches);
 
             return;
         }

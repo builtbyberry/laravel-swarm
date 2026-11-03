@@ -95,8 +95,8 @@ class DurableManagerCollaboratorFactory
             'config' => $config,
         ]);
         // Built before every wait closer and the hierarchical coordinator, so they all
-        // share one instance: it is the one way a run waiting at a branch boundary is
-        // released to its join.
+        // share one instance of what releases a run waiting at a branch boundary to its
+        // join (swarm:recover's own waiting-join sweep aside).
         $joinRelease = $this->application->makeWith(DurableJoinRelease::class, [
             'durableRuns' => $durableRuns,
             'runs' => $runContext,

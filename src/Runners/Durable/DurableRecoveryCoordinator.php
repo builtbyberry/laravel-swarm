@@ -12,17 +12,21 @@ use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use BuiltByBerry\LaravelSwarm\Support\SafeReporting;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Database\Connection;
 use Psr\Log\LoggerInterface;
+use Throwable;
 
 /**
  * @internal
  */
 class DurableRecoveryCoordinator
 {
+    use SafeReporting;
+
     public function __construct(
         protected ConfigRepository $config,
         protected DurableRunStore $durableRuns,
@@ -44,10 +48,10 @@ class DurableRecoveryCoordinator
      * failure was never settled (its branch worker stopped before failing the parent):
      * such a run is failed, never released to its join.
      *
-     * @param  (callable(array<string, mixed>, RunContext, int): void)|null  $failParentFromBranches
+     * @param  callable(array<string, mixed>, RunContext, int): void  $failParentFromBranches
      * @return array<int, string>
      */
-    public function recover(?string $runId, ?string $swarmClass, int $limit, callable $dispatchStep, callable $dispatchBranch, ?callable $failParentFromBranches = null): array
+    public function recover(?string $runId, ?string $swarmClass, int $limit, callable $dispatchStep, callable $dispatchBranch, callable $failParentFromBranches): array
     {
         $runs = $this->durableRuns->recoverable(
             runId: $runId,
@@ -120,15 +124,44 @@ class DurableRecoveryCoordinator
             graceSeconds: (int) $this->config->get('swarm.durable.recovery.grace_seconds', 300),
         );
 
-        foreach ($waitingJoins as $run) {
-            if ($failParentFromBranches !== null && $this->joinRelease->owesFailure($run)) {
-                $failParentFromBranches(
-                    $run,
-                    $this->runs->loadContext($run['run_id']),
-                    $this->runs->validateStepTimeoutSeconds((int) $run['step_timeout_seconds']),
-                );
-                $this->durableRuns->markRecoveryDispatched($run['run_id']);
+        // Runs failed here, not released to a join: kept out of the redispatched set.
+        $failedJoinRunIds = [];
 
+        foreach ($waitingJoins as $run) {
+            // One run whose context cannot be read (missing, or undecryptable after an
+            // APP_KEY rotation) or whose failure write throws must not stop the sweep:
+            // it is reported and skipped, and every other run and phase still recovers.
+            try {
+                $owesFailure = $this->joinRelease->owesFailure($run);
+
+                if ($owesFailure) {
+                    $failParentFromBranches(
+                        $run,
+                        $this->runs->loadContext($run['run_id']),
+                        $this->runs->validateStepTimeoutSeconds((int) $run['step_timeout_seconds']),
+                    );
+                    $this->durableRuns->markRecoveryDispatched($run['run_id']);
+                    $failedJoinRunIds[] = (string) $run['run_id'];
+                    $this->safeLog($this->logger, 'warning', 'laravel-swarm: recovery failed a durable parent whose fail_run branch failure was never settled; it was not released to its join.', [
+                        'run_id' => $run['run_id'],
+                        'swarm_class' => $run['swarm_class'] ?? null,
+                        'current_node_id' => $run['current_node_id'] ?? null,
+                    ]);
+                }
+            } catch (Throwable $exception) {
+                $this->safeLog($this->logger, 'warning', 'laravel-swarm: skipping a durable waiting join during recovery; it is retried on the next sweep.', [
+                    'run_id' => $run['run_id'],
+                    'swarm_class' => $run['swarm_class'] ?? null,
+                    'current_node_id' => $run['current_node_id'] ?? null,
+                    'exception' => $exception::class,
+                    'message' => $exception->getMessage(),
+                ]);
+                $failedJoinRunIds[] = (string) $run['run_id'];
+
+                continue;
+            }
+
+            if ($owesFailure) {
                 continue;
             }
 
@@ -256,7 +289,7 @@ class DurableRecoveryCoordinator
             array_map(static fn (array $branch): string => $branch['run_id'], $branches),
             array_map(static fn (array $run): string => $run['run_id'], $dueRetryRuns),
             array_map(static fn (array $branch): string => $branch['run_id'], $dueRetryBranches),
-            array_map(static fn (array $run): string => $run['run_id'], $waitingJoins),
+            array_values(array_diff(array_map(static fn (array $run): string => $run['run_id'], $waitingJoins), $failedJoinRunIds)),
             array_map(static fn (array $run): string => $run['run_id'], $queuedResumes),
             array_map(static fn (array $run): string => $run['run_id'], $timedOutWaits),
             array_map(static fn (array $run): string => $run['run_id'], $childParents),

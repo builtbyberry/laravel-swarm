@@ -8,18 +8,19 @@ use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
 use BuiltByBerry\LaravelSwarm\Enums\DurableParallelFailurePolicy;
+use BuiltByBerry\LaravelSwarm\Runners\Durable\Concerns\RunsAfterOutermostCommit;
 use BuiltByBerry\LaravelSwarm\Support\SafeReporting;
 use Illuminate\Contracts\Container\Container;
 use Illuminate\Database\Connection;
-use Illuminate\Database\DatabaseTransactionRecord;
-use Illuminate\Database\DatabaseTransactionsManager;
 use RuntimeException;
 use Throwable;
 
 /**
- * Releases a run waiting at a branch boundary to its join, the one way the
- * successful join is reached: by the last branch to finish, by resume, and by a
- * wait closer (signal, wait timeout, child outcome) once it has committed.
+ * Releases a run waiting at a branch boundary to its join: for the last branch to
+ * finish, for resume, and for a wait closer (signal, wait timeout, child outcome)
+ * once it has committed. swarm:recover's waiting-join sweep is the one other path:
+ * it releases through the same store call but dispatches the join itself
+ * ({@see DurableRecoveryCoordinator::recover()}).
  *
  * The release itself is {@see DurableRunStore::releaseWaitingRunForJoin()}, which
  * refuses while the run has an open wait. A boundary whose `fail_run` policy already
@@ -31,6 +32,7 @@ use Throwable;
  */
 class DurableJoinRelease
 {
+    use RunsAfterOutermostCommit;
     use SafeReporting;
 
     public function __construct(
@@ -50,15 +52,16 @@ class DurableJoinRelease
      * was released.
      *
      * @param  array<string, mixed>  $run
+     * @param  array<int, array<string, mixed>>|null  $branches  the boundary's branch rows, when the caller already read them
      */
-    public function releaseIfReady(array $run): bool
+    public function releaseIfReady(array $run, ?array $branches = null): bool
     {
         if (($run['status'] ?? null) !== 'waiting' || ! is_string($run['current_node_id'] ?? null)) {
             return false;
         }
 
         $runId = (string) $run['run_id'];
-        $branches = $this->durableRuns->branchesFor($runId, $run['current_node_id']);
+        $branches ??= $this->durableRuns->branchesFor($runId, $run['current_node_id']);
 
         if (! $this->branches->branchesAreTerminal($branches) || $this->branchesOweFailure($runId, $branches)) {
             return false;
@@ -94,12 +97,7 @@ class DurableJoinRelease
      */
     public function releaseAfterCommit(string $runId): void
     {
-        $attempt = function () use ($runId): void {
-            // Re-checked when the callback fires: only ever release at level zero.
-            if ($this->connection->transactionLevel() !== 0) {
-                return;
-            }
-
+        $this->runAfterOutermostCommit(function () use ($runId): void {
             try {
                 $run = $this->durableRuns->find($runId);
 
@@ -112,30 +110,7 @@ class DurableJoinRelease
                     previous: $e,
                 ));
             }
-        };
-
-        if ($this->connection->transactionLevel() === 0) {
-            $attempt();
-
-            return;
-        }
-
-        $transactions = $this->container->bound('db.transactions') ? $this->container->make('db.transactions') : null;
-
-        if (! $transactions instanceof DatabaseTransactionsManager) {
-            return;
-        }
-
-        // Attach to the innermost pending transaction of the swarm connection (the same
-        // rule as DurableBranchAdmission::reconcileAfterCommit()).
-        $name = $this->connection->getName();
-        $pending = $transactions->getPendingTransactions()
-            ->filter(fn (DatabaseTransactionRecord $transaction): bool => $transaction->connection === $name);
-        $record = $pending->last();
-
-        if ($record instanceof DatabaseTransactionRecord && $pending->count() === $this->connection->transactionLevel()) {
-            $record->addCallback($attempt);
-        }
+        });
     }
 
     /**

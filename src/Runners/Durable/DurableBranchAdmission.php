@@ -9,12 +9,11 @@ use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableOutbox;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
+use BuiltByBerry\LaravelSwarm\Runners\Durable\Concerns\RunsAfterOutermostCommit;
 use BuiltByBerry\LaravelSwarm\Support\SafeReporting;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Container\Container;
 use Illuminate\Database\Connection;
-use Illuminate\Database\DatabaseTransactionRecord;
-use Illuminate\Database\DatabaseTransactionsManager;
 use RuntimeException;
 use Throwable;
 
@@ -45,6 +44,7 @@ use Throwable;
  */
 class DurableBranchAdmission
 {
+    use RunsAfterOutermostCommit;
     use SafeReporting;
 
     /** Runs per page of the recovery sweep over runs that hold branches. */
@@ -219,38 +219,7 @@ class DurableBranchAdmission
             return;
         }
 
-        $run = function () use ($runId): void {
-            // Re-checked when the callback fires: only ever reconcile at level zero.
-            if ($this->connection->transactionLevel() !== 0) {
-                return;
-            }
-
-            $this->reconcileReporting($runId);
-        };
-
-        if ($this->connection->transactionLevel() === 0) {
-            $run();
-
-            return;
-        }
-
-        $transactions = $this->container->bound('db.transactions') ? $this->container->make('db.transactions') : null;
-
-        if (! $transactions instanceof DatabaseTransactionsManager) {
-            return;
-        }
-
-        // Attach to the innermost pending transaction of the swarm connection, so a
-        // savepoint or outer rollback discards it — but only when the manager tracks
-        // every open transaction on this connection; otherwise leave it to recovery.
-        $name = $this->connection->getName();
-        $pending = $transactions->getPendingTransactions()
-            ->filter(fn (DatabaseTransactionRecord $transaction): bool => $transaction->connection === $name);
-        $record = $pending->last();
-
-        if ($record instanceof DatabaseTransactionRecord && $pending->count() === $this->connection->transactionLevel()) {
-            $record->addCallback($run);
-        }
+        $this->runAfterOutermostCommit(fn () => $this->reconcileReporting($runId));
     }
 
     /**

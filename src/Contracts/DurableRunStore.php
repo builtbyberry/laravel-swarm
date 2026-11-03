@@ -38,7 +38,8 @@ interface DurableRunStore
      * swarm's `child:<id>` wait: the join must not run past it. Decide from a locked read
      * of the run's open waits taken before the run row is written (the order the wait
      * releases use). Also returns false when the run is not waiting at `$nextStepIndex`.
-     * See docs/durable-waits-and-signals.md for how runs at a join are released.
+     * See docs/durable-execution.md#durable-hierarchical-parallel-flow for how runs at a
+     * join are released.
      */
     public function releaseWaitingRunForJoin(string $runId, int $nextStepIndex): bool;
 
@@ -164,6 +165,11 @@ interface DurableRunStore
     public function dueRetries(?string $runId = null, ?string $swarmClass = null, int $limit = 50): array;
 
     /**
+     * Runs waiting at a branch boundary whose branches are all terminal, idle past the
+     * grace window. A run with an open wait is held at its join, so it is excluded —
+     * before `$limit` applies, so held runs neither fill the sweep nor are reselected
+     * every pass.
+     *
      * @return array<int, array<string, mixed>>
      */
     public function recoverableWaitingJoins(?string $runId = null, ?string $swarmClass = null, int $limit = 50, int $graceSeconds = 300): array;
@@ -230,9 +236,19 @@ interface DurableRunStore
      */
     public function createWait(string $runId, string $name, ?string $reason = null, ?int $timeoutSeconds = null, array $metadata = []): void;
 
+    /**
+     * Close the named open wait with a signal. When it was the run's last open wait,
+     * a run waiting at a branch boundary (branch rows under its current node) stays
+     * `waiting` — its join is released through releaseWaitingRunForJoin() — and any
+     * other waiting run moves to `pending`. The same holds for
+     * releaseWaitWithOutcome() and releaseTimedOutWait().
+     */
     public function releaseWaitWithSignal(string $runId, string $name, int $signalId): bool;
 
     /**
+     * Close the named open wait with an outcome (a child swarm finishing), with the
+     * same last-wait rule as releaseWaitWithSignal().
+     *
      * @param  array<string, mixed>  $outcome
      */
     public function releaseWaitWithOutcome(string $runId, string $name, string $status, array $outcome): bool;
@@ -252,6 +268,10 @@ interface DurableRunStore
      */
     public function recoverableTimedOutWaits(?string $runId = null, ?string $swarmClass = null, int $limit = 50): array;
 
+    /**
+     * Close the named wait as timed out, with the same last-wait rule as
+     * releaseWaitWithSignal().
+     */
     public function releaseTimedOutWait(string $runId, string $name): bool;
 
     /**

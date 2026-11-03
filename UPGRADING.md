@@ -133,25 +133,27 @@ wait); the join runs once every wait is closed and every branch is done.
 
   Use your configured table names (`swarm.tables.durable_waits`,
   `swarm.tables.durable`, `swarm.tables.durable_branches`) if you changed them.
+  For one run, `php artisan swarm:inspect <run-id> --json` lists its waits and
+  their status.
 - **`fail_run` is unchanged:** a branch failure fails the parent at once even
   while a wait is open. If the worker that failed the branch dies before failing
   the parent, `swarm:recover` now fails the parent instead of releasing it to its
   join. With an open wait, that happens once the wait closes.
-- **History status.** After a signal is accepted while another wait is still
-  open, or while the run is still at its branch boundary, the run's history
-  status stays `waiting` instead of `pending`. Monitoring that keyed on `pending`
-  after a signal should read the durable run status instead.
+- **History status.** After a signal is accepted, a child swarm finishes, or a
+  wait times out while another wait is still open, or while the run is still at
+  its branch boundary, the run's history status stays `waiting` instead of
+  `pending`. Monitoring that keyed on `pending` after one of these should read
+  the durable run status instead.
 - **Custom `DurableRunStore` implementations**, and classes extending
   `DatabaseDurableRunStore` that override `releaseWaitingRunForJoin()`,
   `recoverableWaitingJoins()` or `syncRunWaitSummary()`, must follow the same
   rules or keep the old behaviour silently: `releaseWaitingRunForJoin()` refuses
   while the run has an open wait, deciding from a shared-lock read of its open
   waits taken before the run row is written; `recoverableWaitingJoins()` excludes
-  runs with an open wait; closing a run's last wait leaves it `waiting` when it has
-  branch rows under its current node. The immediate `fail_run` failure with an
-  open wait needs the bundled `DatabaseDurableRunStore`: another store fails the
-  parent through `swarm:recover` once the wait has closed, and only if it also
-  keeps the run `waiting` at its branch boundary when its last wait closes.
+  runs with an open wait before its limit; closing a run's last wait leaves it
+  `waiting` when it has branch rows under its current node. The durable manager
+  is built on `DatabaseDurableRunStore`, so wherever it runs a `fail_run` branch
+  failure fails the parent at once even with an open wait.
 - During a rolling deploy, workers still on the old code keep the old behaviour
   until they are replaced.
 
