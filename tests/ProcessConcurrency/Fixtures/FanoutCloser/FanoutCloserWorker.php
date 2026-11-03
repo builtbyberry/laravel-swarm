@@ -6,7 +6,6 @@ namespace BuiltByBerry\LaravelSwarm\Tests\ProcessConcurrency\Fixtures\FanoutClos
 
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
-use BuiltByBerry\LaravelSwarm\Tests\ProcessConcurrency\Fixtures\ResumeOpenWait\LockBarrier;
 use BuiltByBerry\LaravelSwarm\Tests\ProcessConcurrency\Fixtures\ResumeOpenWait\ResumeOpenWaitWorker;
 use Illuminate\Support\Facades\DB;
 
@@ -26,22 +25,6 @@ final class FanoutCloserWorker
         app()->forgetInstance(DurableSwarmManager::class);
 
         return $store;
-    }
-
-    /**
-     * Marks the closer's first ask for the run row — the run lock helper, or
-     * syncRunWaitSummary() when that comes first — with this worker's connection id.
-     */
-    public static function markRunLock(HookedFanoutCloserDurableRunStore $store, string $dir): void
-    {
-        $me = (string) LockBarrier::connectionId();
-        $mark = static function () use ($dir, $me): void {
-            if (! is_file($dir.'/closer-at-run-lock')) {
-                LockBarrier::signal($dir, 'closer-at-run-lock', $me);
-            }
-        };
-        $store->beforeRunLock = $mark;
-        $store->beforeSync = $mark;
     }
 
     /**

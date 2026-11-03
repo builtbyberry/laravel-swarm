@@ -169,7 +169,7 @@ function fanoutCloserHoldingFanOut(string $runId, string $token, array $branches
         $locks = null;
         $store->beforeBranchInsert = static function () use ($dir, $me, &$contended, &$waitingOn, &$locks): void {
             LockBarrier::signal($dir, 'fanout-holds', (string) $me);
-            $closer = (int) LockBarrier::await($dir, 'closer-at-run-lock');
+            $closer = (int) LockBarrier::await($dir, 'closer-started');
             $contended = LockBarrier::awaitBlockedBy($closer, $me);
             $waitingOn = $contended ? FanoutCloserWorker::waitingOn($closer) : null;
             $locks = $contended ? null : LockBarrier::lockWaitSnapshot();
@@ -199,9 +199,14 @@ function fanoutCloserHoldingFanOut(string $runId, string $token, array $branches
 function fanoutCloserCloser(string $dir, string $after, Closure $close): Closure
 {
     return static function () use ($dir, $after, $close): array {
-        $store = FanoutCloserWorker::bootHooked();
-        FanoutCloserWorker::markRunLock($store, $dir);
+        FanoutCloserWorker::bootHooked();
         LockBarrier::await($dir, $after);
+        // Marked as the close starts, not at the run lock: where a closer first waits on
+        // the fan-out depends on the engine. On MySQL 8 its wait-row UPDATE already waits
+        // for the run row (the foreign-key check on the index it rewrites); on MySQL 9 and
+        // Postgres it first waits at its own run lock. Either way the fan-out must then
+        // observe it blocked, on the runs table.
+        LockBarrier::signal($dir, 'closer-started', (string) LockBarrier::connectionId());
 
         try {
             $result = $close();
@@ -358,7 +363,7 @@ function fanoutCloserCallerFanOut(string $runId, int $step, string $dir): Closur
         }
         $store->beforeWaitForBranches = static function () use ($dir, $me, &$closerBlocked): void {
             LockBarrier::signal($dir, 'fanout-at-entry', (string) $me);
-            $closer = (int) LockBarrier::await($dir, 'closer-at-run-lock');
+            $closer = (int) LockBarrier::await($dir, 'closer-started');
             $deadline = microtime(true) + 15.0;
 
             while (microtime(true) < $deadline) {
