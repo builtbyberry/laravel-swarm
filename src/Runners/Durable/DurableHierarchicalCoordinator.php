@@ -84,9 +84,9 @@ class DurableHierarchicalCoordinator
         $branches = array_map(fn (array $branch): array => $this->branches->withBranchRouting($swarm, $context, $branch, $run), $result->branches);
 
         $this->connection->transaction(function () use ($run, $token, $nextStepIndex, $context, $stepLeaseSeconds, $result, $branches, $withTransaction): void {
-            // waitForBranches() first: it takes the run row before the context, and the
-            // history row is written after it, so a wait closing at this moment (run row,
-            // context, then history) cannot deadlock with this fan-out.
+            // waitForBranches() first, and the history row after it: nothing the wait
+            // closers write may be written before it in this transaction (the lock-order
+            // rule on DurableRunStore::waitForBranches()).
             $this->durableRuns->waitForBranches($run['run_id'], new BranchWaitPayload(
                 executionToken: $token,
                 nextStepIndex: $nextStepIndex,

@@ -175,16 +175,24 @@ extends the durable store:
   `DurableRunStore` without the interface keeps the earlier behaviour: the signal
   is recorded first, and if its acceptance fails the same idempotency key is a
   duplicate. A decorating store keeps atomic acceptance only if it implements the
-  interface and forwards `acceptSignal()`. Subclasses of `DatabaseDurableRunStore`
+  interface and forwards `acceptSignal()` and `signalForIdempotencyKey()`. Subclasses of `DatabaseDurableRunStore`
   inherit it. `acceptSignal()` calls your `recordSignal()` and
   `syncRunWaitSummary()`, but it closes the wait itself: an override of
   `releaseWaitWithSignal()` no longer runs when a signal is accepted, so move that
   logic into an `acceptSignal()` override.
-- During a rolling deploy, a worker on the old code and one on the new code
-  accepting signals for two different waits of one run with the same idempotency
-  key can deadlock (one side is rolled back, and with the new code a failed
-  acceptance can be sent again). Replace workers together if your application
-  reuses idempotency keys across wait names.
+- **Signals already stranded stay stranded.** A signal whose acceptance failed
+  before you upgrade is still recorded under its idempotency key, and its wait is
+  still open: sending the same key again still returns a duplicate. Send it again
+  with a new idempotency key, or let the wait time out (`swarm:recover`).
+- **During a rolling deploy** both failures this fixes can still happen until
+  every worker runs the new code: a fan-out on an old worker takes the context and
+  history rows before the run row and can deadlock with a wait closer, and a
+  signal accepted on an old worker is recorded before its acceptance, so if that
+  acceptance fails its key is a duplicate. A deadlocked signal is sent again (with
+  a new key if it was accepted by an old worker); a timed-out wait is closed by the
+  next `swarm:recover` sweep. An old and a new worker accepting signals for two
+  different waits of one run with the same idempotency key can also deadlock.
+  Replace all workers together to avoid these.
 
 ## Upgrading to v0.28.1
 

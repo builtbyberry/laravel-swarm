@@ -1926,6 +1926,13 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
         return array_merge($this->mapSignal($record), ['duplicate' => false]);
     }
 
+    /**
+     * Records the signal inside the acceptance transaction (see AcceptsDurableSignals). It
+     * closes the wait itself, with the same writes releaseWaitWithSignal() makes, and does
+     * not call that method: a subclass that overrides releaseWaitWithSignal() must also
+     * override this to keep its behaviour when a signal is accepted. It does call
+     * recordSignal() and syncRunWaitSummary().
+     */
     public function acceptSignal(string $runId, string $name, mixed $payload, ?string $idempotencyKey): ?array
     {
         try {
@@ -1938,18 +1945,7 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
                 // releaseWaitWithSignal(). Locking it first and moving it out of `waiting`
                 // later deadlocks on MySQL with a closer of another wait of the run: that
                 // closer's lock request waits in the index gap this move must insert into.
-                $closed = $this->waitTable()
-                    ->where('run_id', $runId)
-                    ->where('name', $name)
-                    ->where('status', 'waiting')
-                    ->update([
-                        'status' => 'signalled',
-                        'outcome' => $this->encodeJson(['status' => 'signalled', 'timed_out' => false]),
-                        'finished_at' => $timestamp,
-                        'updated_at' => $timestamp,
-                    ]);
-
-                if ($closed !== 1) {
+                if ($this->closeWaitAsSignalled($runId, $name, null, $timestamp) !== 1) {
                     throw new DurableSignalNotAccepted(null);
                 }
 
@@ -1966,11 +1962,10 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
                     throw new DurableSignalNotAccepted($signal);
                 }
 
-                $this->signalTable()->where('id', $signal['id'])->update([
-                    'status' => 'consumed',
-                    'consumed_at' => $timestamp,
-                    'updated_at' => $timestamp,
-                ]);
+                $this->consumeSignal((int) $signal['id'], $timestamp);
+                // The wait closed above is the run's only signalled wait of this name with
+                // no signal: every other path closes a wait as signalled with its signal_id
+                // already set (releaseWaitWithSignal()), and this transaction holds its row.
                 $this->waitTable()
                     ->where('run_id', $runId)
                     ->where('name', $name)
@@ -1980,11 +1975,24 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
 
                 $this->syncRunWaitSummary($runId, $timestamp);
 
-                return array_merge($signal, ['released' => true]);
+                return array_merge($signal, ['id' => (int) $signal['id'], 'duplicate' => false, 'released' => true]);
             });
         } catch (DurableSignalNotAccepted $notAccepted) {
-            return $notAccepted->signal === null ? null : array_merge($notAccepted->signal, ['released' => false]);
+            return $notAccepted->signal === null
+                ? null
+                : array_merge($notAccepted->signal, ['id' => (int) $notAccepted->signal['id'], 'duplicate' => true, 'released' => false]);
         }
+    }
+
+    public function signalForIdempotencyKey(string $runId, string $idempotencyKey): ?array
+    {
+        /** @var object|null $record */
+        $record = $this->signalTable()
+            ->where('run_id', $runId)
+            ->where('idempotency_key', $idempotencyKey)
+            ->first();
+
+        return $record !== null ? $this->mapSignal($record) : null;
     }
 
     public function signals(string $runId): array
@@ -2026,32 +2034,44 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
         $timestamp = Carbon::now('UTC');
 
         return $this->connection->transaction(function () use ($runId, $name, $signalId, $timestamp): bool {
-            $updated = $this->waitTable()
-                ->where('run_id', $runId)
-                ->where('name', $name)
-                ->where('status', 'waiting')
-                ->update([
-                    'status' => 'signalled',
-                    'signal_id' => $signalId,
-                    'outcome' => $this->encodeJson(['status' => 'signalled', 'timed_out' => false]),
-                    'finished_at' => $timestamp,
-                    'updated_at' => $timestamp,
-                ]);
-
-            if ($updated !== 1) {
+            if ($this->closeWaitAsSignalled($runId, $name, $signalId, $timestamp) !== 1) {
                 return false;
             }
 
-            $this->signalTable()->where('id', $signalId)->update([
-                'status' => 'consumed',
-                'consumed_at' => $timestamp,
-                'updated_at' => $timestamp,
-            ]);
-
+            $this->consumeSignal($signalId, $timestamp);
             $this->syncRunWaitSummary($runId, $timestamp);
 
             return true;
         });
+    }
+
+    /**
+     * Close the run's open wait of this name as signalled, linked to $signalId (or, before
+     * the signal is recorded, to none yet) — the UPDATE that takes the wait row's lock.
+     * Returns the number of waits closed.
+     */
+    protected function closeWaitAsSignalled(string $runId, string $name, ?int $signalId, Carbon $timestamp): int
+    {
+        return $this->waitTable()
+            ->where('run_id', $runId)
+            ->where('name', $name)
+            ->where('status', 'waiting')
+            ->update([
+                'status' => 'signalled',
+                'signal_id' => $signalId,
+                'outcome' => $this->encodeJson(['status' => 'signalled', 'timed_out' => false]),
+                'finished_at' => $timestamp,
+                'updated_at' => $timestamp,
+            ]);
+    }
+
+    protected function consumeSignal(int $signalId, Carbon $timestamp): void
+    {
+        $this->signalTable()->where('id', $signalId)->update([
+            'status' => 'consumed',
+            'consumed_at' => $timestamp,
+            'updated_at' => $timestamp,
+        ]);
     }
 
     public function waits(string $runId): array
@@ -2618,6 +2638,11 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
      * insert, a signal row, a new wait) are not blocked by it; FOR UPDATE elsewhere. No
      * branch row is locked with it: a branch worker can hold one while it waits on this
      * run row.
+     *
+     * On MySQL, FOR UPDATE does block those foreign-key checks, and waitForBranches() takes
+     * it as its first statement, so for the length of one fan-out an insert that refers to
+     * that run waits. It is one run's rows for one short transaction, and it is what keeps
+     * the fan-out and the wait closers in one lock order.
      */
     protected function lockRunRow(string $runId): ?object
     {
@@ -2634,8 +2659,7 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
     protected function syncRunWaitSummary(string $runId, Carbon $timestamp): void
     {
         // The run row is locked before anything else is read. Every caller has already
-        // written (or, accepting a signal, locked) its wait row, so the order is wait row,
-        // then run row, as everywhere. A fan-out (waitForBranches) takes the run row as its
+        // written its wait row, so the order is wait row, then run row, as everywhere. A fan-out (waitForBranches) takes the run row as its
         // first statement and holds it until it commits, so this waits for one in flight.
         // No closer makes an ordinary read in its transaction before it holds the run row:
         // the timeout and child closers reach this point first, and a signal's acceptance

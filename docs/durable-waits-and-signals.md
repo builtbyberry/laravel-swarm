@@ -216,7 +216,9 @@ clicks do not duplicate the same signal.
 A signal that releases a wait is recorded in the same transaction that releases
 it. If that transaction fails — a lock timeout, a deadlock, a crash before it
 commits — nothing of the signal is kept, and sending it again with the same
-idempotency key accepts it once. That also holds when you send the signal inside
+idempotency key accepts it once. Such a failure reaches you only as the exception
+`signal()` throws: no signal row, `SwarmSignalled` event or `signal.received`
+audit record is left for it, so log the failure and send the signal again. That also holds when you send the signal inside
 your own database transaction, and you catch the failure and commit. A signal
 sent when no wait of that name is open, or while the run is paused, is recorded
 without being accepted, and sending the same key again returns it as a

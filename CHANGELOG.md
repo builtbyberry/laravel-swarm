@@ -88,6 +88,14 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   barriers, compaction and the cold archive are unchanged. See
   [Batched causal-log writes](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-execution.md#batched-causal-log-writes).
 
+- **`Contracts\AcceptsDurableSignals`, an optional durable store capability
+  (#611).** A store that implements it records a signal in the transaction that
+  accepts it (`acceptSignal()`) and answers a repeated idempotency key without a
+  lock (`signalForIdempotencyKey()`). `DatabaseDurableRunStore` implements it; a
+  custom or decorating store that does not keeps the earlier behaviour. See the
+  fix below and
+  [UPGRADING](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#a-wait-closing-while-its-run-fans-out).
+
 ### Changed
 
 - **BREAKING for custom `DurableOutbox` implementations.**
@@ -220,7 +228,10 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   moment locked the run and context rows in the opposite order to the fan-out
   (and, for top-level parallel and step-durable hierarchical fan-outs, the history
   row too). MySQL or Postgres then aborted one side with a deadlock. The fan-out
-  now locks the run row before anything else, so the closer waits for it.
+  now locks the run row before anything else, so the closer waits for it. A custom
+  `DurableRunStore`, or code that calls `waitForBranches()` inside its own
+  transaction, must follow the same order: see
+  [UPGRADING](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#a-wait-closing-while-its-run-fans-out).
 - **A signal whose acceptance fails can be sent again (#611).** The signal row
   was recorded before the transaction that accepts it, so when that transaction
   failed (a deadlock, a lock timeout, a crash) the signal stayed recorded and

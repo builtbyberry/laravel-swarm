@@ -18,7 +18,9 @@ interface AcceptsDurableSignals
 {
     /**
      * Close the named open wait with a new signal, and record the signal, in one
-     * transaction. Called inside the acceptance transaction.
+     * transaction. Called inside the acceptance transaction, and must write on the same
+     * database connection as it, which also publishes the outcome to the context and
+     * history: the atomicity holds only because one transaction covers all of it.
      *
      * Closes the wait with the UPDATE that takes its row lock, then locks the run row,
      * then records the signal (recordSignal()) and links it to the wait: the order every
@@ -31,7 +33,16 @@ interface AcceptsDurableSignals
      * `released`: true when the wait was closed with it; false for a duplicate
      * idempotency key, which closes nothing and writes nothing.
      *
-     * @return array<string, mixed>|null
+     * @return array{id: int, duplicate: bool, released: bool, ...<string, mixed>}|null
      */
     public function acceptSignal(string $runId, string $name, mixed $payload, ?string $idempotencyKey): ?array;
+
+    /**
+     * The run's signal recorded under this idempotency key, as recordSignal() maps it, or
+     * null. A plain read with no lock: callers use it to answer a repeated key without
+     * locking anything, outside any transaction, and leave the decision to acceptSignal().
+     *
+     * @return array<string, mixed>|null
+     */
+    public function signalForIdempotencyKey(string $runId, string $idempotencyKey): ?array;
 }

@@ -151,7 +151,7 @@ function signalAbortHoldingSender(string $runId, string $dir): Closure
                     return;
                 }
 
-                if (is_file($dir.'/closer-at-run-lock') && LockBarrier::isBlockedBy((int) file_get_contents($dir.'/closer-at-run-lock'), $me)) {
+                if (is_file($dir.'/second-started') && LockBarrier::isBlockedBy((int) file_get_contents($dir.'/second-started'), $me)) {
                     $contended = true;
 
                     return;
@@ -171,9 +171,10 @@ function signalAbortSecondSender(string $runId, string $dir): Closure
     return static function () use ($runId, $dir): array {
         FanoutCloserWorker::bootHooked();
         LockBarrier::await($dir, 'first-holds');
-        // Where it blocks depends on the engine: on MySQL at its wait lock (a locking read
-        // by run locks every wait row it scans), on Postgres at the run row.
-        LockBarrier::signal($dir, 'closer-at-run-lock', (string) LockBarrier::connectionId());
+        // Marked before the send starts, not at a lock: its acceptance closes wait `b` with
+        // an UPDATE and then asks for the run row, and on MySQL that UPDATE's scan of the
+        // run's waits can already wait on the first sender's rows.
+        LockBarrier::signal($dir, 'second-started', (string) LockBarrier::connectionId());
 
         try {
             $result = app(DurableSwarmManager::class)->signal($runId, 'b', ['wait' => 'b'], 'shared-key');
@@ -229,6 +230,48 @@ function signalAbortPairedSender(string $runId, string $wait, string $me, string
         }
 
         return ['outcome' => $result->accepted ? 'accepted' : 'refused', 'paired' => $paired];
+    };
+}
+
+/**
+ * Holds the run row write-locked until the other worker has finished its send.
+ */
+function signalAbortHoldingRun(string $runId, string $dir): Closure
+{
+    return static function () use ($runId, $dir): array {
+        FanoutCloserWorker::bootHooked();
+        DB::beginTransaction();
+        DB::table('swarm_durable_runs')->where('run_id', $runId)->lockForUpdate()->first();
+        LockBarrier::signal($dir, 'run-held');
+        LockBarrier::await($dir, 'repeat-done', 60.0);
+        DB::rollBack();
+
+        return ['outcome' => 'released'];
+    };
+}
+
+/**
+ * Sends a key already recorded for the run, under a one-second lock timeout, while the
+ * run row is held by the other worker.
+ */
+function signalAbortRepeatSender(string $runId, string $dir): Closure
+{
+    return static function () use ($runId, $dir): array {
+        FanoutCloserWorker::bootHooked();
+        DB::statement(DB::connection()->getDriverName() === 'pgsql'
+            ? "set lock_timeout = '1s'"
+            : 'set session innodb_lock_wait_timeout = 1');
+        LockBarrier::await($dir, 'run-held');
+
+        try {
+            $result = app(DurableSwarmManager::class)->signal($runId, 'second', ['approved' => true], 'key-1');
+
+            return ['outcome' => 'returned', 'duplicate' => $result->duplicate, 'accepted' => $result->accepted];
+        } catch (Throwable $e) {
+            return ['outcome' => 'aborted', 'failure' => LockBarrier::failure($e)];
+        } finally {
+            LockBarrier::signal($dir, 'repeat-done');
+        }
     };
 }
 
@@ -344,9 +387,31 @@ test('two signals closing two waits of one run at once are both accepted without
         signalAbortPairedSender($runId, 'b', 'second', 'first', $dir),
     ]);
 
+    // The handshake must have seen both acceptances in flight, or one blocked on the
+    // other: a timed-out handshake (null) means the race was not exercised.
     expect($first['outcome'])->toBe('accepted', json_encode([$first, $second]))
         ->and($second['outcome'])->toBe('accepted', json_encode([$first, $second]))
+        ->and([$first['paired'], $second['paired']])->each->toBeIn(['both-in-flight', 'other-blocked'])
         ->and(DB::table('swarm_durable_signals')->where('run_id', $runId)->where('status', 'consumed')->count())->toBe(2)
         ->and(DB::table('swarm_durable_waits')->where('run_id', $runId)->where('status', 'signalled')->count())->toBe(2)
         ->and(DB::table('swarm_durable_runs')->where('run_id', $runId)->value('status'))->toBe('pending');
+});
+
+test('a repeated idempotency key is answered as a duplicate without waiting on the run row', function (): void {
+    // A webhook's retries of a signal already accepted must not each lock the run: the
+    // repeat is answered from the recorded key before any acceptance is attempted.
+    $runId = FakeSequentialSwarm::make()->dispatchDurable('repeat-key-task')->runId;
+    app(DurableSwarmManager::class)->wait($runId, 'approval');
+    app(DurableSwarmManager::class)->signal($runId, 'approval', ['approved' => true], 'key-1');
+    app(DurableSwarmManager::class)->wait($runId, 'second');
+    $dir = signalAbortDir();
+
+    [, $repeat] = $this->app->make(ConcurrencyManager::class)->driver('process')->run([
+        signalAbortHoldingRun($runId, $dir),
+        signalAbortRepeatSender($runId, $dir),
+    ]);
+
+    expect($repeat)->toBe(['outcome' => 'returned', 'duplicate' => true, 'accepted' => false], json_encode($repeat))
+        ->and(DB::table('swarm_durable_signals')->where('run_id', $runId)->count())->toBe(1)
+        ->and(DB::table('swarm_durable_waits')->where('run_id', $runId)->where('name', 'second')->value('status'))->toBe('waiting');
 });

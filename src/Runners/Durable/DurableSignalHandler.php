@@ -12,10 +12,13 @@ use BuiltByBerry\LaravelSwarm\Events\SwarmSignalled;
 use BuiltByBerry\LaravelSwarm\Events\SwarmWaiting;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\DurableSignalResult;
+use BuiltByBerry\LaravelSwarm\Support\ApplicationTransactionBoundary;
+use BuiltByBerry\LaravelSwarm\Support\SafeReporting;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use Closure;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Database\Connection;
+use Psr\Log\LoggerInterface;
 use Throwable;
 
 /**
@@ -23,6 +26,8 @@ use Throwable;
  */
 class DurableSignalHandler
 {
+    use SafeReporting;
+
     public function __construct(
         protected DurableRunStore $durableRuns,
         protected DatabaseRunHistoryStore $historyStore,
@@ -35,57 +40,17 @@ class DurableSignalHandler
         protected Connection $connection,
         protected DurableEagerDispatcher $eager,
         protected DurableJoinRelease $joinRelease,
+        protected LoggerInterface $logger,
     ) {}
 
     public function signal(string $runId, string $name, mixed $payload = null, ?string $idempotencyKey = null): DurableSignalResult
     {
         $run = $this->runs->requireRun($runId);
         $capturedPayload = $this->payloads->payload($payload);
-        $signal = null;
-        $accepted = false;
 
-        if ($run['status'] === 'waiting' && $this->durableRuns instanceof AcceptsDurableSignals) {
-            // The signal row is written inside the acceptance transaction, after the wait
-            // and run rows are locked: an acceptance that aborts leaves no signal behind,
-            // so the same idempotency key is accepted when it is sent again.
-            $store = $this->durableRuns;
-            [$signal, $accepted] = $this->withinAcceptanceBoundary(fn (): array => $this->connection->transaction(function () use ($store, $runId, $name, $capturedPayload, $idempotencyKey): array {
-                $signal = $store->acceptSignal($runId, $name, $capturedPayload, $idempotencyKey);
-
-                if ($signal === null) {
-                    return [null, false];
-                }
-
-                $released = ($signal['released'] ?? false) === true;
-                unset($signal['released']);
-
-                if ($released) {
-                    $this->publishAcceptance($runId, $name, (int) $signal['id'], $capturedPayload);
-                }
-
-                return [$signal, $released];
-            }));
-        }
-
-        if ($signal === null) {
-            // No open wait of this name, a run that is not waiting, or a store without
-            // atomic acceptance: the signal is recorded on its own. With such a store the
-            // acceptance follows in its own transaction, and an acceptance that aborts
-            // leaves the recorded signal behind (see AcceptsDurableSignals).
-            $signal = $this->durableRuns->recordSignal($runId, $name, $capturedPayload, $idempotencyKey);
-
-            if (! $this->durableRuns instanceof AcceptsDurableSignals && ($signal['duplicate'] ?? false) !== true && $run['status'] === 'waiting') {
-                $accepted = $this->withinAcceptanceBoundary(fn (): bool => $this->connection->transaction(function () use ($runId, $name, $signal, $capturedPayload): bool {
-                    if (! $this->durableRuns->releaseWaitWithSignal($runId, $name, (int) $signal['id'])) {
-                        return false;
-                    }
-
-                    $this->publishAcceptance($runId, $name, (int) $signal['id'], $capturedPayload);
-
-                    return true;
-                }));
-            }
-        }
+        [$signal, $accepted] = $this->durableRuns instanceof AcceptsDurableSignals
+            ? $this->acceptAtomically($this->durableRuns, $run, $runId, $name, $capturedPayload, $idempotencyKey)
+            : $this->recordThenAccept($run, $runId, $name, $capturedPayload, $idempotencyKey);
 
         $this->events->dispatch(new SwarmSignalled(
             runId: $runId,
@@ -118,6 +83,104 @@ class DurableSignalHandler
     }
 
     /**
+     * A store that records the signal in its acceptance transaction: an acceptance that
+     * aborts leaves no signal behind, so the same idempotency key is accepted when it is
+     * sent again.
+     *
+     * @param  array<string, mixed>  $run
+     * @return array{0: array<string, mixed>, 1: bool}
+     */
+    protected function acceptAtomically(AcceptsDurableSignals $store, array $run, string $runId, string $name, mixed $capturedPayload, ?string $idempotencyKey): array
+    {
+        if ($run['status'] === 'waiting') {
+            // A key already recorded is answered without taking a lock — a webhook's
+            // retries would otherwise each lock the wait and run rows — but only outside an
+            // application transaction: inside one this read would fix MySQL's snapshot
+            // before the acceptance locks the run row. The acceptance's own check, under
+            // the run lock, stays the one that decides.
+            if ($idempotencyKey !== null && $this->connection->transactionLevel() === 0) {
+                $existing = $store->signalForIdempotencyKey($runId, $idempotencyKey);
+
+                if ($existing !== null) {
+                    return [array_merge($existing, ['duplicate' => true]), false];
+                }
+            }
+
+            $accepted = ApplicationTransactionBoundary::run(
+                $this->connection,
+                fn (): ?array => $this->connection->transaction(function () use ($store, $runId, $name, $capturedPayload, $idempotencyKey): ?array {
+                    $signal = $store->acceptSignal($runId, $name, $capturedPayload, $idempotencyKey);
+
+                    if ($signal !== null && $signal['released']) {
+                        $this->publishAcceptance($runId, $name, $signal['id'], $capturedPayload);
+                    }
+
+                    return $signal;
+                }),
+                $this->reportRollbackFailure($runId, $name),
+            );
+
+            if ($accepted !== null) {
+                $released = $accepted['released'];
+                unset($accepted['released']);
+
+                return [$accepted, $released];
+            }
+        }
+
+        // No open wait of this name, or a run that is not waiting: recorded, not accepted.
+        return [$this->durableRuns->recordSignal($runId, $name, $capturedPayload, $idempotencyKey), false];
+    }
+
+    /**
+     * A store without atomic acceptance: the signal is recorded first and accepted in its
+     * own transaction, so an acceptance that aborts leaves the recorded signal behind and
+     * the same idempotency key is then a duplicate (see AcceptsDurableSignals).
+     *
+     * @param  array<string, mixed>  $run
+     * @return array{0: array<string, mixed>, 1: bool}
+     */
+    protected function recordThenAccept(array $run, string $runId, string $name, mixed $capturedPayload, ?string $idempotencyKey): array
+    {
+        $signal = $this->durableRuns->recordSignal($runId, $name, $capturedPayload, $idempotencyKey);
+
+        if (($signal['duplicate'] ?? false) === true || $run['status'] !== 'waiting') {
+            return [$signal, false];
+        }
+
+        $accepted = ApplicationTransactionBoundary::run(
+            $this->connection,
+            fn (): bool => $this->connection->transaction(function () use ($runId, $name, $signal, $capturedPayload): bool {
+                if (! $this->durableRuns->releaseWaitWithSignal($runId, $name, (int) $signal['id'])) {
+                    return false;
+                }
+
+                $this->publishAcceptance($runId, $name, (int) $signal['id'], $capturedPayload);
+
+                return true;
+            }),
+            $this->reportRollbackFailure($runId, $name),
+        );
+
+        return [$signal, $accepted];
+    }
+
+    /**
+     * @return Closure(Throwable): void
+     */
+    protected function reportRollbackFailure(string $runId, string $name): Closure
+    {
+        return function (Throwable $rollbackFailure) use ($runId, $name): void {
+            $this->safeLog($this->logger, 'warning', 'laravel-swarm: could not roll a failed durable signal acceptance back to its savepoint inside the application transaction; do not commit that transaction.', [
+                'run_id' => $runId,
+                'signal_name' => $name,
+                'exception' => $rollbackFailure::class,
+                'message' => $rollbackFailure->getMessage(),
+            ]);
+        };
+    }
+
+    /**
      * Publish an accepted signal to the context and history and move the run on. Runs
      * inside the acceptance transaction.
      */
@@ -146,50 +209,6 @@ class DurableSignalHandler
             // Never inside this transaction: the join release locks the run's other
             // open waits, and this transaction already holds the run row.
             $this->joinRelease->releaseAfterCommit($runId);
-        }
-    }
-
-    /**
-     * Run the acceptance so that, when it fails inside an application transaction, its
-     * writes are undone and the application's transaction stays usable.
-     *
-     * Laravel rolls a nested transaction back to its savepoint on most errors, but on a
-     * concurrency error (a deadlock, a MySQL lock-wait timeout) it rethrows without
-     * rolling back, on the premise that the database has aborted the whole transaction.
-     * A lock-wait timeout aborts only the statement, so an application that caught the
-     * exception and committed would commit a half-done acceptance — a closed wait and a
-     * consumed signal with no published outcome — and the same idempotency key would then
-     * be a duplicate. Rolling back to a savepoint taken here undoes it. After a real
-     * deadlock MySQL has already rolled the whole transaction back and the savepoint is
-     * gone; that rollback's own failure is ignored and the original error rethrown.
-     *
-     * @template TResult
-     *
-     * @param  Closure(): TResult  $acceptance
-     * @return TResult
-     */
-    protected function withinAcceptanceBoundary(Closure $acceptance): mixed
-    {
-        if ($this->connection->transactionLevel() === 0) {
-            return $acceptance();
-        }
-
-        // Issued on the PDO, as Laravel issues its own savepoints, and outside its
-        // transaction counter: the acceptance's own transaction() nests inside it.
-        $grammar = $this->connection->getQueryGrammar();
-        $savepoint = 'swarm_signal_acceptance_'.bin2hex(random_bytes(6));
-        $this->connection->getPdo()->exec($grammar->compileSavepoint($savepoint));
-
-        try {
-            return $acceptance();
-        } catch (Throwable $exception) {
-            try {
-                $this->connection->getPdo()->exec($grammar->compileSavepointRollBack($savepoint));
-            } catch (Throwable) {
-                // The transaction is already gone (a deadlock rolled it back).
-            }
-
-            throw $exception;
         }
     }
 

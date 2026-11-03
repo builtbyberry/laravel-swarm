@@ -108,17 +108,23 @@ test('an acceptance that aborts after closing the wait leaves no signal row, and
 });
 
 test('an acceptance that aborts inside an application transaction the application rolls back leaves no signal row', function (): void {
+    // A regression guard rather than a failing-first test: the application's rollback
+    // removes a signal row recorded inside its transaction either way.
     $runId = signalAtomicityWaitingRun();
     $handler = signalAtomicityHandler(['contextStore' => signalAtomicityFailingContextStore()]);
+    $caught = null;
 
     DB::beginTransaction();
 
     try {
         $handler->signal($runId, 'approval', ['approved' => true], 'key-1');
-    } catch (RuntimeException) {
+    } catch (RuntimeException $e) {
+        $caught = $e;
     }
 
     DB::rollBack();
+
+    expect($caught?->getMessage())->toBe('context write failed');
 
     signalAtomicityAssertUntouched($runId);
     signalAtomicityAssertAcceptedOnce($runId);
@@ -129,17 +135,21 @@ test('an acceptance that aborts inside an application transaction the applicatio
     $otherRunId = FakeSequentialSwarm::make()->dispatchDurable('unrelated-task')->runId;
     $handler = signalAtomicityHandler(['contextStore' => signalAtomicityFailingContextStore()]);
 
+    $caught = null;
+
     DB::beginTransaction();
     app(DurableSwarmManager::class)->updateDetails($otherRunId, ['written' => 'by-the-application']);
 
     try {
         $handler->signal($runId, 'approval', ['approved' => true], 'key-1');
-    } catch (RuntimeException) {
+    } catch (RuntimeException $e) {
+        $caught = $e;
     }
 
     DB::commit();
 
-    expect(DB::transactionLevel())->toBe(0)
+    expect($caught?->getMessage())->toBe('context write failed')
+        ->and(DB::transactionLevel())->toBe(0)
         ->and(app(DurableSwarmManager::class)->inspect($otherRunId)->details)->toBe(['written' => 'by-the-application']);
     signalAtomicityAssertUntouched($runId);
     signalAtomicityAssertAcceptedOnce($runId);
@@ -200,4 +210,40 @@ test('a store without the atomic acceptance capability keeps recording the signa
         ->and($resent->duplicate)->toBeTrue()
         ->and($resent->accepted)->toBeFalse()
         ->and(DB::table('swarm_durable_waits')->where('run_id', $runId)->value('status'))->toBe('waiting');
+});
+
+test('a signal for a wait that is not open, while the run waits on another, is recorded without touching the open wait', function (): void {
+    $runId = signalAtomicityWaitingRun();
+
+    $early = app(DurableSwarmManager::class)->signal($runId, 'legal', ['cleared' => true], 'legal-key');
+
+    expect($early->accepted)->toBeFalse()
+        ->and($early->duplicate)->toBeFalse()
+        ->and($early->status)->toBe('recorded')
+        ->and(DB::table('swarm_durable_signals')->where('run_id', $runId)->value('status'))->toBe('recorded')
+        ->and(DB::table('swarm_durable_waits')->where('run_id', $runId)->where('name', 'approval')->value('status'))->toBe('waiting')
+        ->and(DB::table('swarm_durable_runs')->where('run_id', $runId)->value('status'))->toBe('waiting');
+
+    app(DurableSwarmManager::class)->wait($runId, 'legal');
+    $resent = app(DurableSwarmManager::class)->signal($runId, 'legal', ['cleared' => true], 'legal-key');
+
+    expect($resent->accepted)->toBeFalse()
+        ->and($resent->duplicate)->toBeTrue()
+        ->and(DB::table('swarm_durable_signals')->where('run_id', $runId)->count())->toBe(1)
+        ->and(DB::table('swarm_durable_waits')->where('run_id', $runId)->where('name', 'legal')->value('status'))->toBe('waiting');
+});
+
+test('inside an application transaction a repeated key is still a duplicate, decided under the run lock', function (): void {
+    $runId = signalAtomicityWaitingRun();
+    app(DurableSwarmManager::class)->signal($runId, 'approval', ['approved' => true], 'key-1');
+    app(DurableSwarmManager::class)->wait($runId, 'second');
+
+    DB::beginTransaction();
+    $repeat = app(DurableSwarmManager::class)->signal($runId, 'second', ['approved' => true], 'key-1');
+    DB::commit();
+
+    expect($repeat->accepted)->toBeFalse()
+        ->and($repeat->duplicate)->toBeTrue()
+        ->and(DB::table('swarm_durable_signals')->where('run_id', $runId)->count())->toBe(1)
+        ->and(DB::table('swarm_durable_waits')->where('run_id', $runId)->where('name', 'second')->value('status'))->toBe('waiting');
 });
