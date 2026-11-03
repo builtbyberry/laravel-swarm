@@ -4,25 +4,36 @@ declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
+use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Enums\DurableDispatchType;
+use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableBranch;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\InvokeSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\ResumeQueuedHierarchicalSwarm;
+use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableJoinRelease;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Runners\QueuedHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FailingPromptAgent;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalFullSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalParallelFailBranchSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelFailingSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Exceptions;
+use Illuminate\Support\Str;
+use Psr\Log\LoggerInterface;
 
 /**
  * A durable parent that sits at a branch join while it also has an open wait (a
@@ -492,7 +503,7 @@ describe('queued-hierarchical multi_worker', function () {
  */
 function joinWaitBranchFailureLogger(?Closure $onBranchFailed = null, bool $throw = false): void
 {
-    $logger = Mockery::mock(Psr\Log\LoggerInterface::class)->shouldIgnoreMissing();
+    $logger = Mockery::mock(LoggerInterface::class)->shouldIgnoreMissing();
     $logger->shouldReceive('error')->andReturnUsing(function (string|Stringable $message) use ($onBranchFailed, $throw): void {
         if (! str_contains((string) $message, 'branch failed')) {
             return;
@@ -506,7 +517,7 @@ function joinWaitBranchFailureLogger(?Closure $onBranchFailed = null, bool $thro
             throw new RuntimeException('logging unavailable');
         }
     });
-    app()->instance(Psr\Log\LoggerInterface::class, $logger);
+    app()->instance(LoggerInterface::class, $logger);
     app()->forgetInstance(DurableSwarmManager::class);
 }
 
@@ -517,7 +528,7 @@ function joinWaitFailingPlan(): array
         'nodes' => [
             'parallel_node' => ['type' => 'parallel', 'branches' => ['writer_node', 'failing_node'], 'next' => 'finish_node'],
             'writer_node' => ['type' => 'worker', 'agent' => FakeWriter::class, 'prompt' => 'writer-branch'],
-            'failing_node' => ['type' => 'worker', 'agent' => BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FailingPromptAgent::class, 'prompt' => 'failing-branch'],
+            'failing_node' => ['type' => 'worker', 'agent' => FailingPromptAgent::class, 'prompt' => 'failing-branch'],
             'finish_node' => ['type' => 'finish', 'output_from' => 'writer_node'],
         ],
     ];
@@ -532,14 +543,14 @@ function joinWaitFailingPlan(): array
 function joinWaitFailRunAtJoin(string $profile, bool $openWait): array
 {
     $manager = app(DurableSwarmManager::class);
-    $failing = BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FailingPromptAgent::class;
+    $failing = FailingPromptAgent::class;
 
     if ($profile === 'qh') {
-        $runId = 'join-wait-fail-'.Illuminate\Support\Str::random(6);
+        $runId = 'join-wait-fail-'.Str::random(6);
         $context = RunContext::from('queued-hierarchical-task', $runId);
-        (new InvokeSwarm(BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalParallelFailBranchSwarm::class, $context->toQueuePayload()))->handle(app(SwarmRunner::class));
+        (new InvokeSwarm(FakeHierarchicalParallelFailBranchSwarm::class, $context->toQueuePayload()))->handle(app(SwarmRunner::class));
     } else {
-        $runId = BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelFailingSwarm::make()->dispatchDurable('parallel-durable-task')->runId;
+        $runId = FakeParallelFailingSwarm::make()->dispatchDurable('parallel-durable-task')->runId;
         (new AdvanceDurableSwarm($runId, 0))->handle($manager);
     }
 
@@ -581,7 +592,7 @@ describe('fail_run ownership', function () {
         FakeHierarchicalCoordinator::fake([joinWaitFailingPlan()]);
         FakeResearcher::fake(['research-out']);
         FakeWriter::fake(['writer-out']);
-        Illuminate\Support\Facades\Event::fake([BuiltByBerry\LaravelSwarm\Events\SwarmFailed::class]);
+        Event::fake([SwarmFailed::class]);
     });
 
     test('a fail_run branch failure fails the parent at once even with an open wait', function (string $profile) {
@@ -610,10 +621,10 @@ describe('fail_run ownership', function () {
 
     test('a sibling finishing between the branch failure and the parent failure does not release the join', function (string $profile) {
         $manager = app(DurableSwarmManager::class);
-        $runId = BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelFailingSwarm::make()->dispatchDurable('parallel-durable-task')->runId;
+        $runId = FakeParallelFailingSwarm::make()->dispatchDurable('parallel-durable-task')->runId;
         (new AdvanceDurableSwarm($runId, 0))->handle($manager);
         $branches = app(DurableRunStore::class)->branchesFor($runId, 'parallel');
-        $failing = collect($branches)->firstWhere('agent_class', BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FailingPromptAgent::class);
+        $failing = collect($branches)->firstWhere('agent_class', FailingPromptAgent::class);
         $siblings = collect($branches)->reject(fn (array $b): bool => $b['branch_id'] === $failing['branch_id'])->values();
 
         (new AdvanceDurableBranch($runId, $siblings[0]['branch_id']))->handle($manager);
@@ -650,7 +661,7 @@ describe('fail_run ownership', function () {
         Artisan::call('swarm:recover');
 
         joinWaitAssertFailedNotJoined($runId, $before);
-        Illuminate\Support\Facades\Event::assertDispatchedTimes(BuiltByBerry\LaravelSwarm\Events\SwarmFailed::class, 1);
+        Event::assertDispatchedTimes(SwarmFailed::class, 1);
     })->with(['step-durable parallel' => 'sd', 'queued-hierarchical' => 'qh'])->with(['no wait' => false, 'open wait' => true]);
 
     test('swarm:recover racing a live failing worker fails the parent once, never joins it', function (string $profile) {
@@ -667,7 +678,7 @@ describe('fail_run ownership', function () {
         (new AdvanceDurableBranch($runId, $failingBranchId))->handle(app(DurableSwarmManager::class));
 
         joinWaitAssertFailedNotJoined($runId, $before);
-        Illuminate\Support\Facades\Event::assertDispatchedTimes(BuiltByBerry\LaravelSwarm\Events\SwarmFailed::class, 1);
+        Event::assertDispatchedTimes(SwarmFailed::class, 1);
     })->with(['step-durable parallel' => 'sd', 'queued-hierarchical' => 'qh']);
 });
 
@@ -773,7 +784,7 @@ describe('wait timeouts and child outcomes at a join', function () {
             $node = 'parallel';
         }
 
-        $childRunId = $manager->dispatchChildSwarm($runId, BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm::class, 'child-task')->childRunId;
+        $childRunId = $manager->dispatchChildSwarm($runId, FakeSequentialSwarm::class, 'child-task')->childRunId;
         $completeBranches = function () use ($manager, $runId, $node): void {
             foreach (app(DurableRunStore::class)->branchesFor($runId, $node) as $branch) {
                 (new AdvanceDurableBranch($runId, (string) $branch['branch_id']))->handle($manager);
@@ -825,9 +836,9 @@ describe('failure boundaries', function () {
     });
 
     test('a join release that fails after the wait closed rolls back, keeps the signal, and is left to swarm:recover', function () {
-        Illuminate\Support\Facades\Exceptions::fake();
+        Exceptions::fake();
         $failJoinDispatch = false;
-        $realOutbox = app(BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox::class);
+        $realOutbox = app(DurableOutbox::class);
         $outbox = Mockery::mock($realOutbox);
         $outbox->shouldReceive('enqueueStep')->andReturnUsing(function (...$args) use (&$failJoinDispatch, $realOutbox): int {
             if ($failJoinDispatch) {
@@ -836,7 +847,7 @@ describe('failure boundaries', function () {
 
             return $realOutbox->enqueueStep(...$args);
         });
-        app()->instance(BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox::class, $outbox);
+        app()->instance(DurableOutbox::class, $outbox);
         app()->forgetInstance(DurableSwarmManager::class);
 
         $runId = joinWaitParallelRun();
@@ -861,7 +872,7 @@ describe('failure boundaries', function () {
             ->and(app(RunHistoryStore::class)->find($runId)['status'])->toBe('waiting')
             ->and($manager->find($runId)['status'])->toBe('waiting')
             ->and(joinWaitDispatches($runId))->toBe($before);
-        Illuminate\Support\Facades\Exceptions::assertReported(fn (RuntimeException $e): bool => str_contains($e->getMessage(), 'could not be released to its join'));
+        Exceptions::assertReported(fn (RuntimeException $e): bool => str_contains($e->getMessage(), 'could not be released to its join'));
 
         $failJoinDispatch = false;
         joinWaitAgeRun($runId);
@@ -908,7 +919,7 @@ describe('failure boundaries', function () {
         $hierarchical = $read($manager, 'hierarchicalCoordinator');
         $joinRelease = $read($hierarchical, 'joinRelease');
 
-        expect($joinRelease)->toBeInstanceOf(BuiltByBerry\LaravelSwarm\Runners\Durable\DurableJoinRelease::class)
+        expect($joinRelease)->toBeInstanceOf(DurableJoinRelease::class)
             ->and($read($read($manager, 'signalHandler'), 'joinRelease'))->toBe($joinRelease)
             ->and($read($read($manager, 'children'), 'joinRelease'))->toBe($joinRelease)
             ->and($read($read($manager, 'recovery'), 'joinRelease'))->toBe($joinRelease)
