@@ -66,20 +66,23 @@ it('requires concrete durable stores even when a custom context wrapper satisfie
 
 it('records a signal with its acceptance, so a crash before the wait release leaves nothing and the key is accepted once, with run scoped idempotency', function () {
     // The database store accepts a signal atomically (#611): the signal row is written in
-    // the acceptance transaction, through this subclass's own releaseWaitWithSignal(). The
-    // earlier boundary — the signal recorded before the acceptance, surviving its crash —
-    // still holds for a store without that capability (DurableSignalAcceptanceAtomicityTest).
+    // the acceptance transaction that closes the wait. A crash once the wait is closed and
+    // the signal recorded, before that transaction commits, leaves neither. The earlier
+    // boundary — the signal recorded before the acceptance, surviving its crash — still
+    // holds for a store without that capability (DurableSignalAcceptanceAtomicityTest).
     $store = new class(DB::connection(), config(), app(SwarmPersistenceCipher::class)) extends DatabaseDurableRunStore
     {
         public bool $crash = true;
 
-        public function releaseWaitWithSignal(string $runId, string $name, int $signalId): bool
+        public function acceptSignal(string $runId, string $name, mixed $payload, ?string $idempotencyKey): ?array
         {
+            $accepted = parent::acceptSignal($runId, $name, $payload, $idempotencyKey);
+
             if ($this->crash) {
                 throw new RuntimeException('crash before wait release');
             }
 
-            return parent::releaseWaitWithSignal($runId, $name, $signalId);
+            return $accepted;
         }
     };
     app()->instance(DurableRunStore::class, $store);

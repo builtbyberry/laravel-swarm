@@ -1928,35 +1928,63 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
 
     public function acceptSignal(string $runId, string $name, mixed $payload, ?string $idempotencyKey): ?array
     {
-        // The wait row, then the run row, both with locking reads — which, unlike an
-        // ordinary read, do not fix MySQL's REPEATABLE READ snapshot — so the idempotency
-        // read in recordSignal() and the branch read in syncRunWaitSummary() both come
-        // after the run lock. The signal insert's foreign-key check against the run is then
-        // free: this transaction holds the run row. Inserting it before the run lock (as a
-        // separate statement would) lets two acceptances on one run each hold a shared
-        // foreign-key lock on the run row and deadlock asking for its write lock.
-        $openWait = $this->waitTable()
-            ->where('run_id', $runId)
-            ->where('name', $name)
-            ->where('status', 'waiting')
-            ->orderBy('id')
-            ->lockForUpdate()
-            ->pluck('id')
-            ->all();
+        try {
+            // A savepoint of its own (this runs inside the acceptance transaction), so a
+            // duplicate key or a missing wait undoes the closure below and writes nothing.
+            return $this->connection->transaction(function () use ($runId, $name, $payload, $idempotencyKey): array {
+                $timestamp = Carbon::now('UTC');
 
-        if ($openWait === []) {
-            return null;
+                // The wait is closed by the UPDATE that takes its lock, as in
+                // releaseWaitWithSignal(). Locking it first and moving it out of `waiting`
+                // later deadlocks on MySQL with a closer of another wait of the run: that
+                // closer's lock request waits in the index gap this move must insert into.
+                $closed = $this->waitTable()
+                    ->where('run_id', $runId)
+                    ->where('name', $name)
+                    ->where('status', 'waiting')
+                    ->update([
+                        'status' => 'signalled',
+                        'outcome' => $this->encodeJson(['status' => 'signalled', 'timed_out' => false]),
+                        'finished_at' => $timestamp,
+                        'updated_at' => $timestamp,
+                    ]);
+
+                if ($closed !== 1) {
+                    throw new DurableSignalNotAccepted(null);
+                }
+
+                // The run row before the signal: recordSignal()'s idempotency read is then
+                // the first ordinary read, after the run lock (MySQL's REPEATABLE READ
+                // snapshot is taken there), and its insert's foreign-key check against the
+                // run is free. Inserted before the run lock, that check's shared lock on the
+                // run row lets two acceptances on one run deadlock asking for its write lock.
+                $this->lockRunRow($runId);
+
+                $signal = $this->recordSignal($runId, $name, $payload, $idempotencyKey);
+
+                if (($signal['duplicate'] ?? false) === true) {
+                    throw new DurableSignalNotAccepted($signal);
+                }
+
+                $this->signalTable()->where('id', $signal['id'])->update([
+                    'status' => 'consumed',
+                    'consumed_at' => $timestamp,
+                    'updated_at' => $timestamp,
+                ]);
+                $this->waitTable()
+                    ->where('run_id', $runId)
+                    ->where('name', $name)
+                    ->where('status', 'signalled')
+                    ->whereNull('signal_id')
+                    ->update(['signal_id' => $signal['id']]);
+
+                $this->syncRunWaitSummary($runId, $timestamp);
+
+                return array_merge($signal, ['released' => true]);
+            });
+        } catch (DurableSignalNotAccepted $notAccepted) {
+            return $notAccepted->signal === null ? null : array_merge($notAccepted->signal, ['released' => false]);
         }
-
-        $this->lockRunRow($runId);
-
-        $signal = $this->recordSignal($runId, $name, $payload, $idempotencyKey);
-
-        if (($signal['duplicate'] ?? false) === true) {
-            return array_merge($signal, ['released' => false]);
-        }
-
-        return array_merge($signal, ['released' => $this->releaseWaitWithSignal($runId, $name, (int) $signal['id'])]);
     }
 
     public function signals(string $runId): array

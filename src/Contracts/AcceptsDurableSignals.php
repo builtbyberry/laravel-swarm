@@ -17,18 +17,19 @@ namespace BuiltByBerry\LaravelSwarm\Contracts;
 interface AcceptsDurableSignals
 {
     /**
-     * Record a signal and close the named open wait with it. Called inside the acceptance
-     * transaction; writes nothing of its own outside it.
+     * Close the named open wait with a new signal, and record the signal, in one
+     * transaction. Called inside the acceptance transaction.
      *
-     * Takes the wait row, then the run row, before it records the signal — the order
-     * every wait release takes — and makes no ordinary read before the run row is
-     * locked.
+     * Closes the wait with the UPDATE that takes its row lock, then locks the run row,
+     * then records the signal (recordSignal()) and links it to the wait: the order every
+     * wait release takes, with no ordinary read before the run row is locked. It closes
+     * the wait itself and does not call releaseWaitWithSignal().
      *
-     * Returns null when the run has no open wait of that name: nothing is written, and the
-     * caller records the signal with recordSignal(). Otherwise returns what recordSignal()
-     * returned — the signal as recorded, with `duplicate` — plus `released`: whether
-     * releaseWaitWithSignal() closed the wait. A duplicate idempotency key releases
-     * nothing and writes nothing.
+     * Returns null when the run has no single open wait of that name: nothing is
+     * written, and the caller records the signal with recordSignal(). Otherwise returns
+     * what recordSignal() returned — the signal as recorded, with `duplicate` — plus
+     * `released`: true when the wait was closed with it; false for a duplicate
+     * idempotency key, which closes nothing and writes nothing.
      *
      * @return array<string, mixed>|null
      */

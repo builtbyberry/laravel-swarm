@@ -185,6 +185,53 @@ function signalAbortSecondSender(string $runId, string $dir): Closure
     };
 }
 
+/**
+ * Accepts a signal for one wait, pausing when it is about to lock the run row until the
+ * other sender is there too, or is observed blocked on this one, or has finished — so
+ * both acceptances are in flight before either asks for the run row.
+ */
+function signalAbortPairedSender(string $runId, string $wait, string $me, string $other, string $dir): Closure
+{
+    return static function () use ($runId, $wait, $me, $other, $dir): array {
+        $store = FanoutCloserWorker::bootHooked();
+        $connection = LockBarrier::connectionId();
+        $paired = null;
+        $store->beforeRunLock = static function () use ($dir, $me, $other, $connection, &$paired, $store): void {
+            $store->beforeRunLock = null;
+            LockBarrier::signal($dir, $me.'-at-run-lock', (string) $connection);
+            LockBarrier::signal($dir, $me.'-id', (string) $connection);
+            $deadline = microtime(true) + 15.0;
+
+            while (microtime(true) < $deadline) {
+                if (is_file($dir.'/'.$other.'-at-run-lock') || is_file($dir.'/'.$other.'-done')) {
+                    $paired = 'both-in-flight';
+
+                    return;
+                }
+
+                if (is_file($dir.'/'.$other.'-id') && LockBarrier::isBlockedBy((int) file_get_contents($dir.'/'.$other.'-id'), $connection)) {
+                    $paired = 'other-blocked';
+
+                    return;
+                }
+
+                usleep(10_000);
+            }
+        };
+        LockBarrier::signal($dir, $me.'-id', (string) $connection);
+
+        try {
+            $result = app(DurableSwarmManager::class)->signal($runId, $wait, ['wait' => $wait], $wait.'-key');
+        } catch (Throwable $e) {
+            return ['outcome' => 'aborted', 'failure' => LockBarrier::failure($e)];
+        } finally {
+            LockBarrier::signal($dir, $me.'-done');
+        }
+
+        return ['outcome' => $result->accepted ? 'accepted' : 'refused', 'paired' => $paired];
+    };
+}
+
 beforeEach(function (): void {
     if (in_array(DB::connection()->getDriverName(), ['sqlite', 'sqlsrv'], true)) {
         $this->markTestSkipped(
@@ -281,4 +328,25 @@ test('two waits of one run receiving the same idempotency key at once accept it 
         ->and(DB::table('swarm_durable_waits')->where('run_id', $runId)->where('name', 'a')->value('status'))->toBe('signalled')
         ->and(DB::table('swarm_durable_waits')->where('run_id', $runId)->where('name', 'b')->value('status'))->toBe('waiting')
         ->and(DB::table('swarm_durable_runs')->where('run_id', $runId)->value('status'))->toBe('waiting');
+});
+
+test('two signals closing two waits of one run at once are both accepted without a deadlock', function (): void {
+    // Each acceptance inserts its signal row only once it holds the run row: inserted
+    // first, its foreign-key check would take a shared lock on the run row, and two
+    // acceptances each holding one and asking for the write lock deadlock on MySQL.
+    $runId = FakeSequentialSwarm::make()->dispatchDurable('two-signals-task')->runId;
+    app(DurableSwarmManager::class)->wait($runId, 'a');
+    app(DurableSwarmManager::class)->wait($runId, 'b');
+    $dir = signalAbortDir();
+
+    [$first, $second] = $this->app->make(ConcurrencyManager::class)->driver('process')->run([
+        signalAbortPairedSender($runId, 'a', 'first', 'second', $dir),
+        signalAbortPairedSender($runId, 'b', 'second', 'first', $dir),
+    ]);
+
+    expect($first['outcome'])->toBe('accepted', json_encode([$first, $second]))
+        ->and($second['outcome'])->toBe('accepted', json_encode([$first, $second]))
+        ->and(DB::table('swarm_durable_signals')->where('run_id', $runId)->where('status', 'consumed')->count())->toBe(2)
+        ->and(DB::table('swarm_durable_waits')->where('run_id', $runId)->where('status', 'signalled')->count())->toBe(2)
+        ->and(DB::table('swarm_durable_runs')->where('run_id', $runId)->value('status'))->toBe('pending');
 });

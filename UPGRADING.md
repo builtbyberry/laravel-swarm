@@ -176,8 +176,10 @@ extends the durable store:
   is recorded first, and if its acceptance fails the same idempotency key is a
   duplicate. A decorating store keeps atomic acceptance only if it implements the
   interface and forwards `acceptSignal()`. Subclasses of `DatabaseDurableRunStore`
-  inherit it; `acceptSignal()` calls your `recordSignal()` and
-  `releaseWaitWithSignal()`, so overrides of those still run.
+  inherit it. `acceptSignal()` calls your `recordSignal()` and
+  `syncRunWaitSummary()`, but it closes the wait itself: an override of
+  `releaseWaitWithSignal()` no longer runs when a signal is accepted, so move that
+  logic into an `acceptSignal()` override.
 - During a rolling deploy, a worker on the old code and one on the new code
   accepting signals for two different waits of one run with the same idempotency
   key can deadlock (one side is rolled back, and with the new code a failed
