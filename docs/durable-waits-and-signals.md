@@ -261,6 +261,12 @@ timeout outcome and dispatches the next durable step when the run can continue.
   a new idempotency key: the original key returns the earlier delivery as a
   `duplicate`. This is interim behaviour until [#601](https://github.com/builtbyberry/laravel-swarm/issues/601) accepts it on
   resume. See [Pause, Resume, Cancel, And Recover](durable-execution.md#pause-resume-cancel-and-recover).
+- A run waiting at a parallel join with an open wait is not released to its
+  join until every wait is closed and every branch is done, whichever comes
+  last. Under `fail_run` a failing branch still fails the run at once. See
+  [Durable Hierarchical Parallel Flow](durable-execution.md#durable-hierarchical-parallel-flow).
+- Accepting a signal while another wait is still open, or while the run is still
+  waiting on its branches, leaves the run (and its history) `waiting`.
 - Cancelled runs ignore later signals.
 - Duplicate signals with the same idempotency key return the stored outcome.
 - Signals sent before a matching wait exists are still recorded on the run.

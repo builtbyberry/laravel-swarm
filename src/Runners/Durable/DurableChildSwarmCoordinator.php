@@ -49,6 +49,7 @@ class DurableChildSwarmCoordinator
         protected ConfigRepository $config,
         protected LoggerInterface $logger,
         protected SwarmAuditDispatcher $audit,
+        protected DurableJoinRelease $joinRelease,
     ) {}
 
     public function afterChildIntentForTesting(?callable $hook): void
@@ -358,14 +359,24 @@ class DurableChildSwarmCoordinator
                 ];
                 $context->mergeMetadata(['durable_child_runs' => $children]);
                 $this->contextStore->put($this->capture->activeContext($context), $this->runs->ttlSeconds());
-                $this->historyStore->syncDurableState($parent['run_id'], 'pending', $this->capture->context($context), $context->metadata, $this->runs->ttlSeconds(), false);
+
+                // History follows the parent: it stays waiting while another wait is open or
+                // the parent is still at its branch boundary, and is written before any join
+                // is released.
+                $updated = $this->runs->requireRun($parent['run_id']);
+                $this->historyStore->syncDurableState($parent['run_id'], $updated['status'], $this->capture->context($context), $context->metadata, $this->runs->ttlSeconds(), false);
 
                 if (! $this->durableRuns->markChildTerminalEventDispatched((string) $child['child_run_id'])) {
                     return false;
                 }
 
-                $updated = $this->runs->requireRun($parent['run_id']);
-                $this->eager->enqueueStep($parent['run_id'], (int) $updated['next_step_index'], $updated['queue_connection'], $updated['queue_name']);
+                if ($updated['status'] === 'pending') {
+                    $this->eager->enqueueStep($parent['run_id'], (int) $updated['next_step_index'], $updated['queue_connection'], $updated['queue_name']);
+                } elseif ($updated['status'] === 'waiting') {
+                    // Never inside this transaction: the join release locks the parent's other
+                    // open waits, and this transaction already holds the parent row.
+                    $this->joinRelease->releaseAfterCommit($parent['run_id']);
+                }
 
                 return true;
             });
