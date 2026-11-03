@@ -206,22 +206,23 @@ class DurableRecoveryCoordinator
 
             // Closing the wait and publishing its outcome commit together: a join released
             // in between could start a continuation whose history lease this run's history
-            // write would then clobber.
-            $updated = $this->connection->transaction(function () use ($wait, $waitName): ?array {
-                if (! $this->durableRuns->releaseTimedOutWait($wait['run_id'], $waitName)) {
-                    return null;
-                }
+            // write would then clobber. Holding the run row while writing the context, this
+            // transaction can deadlock with the run fanning out at that moment (release
+            // finding FANOUT-CLOSER-CONTEXT-CYCLE; the signal and child closers share it).
+            // The database then rolls one side back: here the wait stays open, it is
+            // reported, and the next sweep times it out again. No other run is affected.
+            try {
+                $updated = $this->closeTimedOutWait($wait, $waitName);
+            } catch (Throwable $exception) {
+                $this->safeLog($this->logger, 'warning', 'laravel-swarm: skipping a timed-out durable wait during recovery; it is retried on the next sweep.', [
+                    'run_id' => $wait['run_id'],
+                    'wait_name' => $waitName,
+                    'exception' => $exception::class,
+                    'message' => $exception->getMessage(),
+                ]);
 
-                $updated = $this->runs->requireRun($wait['run_id']);
-                $context = $this->runs->loadContext($wait['run_id']);
-                $outcomes = is_array($context->metadata['durable_wait_outcomes'] ?? null) ? $context->metadata['durable_wait_outcomes'] : [];
-                $outcomes[$waitName] = ['status' => 'timed_out', 'payload' => null, 'timed_out' => true];
-                $context->mergeMetadata(['durable_wait_outcomes' => $outcomes]);
-                $this->contextStore->put($this->capture->activeContext($context), $this->runs->ttlSeconds());
-                $this->historyStore->syncDurableState($wait['run_id'], $updated['status'], $this->capture->context($context), $context->metadata, $this->runs->ttlSeconds(), false);
-
-                return $updated;
-            });
+                continue;
+            }
 
             if ($updated === null) {
                 continue;
@@ -301,5 +302,32 @@ class DurableRecoveryCoordinator
             array_map(static fn (array $run): string => $run['run_id'], $childParents),
             array_map(static fn (array $child): string => $child['parent_run_id'], $undispatchedChildren),
         )));
+    }
+
+    /**
+     * Close a timed-out wait and publish its outcome to the context and history in one
+     * transaction. Returns the run after the closure, or null when the wait was no
+     * longer open.
+     *
+     * @param  array<string, mixed>  $wait
+     * @return array<string, mixed>|null
+     */
+    protected function closeTimedOutWait(array $wait, string $waitName): ?array
+    {
+        return $this->connection->transaction(function () use ($wait, $waitName): ?array {
+            if (! $this->durableRuns->releaseTimedOutWait($wait['run_id'], $waitName)) {
+                return null;
+            }
+
+            $updated = $this->runs->requireRun($wait['run_id']);
+            $context = $this->runs->loadContext($wait['run_id']);
+            $outcomes = is_array($context->metadata['durable_wait_outcomes'] ?? null) ? $context->metadata['durable_wait_outcomes'] : [];
+            $outcomes[$waitName] = ['status' => 'timed_out', 'payload' => null, 'timed_out' => true];
+            $context->mergeMetadata(['durable_wait_outcomes' => $outcomes]);
+            $this->contextStore->put($this->capture->activeContext($context), $this->runs->ttlSeconds());
+            $this->historyStore->syncDurableState($wait['run_id'], $updated['status'], $this->capture->context($context), $context->metadata, $this->runs->ttlSeconds(), false);
+
+            return $updated;
+        });
     }
 }

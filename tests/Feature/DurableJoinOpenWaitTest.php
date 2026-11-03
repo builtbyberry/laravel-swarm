@@ -910,31 +910,40 @@ describe('failure boundaries', function () {
         expect($manager->find($runId)['status'])->toBe('completed');
     });
 
-    test('a timed-out wait whose outcome cannot be published is not left closed', function () {
-        $failPublish = false;
+    test('a timed-out wait whose outcome cannot be published is not left closed, and does not stop the sweep', function () {
+        $failPublishFor = null;
         $realContextStore = app(ContextStore::class);
         $contextStore = Mockery::mock($realContextStore);
-        $contextStore->shouldReceive('put')->andReturnUsing(function (...$args) use (&$failPublish, $realContextStore): void {
-            if ($failPublish) {
+        $contextStore->shouldReceive('put')->andReturnUsing(function (RunContext $context, int $ttl) use (&$failPublishFor, $realContextStore): void {
+            if ($context->runId === $failPublishFor) {
                 throw new RuntimeException('context store unavailable');
             }
 
-            $realContextStore->put(...$args);
+            $realContextStore->put($context, $ttl);
         });
         app()->instance(ContextStore::class, $contextStore);
         app()->forgetInstance(DurableSwarmManager::class);
-
-        $runId = joinWaitParallelRun();
         $manager = app(DurableSwarmManager::class);
-        DB::table('swarm_durable_waits')->where('run_id', $runId)->delete();
-        $manager->wait($runId, 'approval', timeoutSeconds: 60);
+
+        // Two runs at their join, each with a wait that times out in the same sweep; the
+        // first one's outcome cannot be published.
+        $broken = joinWaitParallelRun();
+        $healthy = joinWaitParallelRun();
+
+        foreach ([$broken, $healthy] as $runId) {
+            DB::table('swarm_durable_waits')->where('run_id', $runId)->delete();
+            $manager->wait($runId, 'approval', timeoutSeconds: 60);
+        }
+
         $this->travel(2)->minutes();
-        $failPublish = true;
+        $failPublishFor = $broken;
 
-        expect(fn () => $manager->recover())->toThrow(RuntimeException::class, 'context store unavailable');
+        $manager->recover();
 
-        expect($manager->inspect($runId)->waits[0]['status'])->toBe('waiting')
-            ->and($manager->find($runId)['status'])->toBe('waiting');
+        expect($manager->inspect($broken)->waits[0]['status'])->toBe('waiting')
+            ->and($manager->find($broken)['status'])->toBe('waiting')
+            ->and($manager->inspect($healthy)->waits[0]['status'])->toBe('timed_out')
+            ->and($manager->find($healthy)['status'])->toBe('pending');
     });
 
     test('every wait closer shares the factory\'s one join release', function () {
