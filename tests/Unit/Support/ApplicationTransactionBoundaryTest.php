@@ -86,21 +86,24 @@ test('when the database already ended the transaction, the rollback failure is r
     DB::beginTransaction();
     $pdo = DB::connection()->getPdo();
     $reported = null;
+    $original = new RuntimeException('deadlock');
+    $escaped = null;
 
     try {
-        ApplicationTransactionBoundary::run(DB::connection(), function () use ($pdo): void {
+        ApplicationTransactionBoundary::run(DB::connection(), function () use ($pdo, $original): void {
             // What a MySQL deadlock does: the whole transaction is rolled back underneath,
             // so the boundary's savepoint no longer exists.
             $pdo->rollBack();
 
-            throw new RuntimeException('deadlock');
+            throw $original;
         }, function (Throwable $rollbackFailure) use (&$reported): void {
             $reported = $rollbackFailure;
         });
-    } catch (RuntimeException $e) {
-        expect($e->getMessage())->toBe('deadlock');
+    } catch (Throwable $e) {
+        $escaped = $e;
     }
 
+    expect($escaped)->toBe($original);
     expect($reported)->toBeInstanceOf(Throwable::class);
 
     // Hand Laravel back the open transaction its counter still expects.
