@@ -2544,6 +2544,23 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStep
 
     protected function syncRunWaitSummary(string $runId, Carbon $timestamp): void
     {
+        // The run row is locked before anything else is read. Every caller has already
+        // written its wait row, so the order is wait row, then run row, as everywhere.
+        // A fan-out (waitForBranches) holds the run row until it commits, so this waits
+        // for one in flight; and no ordinary read has been made in this transaction yet
+        // (in the closers this package runs), so the reads below see it committed — under
+        // Postgres each statement takes a fresh snapshot, under MySQL's REPEATABLE READ
+        // the transaction's snapshot is taken at its first ordinary read, after this lock.
+        // On Postgres the lock is FOR NO KEY UPDATE, the lock the UPDATE below takes
+        // anyway, so other transactions' foreign-key checks against the run (a retry's
+        // outbox insert, a signal row) are not blocked by it. No branch row is locked:
+        // a branch worker can hold one while it waits on this run row.
+        $runQuery = $this->table()->where('run_id', $runId);
+        /** @var object|null $run */
+        $run = ($this->connection->getDriverName() === 'pgsql'
+            ? $runQuery->lock('for no key update')
+            : $runQuery->lockForUpdate())->first(['status', 'current_node_id']);
+
         /** @var object|null $latestOpenWait */
         $latestOpenWait = $this->waitTable()
             ->where('run_id', $runId)
@@ -2556,18 +2573,9 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStep
             // still waiting on its branches, and its join is released through
             // releaseWaitingRunForJoin() — by the last branch to finish, or by the closer
             // once it has committed — never by the wait closing on its own. This is the
-            // row shape waitForBranches() leaves: it never writes the wait columns.
-            //
-            // The run row is locked first: a fan-out (waitForBranches) holds it until it
-            // commits, so this waits for it and then reads the row as committed. Only a
-            // waiting run is touched, and a waiting run is never mid fan-out (fanning out
-            // needs the step lease), so the branch read below never waits on a fan-out's
-            // uncommitted rows. That read is a locking (current) read: under MySQL's
-            // REPEATABLE READ an ordinary read could still see the transaction's older
-            // snapshot, and under Postgres an UPDATE's subquery would.
-            /** @var object|null $run */
-            $run = $this->table()->where('run_id', $runId)->lockForUpdate()->first(['status', 'current_node_id']);
-
+            // row shape waitForBranches() leaves: it never writes the wait columns. A
+            // fan-out not yet committed is not seen here; the run goes pending and the
+            // fan-out's own commit sets it back to waiting at its new node.
             if (($run->status ?? null) !== 'waiting') {
                 return;
             }
@@ -2576,8 +2584,7 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStep
             $atBranchBoundary = $nodeId !== null && $this->branchTable()
                 ->where('run_id', $runId)
                 ->where('parent_node_id', $nodeId)
-                ->sharedLock()
-                ->first(['branch_id']) !== null;
+                ->exists();
 
             $this->table()
                 ->where('run_id', $runId)

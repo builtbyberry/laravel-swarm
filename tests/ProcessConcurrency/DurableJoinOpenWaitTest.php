@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
+use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostDurableLeaseException;
@@ -417,6 +418,69 @@ function joinOpenWaitDbHoldingFanOut(string $runId, array $branchRows, string $d
     };
 }
 
+/**
+ * Plays a branch retry (DurableRetryHandler): holds the run's branch rows
+ * write-locked, and only once the closer has finished, or is observed blocked on
+ * those rows, writes its outbox row — whose foreign key needs the run row.
+ */
+function joinOpenWaitDbHoldingRetry(string $runId, string $branchId, string $dir): Closure
+{
+    return static function () use ($runId, $branchId, $dir): array {
+        JoinOpenWaitWorker::boot();
+        $me = LockBarrier::connectionId();
+
+        try {
+            DB::beginTransaction();
+            DB::table('swarm_durable_branches')->where('run_id', $runId)->update(['updated_at' => now('UTC')]);
+            LockBarrier::signal($dir, 'retry-holds-branches');
+            $closer = (int) LockBarrier::await($dir, 'signaller-id');
+            $deadline = microtime(true) + 15.0;
+            $closerBlocked = false;
+
+            while (! is_file($dir.'/signaller-done') && microtime(true) < $deadline) {
+                if (LockBarrier::isBlockedBy($closer, $me)) {
+                    $closerBlocked = true;
+
+                    break;
+                }
+
+                usleep(10_000);
+            }
+
+            app(DurableOutbox::class)->enqueueBranch($runId, $branchId, 'durable-test', 'swarm-durable');
+            DB::commit();
+
+            return ['outcome' => 'committed', 'closer_blocked_on_branches' => $closerBlocked];
+        } catch (Throwable $e) {
+            try {
+                DB::rollBack();
+            } catch (Throwable) {
+            }
+
+            return ['outcome' => 'aborted', 'failure' => LockBarrier::failure($e)];
+        }
+    };
+}
+
+function joinOpenWaitDbSignallerAfter(string $runId, string $wait, string $dir, string $after): Closure
+{
+    return static function () use ($runId, $wait, $dir, $after): array {
+        JoinOpenWaitWorker::boot();
+        LockBarrier::signal($dir, 'signaller-id', (string) LockBarrier::connectionId());
+        LockBarrier::await($dir, $after);
+
+        try {
+            $accepted = app(DurableSwarmManager::class)->signal($runId, $wait)->accepted;
+        } catch (Throwable $e) {
+            return ['outcome' => 'aborted', 'failure' => LockBarrier::failure($e)];
+        }
+
+        LockBarrier::signal($dir, 'signaller-done');
+
+        return ['outcome' => $accepted ? 'accepted' : 'refused'];
+    };
+}
+
 beforeEach(function (): void {
     if (in_array(DB::connection()->getDriverName(), ['sqlite', 'sqlsrv'], true)) {
         $this->markTestSkipped(
@@ -694,4 +758,21 @@ test('a last wait closing while the run fans out waits for the fan-out and leave
         ->and(joinOpenWaitDbRunStatus($runId))->toBe('waiting')
         ->and(app(RunHistoryStore::class)->find($runId)['status'])->toBe('waiting')
         ->and(joinOpenWaitDbStepRows($runId))->toBe($stepRows);
+});
+
+test('closing the last wait never waits on branch rows, so it cannot deadlock with a branch retry writing its outbox row', function (): void {
+    // Every branch terminal while the wait is open; a retry-like worker holds them all.
+    [$runId, $last] = joinOpenWaitDbParallelAtJoin(leaveLastBranch: false);
+    $stepRows = joinOpenWaitDbStepRows($runId);
+    $dir = joinOpenWaitDbBarrierDir();
+
+    [$retry, $signaller] = $this->app->make(ConcurrencyManager::class)->driver('process')->run([
+        joinOpenWaitDbHoldingRetry($runId, $last, $dir),
+        joinOpenWaitDbSignallerAfter($runId, 'approval', $dir, 'retry-holds-branches'),
+    ]);
+
+    expect($retry)->toBe(['outcome' => 'committed', 'closer_blocked_on_branches' => false], json_encode($retry))
+        ->and($signaller)->toBe(['outcome' => 'accepted'], json_encode($signaller))
+        ->and(joinOpenWaitDbRunStatus($runId))->toBe('pending')
+        ->and(joinOpenWaitDbStepRows($runId))->toBe($stepRows + 1);
 });
