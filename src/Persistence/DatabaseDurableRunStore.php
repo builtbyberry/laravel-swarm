@@ -2547,10 +2547,13 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStep
         // The run row is locked before anything else is read. Every caller has already
         // written its wait row, so the order is wait row, then run row, as everywhere.
         // A fan-out (waitForBranches) holds the run row until it commits, so this waits
-        // for one in flight; and no ordinary read has been made in this transaction yet
-        // (in the closers this package runs), so the reads below see it committed — under
-        // Postgres each statement takes a fresh snapshot, under MySQL's REPEATABLE READ
-        // the transaction's snapshot is taken at its first ordinary read, after this lock.
+        // for one in flight. The wait closers (a signal, a wait timeout, a child's outcome)
+        // make no ordinary read in their transaction before this point, so the branch read
+        // below sees such a fan-out committed — under Postgres each statement takes a fresh
+        // snapshot, under MySQL's REPEATABLE READ the snapshot is taken at the first
+        // ordinary read, after this lock. (createWait() can be called after an earlier read
+        // — persistChildIntent() reads the context first — but its new wait is open, so it
+        // never reaches the branch read.)
         // On Postgres the lock is FOR NO KEY UPDATE, the lock the UPDATE below takes
         // anyway, so other transactions' foreign-key checks against the run (a retry's
         // outbox insert, a signal row) are not blocked by it. No branch row is locked:
