@@ -206,11 +206,11 @@ class DurableRecoveryCoordinator
 
             // Closing the wait and publishing its outcome commit together: a join released
             // in between could start a continuation whose history lease this run's history
-            // write would then clobber. Holding the run row while writing the context, this
-            // transaction can deadlock with the run fanning out at that moment (release
-            // finding FANOUT-CLOSER-CONTEXT-CYCLE; the signal and child closers share it).
-            // The database then rolls one side back: here the wait stays open, it is
-            // reported, and the next sweep times it out again. No other run is affected.
+            // write would then clobber. A run fanning out at that moment takes the run row
+            // first, so this waits for it rather than deadlocking with it. Should the
+            // transaction still fail (a lock timeout, a deadlock with something else), the
+            // database rolls it back: the wait stays open, it is reported, and the next
+            // sweep times it out again. No other run is affected.
             try {
                 $updated = $this->closeTimedOutWait($wait, $waitName);
             } catch (Throwable $exception) {

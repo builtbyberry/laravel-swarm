@@ -214,6 +214,27 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
 - A paused durable run is no longer put back to `waiting` when one of several
   open waits is released while it is paused, for example by a child finishing
   (#592). It stays paused, with its wait summary updated, until it is resumed.
+- **A wait closing while its run fans out no longer deadlocks (#611).** A
+  durable step that had called `wait()` could still fan out to parallel branches,
+  and a signal, a wait timeout or a child's outcome closing that wait at the same
+  moment locked the run and context rows in the opposite order to the fan-out
+  (and, for top-level parallel and step-durable hierarchical fan-outs, the history
+  row too). MySQL or Postgres then aborted one side with a deadlock. The fan-out
+  now locks the run row before anything else, so the closer waits for it.
+- **A signal whose acceptance fails can be sent again (#611).** The signal row
+  was recorded before the transaction that accepts it, so when that transaction
+  failed (a deadlock, a lock timeout, a crash) the signal stayed recorded and
+  sending it again with the same idempotency key came back as a duplicate: the
+  signal was lost. The database store now records it inside the acceptance
+  transaction, after the wait and run rows are locked, so a failed acceptance
+  leaves nothing and the same key is accepted once. Inside an application
+  transaction that catches the failure and commits, the acceptance is rolled back
+  to its own savepoint too: Laravel does not roll a nested transaction back on a
+  lock-wait timeout. Every outcome that does not fail returns what it returned
+  before, `$result->signal` included. Atomic acceptance is the new optional store
+  capability `Contracts\AcceptsDurableSignals`; a custom store without it keeps
+  the earlier behaviour. See
+  [UPGRADING](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#a-wait-closing-while-its-run-fans-out).
 
 ## v0.28.1 - 2026-10-10
 

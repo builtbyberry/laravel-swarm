@@ -210,9 +210,23 @@ $result = app(DurableSwarmManager::class)->signal(
 );
 ```
 
-Signals are stored before release is attempted. Idempotency keys are scoped to a
-run, so retried webhook deliveries or button clicks do not duplicate the same
-signal.
+Idempotency keys are scoped to a run, so retried webhook deliveries or button
+clicks do not duplicate the same signal.
+
+A signal that releases a wait is recorded in the same transaction that releases
+it. If that transaction fails — a lock timeout, a deadlock, a crash before it
+commits — nothing of the signal is kept, and sending it again with the same
+idempotency key accepts it once. That also holds when you send the signal inside
+your own database transaction, and you catch the failure and commit. A signal
+sent when no wait of that name is open, or while the run is paused, is recorded
+without being accepted, and sending the same key again returns it as a
+duplicate.
+
+Atomic acceptance is a capability of the bundled database store
+(`Contracts\AcceptsDurableSignals`). A custom `DurableRunStore` without it, or a
+decorating store that does not implement and forward it, records the signal
+before the acceptance: if that acceptance then fails, the signal stays recorded
+and the same key comes back as a duplicate.
 
 ## Operator Signals
 

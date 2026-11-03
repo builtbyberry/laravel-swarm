@@ -157,6 +157,33 @@ wait); the join runs once every wait is closed and every branch is done.
 - During a rolling deploy, workers still on the old code keep the old behaviour
   until they are replaced.
 
+### A wait closing while its run fans out
+
+No configuration or schema change. Two rules change for code that implements or
+extends the durable store:
+
+- **`waitForBranches()` takes the run row first.** A fan-out now locks the run
+  row before it writes the context, branch or run-state rows, the order the wait
+  releases take. A custom `DurableRunStore`, or a class extending
+  `DatabaseDurableRunStore` that overrides `waitForBranches()`, must do the same,
+  and code that calls `waitForBranches()` inside its own transaction must not
+  write the run's context or history row before the call. Otherwise a signal,
+  wait timeout or child outcome arriving mid-fan-out can deadlock with it.
+- **Atomic signal acceptance is an optional store capability.**
+  `DatabaseDurableRunStore` implements the new `Contracts\AcceptsDurableSignals`
+  and records a signal in the transaction that accepts it. A custom
+  `DurableRunStore` without the interface keeps the earlier behaviour: the signal
+  is recorded first, and if its acceptance fails the same idempotency key is a
+  duplicate. A decorating store keeps atomic acceptance only if it implements the
+  interface and forwards `acceptSignal()`. Subclasses of `DatabaseDurableRunStore`
+  inherit it; `acceptSignal()` calls your `recordSignal()` and
+  `releaseWaitWithSignal()`, so overrides of those still run.
+- During a rolling deploy, a worker on the old code and one on the new code
+  accepting signals for two different waits of one run with the same idempotency
+  key can deadlock (one side is rolled back, and with the new code a failed
+  acceptance can be sent again). Replace workers together if your application
+  reuses idempotency keys across wait names.
+
 ## Upgrading to v0.28.1
 
 This patch deliberately departs from the additive-only patch policy stated

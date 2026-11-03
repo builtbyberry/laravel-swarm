@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Persistence;
 
+use BuiltByBerry\LaravelSwarm\Contracts\AcceptsDurableSignals;
 use BuiltByBerry\LaravelSwarm\Contracts\ChecksCitationStorage;
 use BuiltByBerry\LaravelSwarm\Contracts\ChecksNativeStepResultStorage;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
@@ -30,7 +31,7 @@ use Illuminate\Support\Collection;
 /**
  * @internal
  */
-class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStepResultStorage, DurableRunStore, StoresDurableCitationEvidence, StoresDurableNativeStepResults
+class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationStorage, ChecksNativeStepResultStorage, DurableRunStore, StoresDurableCitationEvidence, StoresDurableNativeStepResults
 {
     use InteractsWithJsonColumns;
 
@@ -435,6 +436,13 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStep
     public function waitForBranches(string $runId, BranchWaitPayload $payload): void
     {
         $this->connection->transaction(function () use ($runId, $payload): void {
+            // The run row first, before the context, branch and run-state rows: the order a
+            // wait closer takes (wait row, run row, then the context and history it
+            // publishes). Taking the context first here and the run row last deadlocked
+            // with a closer arriving mid-fan-out. The caller must not write the context or
+            // history row before calling this in the same transaction.
+            $this->lockRunRow($runId);
+
             $executionToken = $payload->executionToken;
             $nextStepIndex = $payload->nextStepIndex;
             $parentNodeId = $payload->parentNodeId;
@@ -1918,6 +1926,39 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStep
         return array_merge($this->mapSignal($record), ['duplicate' => false]);
     }
 
+    public function acceptSignal(string $runId, string $name, mixed $payload, ?string $idempotencyKey): ?array
+    {
+        // The wait row, then the run row, both with locking reads — which, unlike an
+        // ordinary read, do not fix MySQL's REPEATABLE READ snapshot — so the idempotency
+        // read in recordSignal() and the branch read in syncRunWaitSummary() both come
+        // after the run lock. The signal insert's foreign-key check against the run is then
+        // free: this transaction holds the run row. Inserting it before the run lock (as a
+        // separate statement would) lets two acceptances on one run each hold a shared
+        // foreign-key lock on the run row and deadlock asking for its write lock.
+        $openWait = $this->waitTable()
+            ->where('run_id', $runId)
+            ->where('name', $name)
+            ->where('status', 'waiting')
+            ->orderBy('id')
+            ->lockForUpdate()
+            ->pluck('id')
+            ->all();
+
+        if ($openWait === []) {
+            return null;
+        }
+
+        $this->lockRunRow($runId);
+
+        $signal = $this->recordSignal($runId, $name, $payload, $idempotencyKey);
+
+        if (($signal['duplicate'] ?? false) === true) {
+            return array_merge($signal, ['released' => false]);
+        }
+
+        return array_merge($signal, ['released' => $this->releaseWaitWithSignal($runId, $name, (int) $signal['id'])]);
+    }
+
     public function signals(string $runId): array
     {
         return $this->signalTable()
@@ -2542,27 +2583,41 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStep
         }
     }
 
-    protected function syncRunWaitSummary(string $runId, Carbon $timestamp): void
+    /**
+     * Lock the run row and return its status and current node, or null when it is gone.
+     * On Postgres the lock is FOR NO KEY UPDATE, the lock an UPDATE of the row takes
+     * anyway, so other transactions' foreign-key checks against the run (a retry's outbox
+     * insert, a signal row, a new wait) are not blocked by it; FOR UPDATE elsewhere. No
+     * branch row is locked with it: a branch worker can hold one while it waits on this
+     * run row.
+     */
+    protected function lockRunRow(string $runId): ?object
     {
-        // The run row is locked before anything else is read. Every caller has already
-        // written its wait row, so the order is wait row, then run row, as everywhere.
-        // A fan-out (waitForBranches) holds the run row until it commits, so this waits
-        // for one in flight. The wait closers (a signal, a wait timeout, a child's outcome)
-        // make no ordinary read in their transaction before this point, so the branch read
-        // below sees such a fan-out committed — under Postgres each statement takes a fresh
-        // snapshot, under MySQL's REPEATABLE READ the snapshot is taken at the first
-        // ordinary read, after this lock. (createWait() can be called after an earlier read
-        // — persistChildIntent() reads the context first — but its new wait is open, so it
-        // never reaches the branch read.)
-        // On Postgres the lock is FOR NO KEY UPDATE, the lock the UPDATE below takes
-        // anyway, so other transactions' foreign-key checks against the run (a retry's
-        // outbox insert, a signal row) are not blocked by it. No branch row is locked:
-        // a branch worker can hold one while it waits on this run row.
         $runQuery = $this->table()->where('run_id', $runId);
+
         /** @var object|null $run */
         $run = ($this->connection->getDriverName() === 'pgsql'
             ? $runQuery->lock('for no key update')
             : $runQuery->lockForUpdate())->first(['status', 'current_node_id']);
+
+        return $run;
+    }
+
+    protected function syncRunWaitSummary(string $runId, Carbon $timestamp): void
+    {
+        // The run row is locked before anything else is read. Every caller has already
+        // written (or, accepting a signal, locked) its wait row, so the order is wait row,
+        // then run row, as everywhere. A fan-out (waitForBranches) takes the run row as its
+        // first statement and holds it until it commits, so this waits for one in flight.
+        // No closer makes an ordinary read in its transaction before it holds the run row:
+        // the timeout and child closers reach this point first, and a signal's acceptance
+        // (acceptSignal) has already locked the run row before it reads its idempotency
+        // key. So the branch read below sees such a fan-out committed — under Postgres each
+        // statement takes a fresh snapshot, under MySQL's REPEATABLE READ the snapshot is
+        // taken at the first ordinary read, after the lock. (createWait() can be called
+        // after an earlier read — persistChildIntent() reads the context first — but its
+        // new wait is open, so it never reaches the branch read.)
+        $run = $this->lockRunRow($runId);
 
         /** @var object|null $latestOpenWait */
         $latestOpenWait = $this->waitTable()
