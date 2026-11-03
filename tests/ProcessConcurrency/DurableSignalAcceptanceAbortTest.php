@@ -451,7 +451,8 @@ test('a worker killed partway through accepting a signal leaves nothing behind, 
         $died = $e->getMessage();
     }
 
-    expect($died)->toContain('signal "9"')
+    // macOS reports the SIGKILL as signal 9, Linux as exit code 137.
+    expect($died)->toMatch('/signal "9"|exit code \\[137\\]/')
         ->and(DB::table('swarm_durable_signals')->where('run_id', $runId)->count())->toBe(0)
         ->and(DB::table('swarm_durable_waits')->where('run_id', $runId)->value('status'))->toBe('waiting')
         ->and(DB::table('swarm_durable_runs')->where('run_id', $runId)->value('status'))->toBe('waiting');
