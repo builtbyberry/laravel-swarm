@@ -476,7 +476,7 @@ batches, which skips that lane for the rest of the run and exits non-zero:
 select the backlogged lane with `--type` or pause its schedule entry, and re-run
 until the command exits 0.
 
-The same `swarm:recover` loop redispatches **coordinated queue hierarchical parallel** joins (`coordination_profile = queue_hierarchical_parallel` on `swarm_durable_runs`): stale `waiting` parents with terminal branch rows release to `pending` and enqueue `ResumeQueuedHierarchicalSwarm`, and branch rows are recovered the same way as durable parallel branches.
+The same `swarm:recover` loop redispatches **coordinated queue hierarchical parallel** joins (`coordination_profile = queue_hierarchical_parallel` on `swarm_durable_runs`): stale `waiting` parents with terminal branch rows release to `pending` and, in the same transaction, write an outbox row for `ResumeQueuedHierarchicalSwarm`, which the next `swarm:relay` run pushes. Branch rows are recovered the same way as durable parallel branches. A join recovery releases is delivered only by `swarm:relay` (or, for step-durable runs, by eager dispatch), so schedule the relay alongside `swarm:recover`.
 
 `swarm:recover` is not a cleanup task like pruning. It is the safety net for
 durable runs that were checkpointed successfully but never dispatched their next
@@ -499,12 +499,14 @@ next durable step can observe a timeout outcome.
 - **Ordinary `swarm:recover` redispatches**: Recovery pushes already-committed
   overdue work directly, including queued-hierarchical resumes with an expired
   history lease. If a push is lost, that work remains eligible for a later sweep.
-  A **waiting join released by recovery** instead commits its release and
-  continuation outbox row together. Its queued-hierarchical resume waits for the
-  next relay run, just like normal queued-hierarchical join releases. Its
-  step-durable continuation is pushed after commit when eager dispatch is enabled
-  on a non-`sync` driver; otherwise it also waits for the relay. A failed eager
-  push leaves the reserved row for the relay after the reservation timeout.
+
+A **waiting join released by recovery** is not an exception: recovery makes that
+state change itself, so it commits the release and the continuation's outbox row
+together, like every other join release. Its queued-hierarchical resume is pushed
+by the next relay run, like normal queued-hierarchical join releases. Its
+step-durable continuation is pushed after commit when eager dispatch is enabled
+on a non-`sync` driver; otherwise it also waits for the relay. A failed eager
+push leaves the reserved row for the relay after the reservation timeout.
 
 Prune-based retention is complementary to queue design, not a substitute for
 it. The built-in lightweight queue mode is a good fit for normal background

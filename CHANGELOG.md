@@ -160,12 +160,14 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   every other join release already does. If the outbox write fails, that run's
   release rolls back and the sweep moves on to the next run instead of stopping.
   The continuation is now pushed by the next `swarm:relay` run, not by
-  `swarm:recover`, so a recovered join can wait up to one relay interval longer.
+  `swarm:recover`: a recovered join needs `swarm:relay` scheduled to finish, and
+  can wait up to one relay interval longer.
   A step-durable join is pushed right after commit when
   `swarm.durable.eager_dispatch` is on (not on the `sync` driver). Recovery of a
   queued-hierarchical resume whose history lease expired still pushes directly.
   Runs already stranded this way are not repaired by this change. No schema or
-  configuration change.
+  configuration change. See
+  [Maintenance](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/maintenance.md#rolling-deploys).
 
 - **Structured-output agents keep their text when nothing decodes (#589).**
   With `laravel/ai` 1.3, an agent that declares a schema always returns a

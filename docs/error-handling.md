@@ -554,7 +554,7 @@ Note: for `queue()` and `broadcastOnQueue()`, input guardrails run twice — onc
 `swarm:recover` is the safety net for durable runs that stall due to worker crashes, lease expiry, or missed relay dispatches. It:
 
 - Redispatches runs where the lease has expired and the status is `pending` or `running`
-- Releases branch parents that are waiting on branches that have all reached terminal state
+- Releases branch parents that are waiting on branches that have all reached terminal state. The release and the continuation's outbox row commit together; `swarm:relay` pushes the continuation (or eager dispatch, for step-durable runs), so schedule the relay as well
 - Dispatches due retries (runs where `next_retry_at` has passed)
 - Releases timed-out durable waits
 

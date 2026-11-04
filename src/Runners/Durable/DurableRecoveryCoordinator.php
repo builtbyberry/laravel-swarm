@@ -123,14 +123,17 @@ class DurableRecoveryCoordinator
             graceSeconds: (int) $this->config->get('swarm.durable.recovery.grace_seconds', 300),
         );
 
-        // Runs this pass failed, tried to fail, or skipped are kept out of the
-        // redispatched set, even if a recovery marker failed after release committed.
+        // Runs this pass failed, tried to fail, or skipped — never released to a join:
+        // kept out of the redispatched set.
         $failedJoinRunIds = [];
 
         foreach ($waitingJoins as $run) {
+            $released = false;
+
             // One run whose context cannot be read (missing, or undecryptable after an
-            // APP_KEY rotation) or whose failure, release, or marker write throws must not
-            // stop the sweep: report it, skip it, and recover every other run and phase.
+            // APP_KEY rotation), whose failure write throws, or whose release rolls back
+            // must not stop the sweep: it is reported and skipped, and every other run
+            // and phase still recovers.
             try {
                 $owesFailure = $this->joinRelease->owesFailure($run);
 
@@ -158,11 +161,30 @@ class DurableRecoveryCoordinator
 
                 // Release and continuation intent commit together. Read this boundary's
                 // branches again through the shared release, not the earlier branch sweep.
-                if ($this->joinRelease->releaseIfReady($run)) {
+                $released = $this->joinRelease->releaseIfReady($run);
+
+                if ($released) {
                     $this->durableRuns->markRecoveryDispatched($run['run_id']);
                 }
             } catch (Throwable $exception) {
-                $this->safeLog($this->logger, 'warning', 'laravel-swarm: skipping a durable waiting join during recovery; any committed continuation remains owned by the outbox.', [
+                if ($released) {
+                    // The release and its continuation's outbox row already committed, so
+                    // the run was recovered: swarm:relay (or an eager push) delivers it.
+                    // Only its recovery bookkeeping was lost.
+                    $this->safeLog($this->logger, 'warning', 'laravel-swarm: recovery released a durable waiting join but could not record the recovery; swarm:relay delivers its continuation.', [
+                        'run_id' => $run['run_id'],
+                        'swarm_class' => $run['swarm_class'] ?? null,
+                        'current_node_id' => $run['current_node_id'] ?? null,
+                        'exception' => $exception::class,
+                        'message' => $exception->getMessage(),
+                    ]);
+
+                    continue;
+                }
+
+                // Nothing was released (a failed release rolls back), so the run is still
+                // waiting at its join and the next sweep selects it again.
+                $this->safeLog($this->logger, 'warning', 'laravel-swarm: skipping a durable waiting join during recovery; it is retried on the next sweep.', [
                     'run_id' => $run['run_id'],
                     'swarm_class' => $run['swarm_class'] ?? null,
                     'current_node_id' => $run['current_node_id'] ?? null,

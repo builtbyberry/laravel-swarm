@@ -28,6 +28,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Persistence\DecoratingDurableRunStore;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Persistence\MarkerFailingDurableRunStore;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalFullSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalParallelFailBranchSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelFailingSwarm;
@@ -1169,7 +1170,7 @@ function joinRecoveryJobs(string $runId, int $step): array
     return $jobs;
 }
 
-function joinRecoveryAssertJob(string $profile, string $runId, int $step): AdvanceDurableSwarm|ResumeQueuedHierarchicalSwarm
+function joinRecoveryPushedJob(string $profile, string $runId, int $step): AdvanceDurableSwarm|ResumeQueuedHierarchicalSwarm
 {
     $jobs = joinRecoveryJobs($runId, $step);
     expect($jobs)->toHaveCount(1);
@@ -1184,6 +1185,7 @@ function joinRecoveryAssertJob(string $profile, string $runId, int $step): Advan
 
 describe('swarm:recover releases a join through the outbox', function () {
     beforeEach(function () {
+        JoinRecoveryQueue::$fail = false;
         joinWaitRuntime(queuedHierarchical: true);
         config()->set('swarm.durable.eager_dispatch', false);
         Artisan::call('migrate:fresh', ['--database' => 'testing']);
@@ -1213,7 +1215,7 @@ describe('swarm:recover releases a join through the outbox', function () {
         }
 
         Artisan::call('swarm:relay');
-        $job = joinRecoveryAssertJob($profile, $runId, $step);
+        $job = joinRecoveryPushedJob($profile, $runId, $step);
         $job->handle(app($profile === 'qh' ? QueuedHierarchicalCoordinator::class : DurableSwarmManager::class));
 
         expect($manager->find($runId)['status'])->toBe('completed')
@@ -1242,25 +1244,31 @@ describe('swarm:recover releases a join through the outbox', function () {
         expect(app(DurableOutbox::class)->drain()->claimed)->toBe(0);
         $this->travel((int) config('swarm.durable.relay.reservation_timeout_seconds') + 1)->seconds();
         Artisan::call('swarm:relay');
-        joinRecoveryAssertJob($profile, $runId, $step);
+        joinRecoveryPushedJob($profile, $runId, $step);
         expect(joinRecoveryRows($runId, $baseline)->count())->toBe(0);
     })->with(['parallel', 'hierarchical', 'qh']);
 
-    test('an outbox insert failure rolls back only its candidate and later phases still run', function () {
+    test('an outbox insert failure rolls back only its candidate and later phases still run', function (string $profile) {
         $broken = null;
         $realOutbox = app(DurableOutbox::class);
         $outbox = Mockery::mock($realOutbox);
-        $outbox->shouldReceive('enqueueStep')->andReturnUsing(function (...$args) use (&$broken, $realOutbox): int {
-            if ($args[0] === $broken) {
-                throw new RuntimeException('recovery outbox unavailable');
-            }
 
-            return $realOutbox->enqueueStep(...$args);
-        });
+        foreach (['enqueueStep', 'enqueueQueuedResume'] as $method) {
+            $outbox->shouldReceive($method)->andReturnUsing(function (...$args) use (&$broken, $realOutbox, $method) {
+                if ($args[0] === $broken) {
+                    throw new RuntimeException('recovery outbox unavailable');
+                }
+
+                return $realOutbox->{$method}(...$args);
+            });
+        }
+
         app()->instance(DurableOutbox::class, $outbox);
-        $broken = joinRecoveryCandidate('parallel');
+        // Two queued-hierarchical candidates each ask the coordinator for a plan.
+        FakeHierarchicalCoordinator::fake([joinWaitHierarchicalPlan(), joinWaitHierarchicalPlan()]);
+        $broken = joinRecoveryCandidate($profile);
         DB::table('swarm_durable_runs')->where('run_id', $broken)->update(['updated_at' => now('UTC')->subMinutes(30)]);
-        $healthy = joinRecoveryCandidate('parallel');
+        $healthy = joinRecoveryCandidate($profile);
         $timeout = joinWaitParallelRun(completeBranches: false);
         $manager = app(DurableSwarmManager::class);
         DB::table('swarm_durable_waits')->where('run_id', $timeout)->update(['timeout_at' => now('UTC')->subMinute()]);
@@ -1277,7 +1285,38 @@ describe('swarm:recover releases a join through the outbox', function () {
             ->and($recovered)->toContain($healthy)
             ->and($manager->inspect($timeout)->waits[0]['status'])->toBe('timed_out')
             ->and(app(ContextStore::class)->find($timeout)['metadata']['durable_wait_outcomes']['approval']['status'])->toBe('timed_out');
-    });
+    })->with(['parallel', 'qh']);
+
+    test('a recovery marker that fails after the release committed still reports the run as recovered and leaves its continuation to the relay', function (string $profile) {
+        $logger = Mockery::mock(LoggerInterface::class)->shouldIgnoreMissing();
+        $warnings = [];
+        $logger->shouldReceive('warning')->andReturnUsing(function (string|Stringable $message, array $context = []) use (&$warnings): void {
+            $warnings[] = ['message' => (string) $message, 'run_id' => $context['run_id'] ?? null];
+        });
+        app()->instance(LoggerInterface::class, $logger);
+        $store = app(MarkerFailingDurableRunStore::class);
+        app()->instance(DurableRunStore::class, $store);
+        $runId = joinRecoveryCandidate($profile);
+        $manager = app(DurableSwarmManager::class);
+        $step = (int) $manager->find($runId)['next_step_index'];
+        $baseline = (int) DB::table('swarm_durable_outbox')->max('id');
+        $store->failMarkerFor = $runId;
+        Queue::fake();
+
+        $recovered = $manager->recover();
+
+        $mine = array_values(array_filter($warnings, fn (array $w): bool => $w['run_id'] === $runId));
+        expect($manager->find($runId)['status'])->toBe('pending')
+            ->and((int) ($manager->find($runId)['recovery_count'] ?? 0))->toBe(0)
+            ->and(joinRecoveryRows($runId, $baseline)->count())->toBe(1)
+            ->and($recovered)->toContain($runId)
+            ->and($mine)->toHaveCount(1)
+            ->and($mine[0]['message'])->toContain('could not record the recovery')
+            ->and($mine[0]['message'])->not->toContain('retried on the next sweep');
+
+        Artisan::call('swarm:relay');
+        joinRecoveryPushedJob($profile, $runId, $step);
+    })->with(['parallel', 'qh']);
 
     test('eager recovery pushes once only after the outer commit with its outbox id', function (string $profile) {
         $runId = joinRecoveryCandidate($profile);
@@ -1293,8 +1332,10 @@ describe('swarm:recover releases a join through the outbox', function () {
                 ->and(joinRecoveryRows($runId, $baseline)->count())->toBe(1);
         });
 
-        $job = joinRecoveryAssertJob($profile, $runId, $step);
-        expect($job->outboxEntryId)->toBe((int) joinRecoveryRows($runId, $baseline)->value('id'));
+        $job = joinRecoveryPushedJob($profile, $runId, $step);
+        expect($job->outboxEntryId)->toBe((int) joinRecoveryRows($runId, $baseline)->value('id'))
+            // Reserved for the eager push, so the relay cannot claim it a second time.
+            ->and(joinRecoveryRows($runId, $baseline)->value('reserved_at'))->not->toBeNull();
         app(DurableOutbox::class)->drain();
         expect(joinRecoveryJobs($runId, $step))->toHaveCount(1);
     })->with(['parallel', 'hierarchical']);
@@ -1341,7 +1382,7 @@ describe('swarm:recover releases a join through the outbox', function () {
             ->and(joinRecoveryRows($runId, $baseline)->count())->toBe(1);
         $this->travel((int) config('swarm.durable.relay.reservation_timeout_seconds') + 1)->seconds();
         Artisan::call('swarm:relay');
-        joinRecoveryAssertJob($profile, $runId, $step);
+        joinRecoveryPushedJob($profile, $runId, $step);
         expect(joinRecoveryRows($runId, $baseline)->count())->toBe(0);
     })->with(['parallel', 'hierarchical']);
 });
