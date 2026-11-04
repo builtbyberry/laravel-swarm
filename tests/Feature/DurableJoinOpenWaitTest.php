@@ -446,6 +446,60 @@ describe('queued-hierarchical multi_worker', function () {
         expect(app(RunHistoryStore::class)->find($runId)['status'])->toBe('completed');
     });
 
+    test('a signal accepted while paused before the branches finish leaves the join to the last branch after resume (#601)', function () {
+        $runId = 'join-wait-qh-paused-signal-open-branches';
+        joinWaitQueuedRun($runId, completeBranches: false);
+        $manager = app(DurableSwarmManager::class);
+
+        $manager->pause($runId);
+        $signal = $manager->signal($runId, 'approval');
+
+        expect($signal->accepted)->toBeTrue()
+            ->and($manager->find($runId)['status'])->toBe('paused')
+            ->and(app(RunHistoryStore::class)->find($runId)['status'])->toBe('paused')
+            ->and(joinWaitDispatches($runId))->toBe(['step' => 0, 'queued_resume' => 0]);
+
+        $result = $manager->resume($runId);
+
+        // Still waiting on its branches: the join is not released early.
+        expect($result->isWaiting())->toBeTrue()
+            ->and($manager->find($runId)['status'])->toBe('waiting')
+            ->and(joinWaitDispatches($runId))->toBe(['step' => 0, 'queued_resume' => 0]);
+
+        foreach (app(DurableRunStore::class)->branchesFor($runId, 'parallel_node') as $branch) {
+            (new AdvanceDurableBranch($runId, (string) $branch['branch_id']))->handle($manager);
+        }
+
+        expect(joinWaitDispatches($runId))->toBe(['step' => 0, 'queued_resume' => 1]);
+
+        joinWaitResumeQueued($runId);
+
+        expect(app(RunHistoryStore::class)->find($runId)['status'])->toBe('completed');
+    });
+
+    test('a signal accepted while paused after the branches finished releases the join on resume (#601)', function () {
+        $runId = 'join-wait-qh-paused-signal-done-branches';
+        joinWaitQueuedRun($runId, completeBranches: false);
+        $manager = app(DurableSwarmManager::class);
+
+        $manager->pause($runId);
+        joinWaitMarkBranchesCompleted($runId);
+
+        expect($manager->signal($runId, 'approval')->accepted)->toBeTrue()
+            ->and($manager->find($runId)['status'])->toBe('paused')
+            ->and(joinWaitDispatches($runId))->toBe(['step' => 0, 'queued_resume' => 0]);
+
+        $result = $manager->resume($runId);
+
+        expect($result->isWaiting())->toBeTrue()
+            ->and($result->waitingBoundaryDispatched)->toBeTrue()
+            ->and(joinWaitDispatches($runId))->toBe(['step' => 0, 'queued_resume' => 1]);
+
+        joinWaitResumeQueued($runId);
+
+        expect(app(RunHistoryStore::class)->find($runId)['status'])->toBe('completed');
+    });
+
     test('swarm:recover does not release the queued join while a wait is open', function () {
         $runId = 'join-wait-qh-recover';
         joinWaitQueuedRun($runId, completeBranches: false);

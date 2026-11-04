@@ -822,15 +822,26 @@ the child finishes, or `swarm:recover` releases the wait as timed out:
 - A child that finished while its parent was paused is honoured on resume: the
   parent resumes straight to `pending` with the child's outcome recorded.
 - A paused run stays paused while its waits change; only resume moves it.
-- A signal delivered while the run is paused is recorded but not accepted.
-  Re-send it after the run resumes, with a new idempotency key (the original key
-  returns the earlier delivery as a `duplicate`). This is interim behaviour:
-  [#601](https://github.com/builtbyberry/laravel-swarm/issues/601) will accept the paused-time delivery on resume.
+- A signal delivered while the run is paused is accepted when the run has an
+  open wait of that name: the wait closes, the run stays paused, and resume
+  queues its next step. Sent inside a database transaction, or to a store
+  without atomic acceptance, it is recorded instead and must be sent again
+  after resume with a new idempotency key. See
+  [Signals While Paused](durable-waits-and-signals.md#signals-while-paused).
 - Resume decides from a locked read of the run's open waits, so a wait released
   at the same moment cannot leave the run waiting on nothing. If your application
   calls `resume()` inside a transaction that already holds the run (for example
-  one that also paused it), a worker releasing one of its waits at that moment
-  can deadlock with it; the database aborts one side, and retrying it is safe.
+  one that also paused it, or signalled it), a worker releasing one of its waits
+  at that moment, or another process accepting a signal for it, can deadlock
+  with it; the database aborts one side completely, and retrying it is safe.
+  Let Laravel retry the whole transaction:
+
+  ```php
+  DB::transaction(function () use ($operator, $runId) {
+      $operator->signal($runId, 'approval_received', ['approved' => true], 'approval-123');
+      $operator->resume($runId);
+  }, attempts: 3);
+  ```
 
 `swarm:recover` is the safety net for stranded durable runs. Schedule it
 frequently:

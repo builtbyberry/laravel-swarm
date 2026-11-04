@@ -151,6 +151,29 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
 
 ### Fixed
 
+- **A signal delivered while a durable run is paused is accepted (#601).** With
+  the bundled database store, a signal sent to a paused run that has an open
+  wait of that name now closes that wait, records its payload and outcome, and
+  returns `accepted: true` (HTTP 202 from the signal webhook). The run stays
+  paused; when it is resumed it has nothing left to wait on and its next step is
+  queued. Before, the signal was recorded and never applied, and had to be sent
+  again after resume with a new idempotency key. The acceptance is the same
+  single transaction a waiting run's signal already uses, so the signal is
+  matched to the wait that was open when it arrived, never by timestamp, and a
+  signal sent before the wait opened still does not satisfy it. A timeout that
+  passed during the pause no longer wins over a signal accepted during it. Sending
+  the same delivery again after resume with a new key, the earlier workaround, is
+  recorded and not applied a second time. A paused run's signal is still recorded
+  without being accepted when it is sent inside a database transaction (this
+  includes transaction middleware and Laravel's `RefreshDatabase` /
+  `DatabaseTransactions` test traits), and with a custom store that does not
+  implement `AcceptsDurableSignals`. `swarm:signal` now says what happened: accepted
+  while paused, still waiting, a duplicate, or recorded but not accepted and why.
+  When a paused run's last wait closes, its wait summary (`wait_reason`,
+  `waiting_since`, `wait_timeout_at`) is now cleared, including when a child
+  finishes during the pause. See
+  [Signals While Paused](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-waits-and-signals.md#signals-while-paused)
+  and [UPGRADING](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#resuming-a-run-that-was-paused-while-waiting).
 - **`swarm:recover` releases a waiting join through the outbox (#613).** When
   recovery released a run waiting at a branch join, it committed the release and
   then pushed the continuation job itself. A worker crash or a failed queue push
@@ -214,9 +237,7 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   was paused is still honoured on resume. The decision reads the run's open
   waits with a shared lock, so a wait released at the same moment, such as a
   child finishing, cannot leave the run waiting on nothing. A signal delivered
-  while the run is paused is recorded but not accepted: re-send it after resume
-  with a new idempotency key. That is interim until
-  [#601](https://github.com/builtbyberry/laravel-swarm/issues/601) accepts it on resume. See
+  while the run is paused is accepted at delivery (#601, above). See
   [UPGRADING](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#resuming-a-run-that-was-paused-while-waiting).
 - **A branch join no longer runs past an open signal or child-swarm wait
   (#600).** A durable parent waiting at a parallel join that also had an open

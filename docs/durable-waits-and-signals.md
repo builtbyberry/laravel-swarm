@@ -187,13 +187,16 @@ $result = $response->signal(
 );
 
 if ($result->accepted) {
-    // A matching wait was released and the next durable step can be dispatched.
+    // The open wait of that name closed with this signal. The run continues
+    // when nothing else holds it: not while it is paused, another wait is open,
+    // or it is waiting on its branches.
 }
 ```
 
 Signals can still be recorded with `accepted` set to `false` when the run has no
-matching open wait, the signal is a duplicate, the run is paused, or the run
-cannot advance. Use
+matching open wait, the signal is a duplicate, or the run cannot advance. A
+paused run's signal is recorded without being accepted only in the cases listed
+under [Signals While Paused](#signals-while-paused). Use
 `$result->status` and `$result->duplicate` when your application needs to
 distinguish those outcomes.
 
@@ -220,15 +223,55 @@ idempotency key accepts it once. Such a failure reaches you only as the exceptio
 `signal()` throws: no signal row, `SwarmSignalled` event or `signal.received`
 audit record is left for it, so log the failure and send the signal again. That also holds when you send the signal inside
 your own database transaction, and you catch the failure and commit. A signal
-sent when no wait of that name is open, or while the run is paused, is recorded
-without being accepted, and sending the same key again returns it as a
-duplicate.
+sent when no wait of that name is open is recorded without being accepted, and
+sending the same key again returns it as a duplicate.
 
 Atomic acceptance is a capability of the bundled database store
 (`Contracts\AcceptsDurableSignals`). A custom `DurableRunStore` without it, or a
 decorating store that does not implement and forward it, records the signal
 before the acceptance: if that acceptance then fails, the signal stays recorded
 and the same key comes back as a duplicate.
+
+## Signals While Paused
+
+A signal delivered to a paused run that has an open wait of that name is
+accepted: the wait closes with it, its payload and outcome are written to the
+run context, and the run stays paused. `accepted` is `true` and `SwarmSignalled`
+and the `signal.received` audit record report it as accepted. Nothing runs
+while the run is paused. When it is resumed, it has nothing left to wait on and
+its next step is queued (or, at a parallel join, it returns to its branches). A
+timeout that passed during the pause does not undo it: the wait is already
+closed.
+
+Sending the same delivery again after resume with a new idempotency key (the
+workaround earlier releases needed) does not apply it twice. The wait it was
+meant for is already satisfied, so the second delivery is recorded and not
+accepted, and the run is not moved again. That holds for the wait the first
+delivery satisfied; if the run later opens a new wait with the same name, a new
+signal is needed for that one.
+
+A paused run's signal is recorded but **not** accepted in three cases:
+
+- **It is sent inside a database transaction.** Acceptance depends on the
+  transaction level of the swarm's database connection when `signal()` is
+  called. None of the package's entry points (the webhook route,
+  `swarm:signal`, `SwarmOperator::signal()`, `$response->signal()`) opens a
+  transaction, but they run inside yours if you call them from one: a
+  transaction middleware, a job or controller using `DB::transaction()`, or
+  `Artisan::call('swarm:signal')` inside one. Laravel's `RefreshDatabase` and
+  `DatabaseTransactions` test traits count too, including `DB::afterCommit()`
+  callbacks that run while the test's own transaction is still open. Inside a
+  transaction an acceptance would read the run from your transaction's older
+  snapshot and keep the run row locked until you commit.
+- **The run has no open wait of that name.** As for any run, a signal sent
+  before its wait opens is recorded and never satisfies that wait.
+- **The store cannot accept atomically.** A custom `DurableRunStore` without
+  `Contracts\AcceptsDurableSignals`, or a decorator that does not forward it,
+  keeps the earlier behaviour for paused runs.
+
+A recorded paused-run signal is not applied on resume. Send it again after the
+run resumes, with a **new** idempotency key: the original key returns the
+earlier delivery as a `duplicate`.
 
 ## Operator Signals
 
@@ -272,11 +315,9 @@ timeout outcome and dispatches the next durable step when the run can continue.
 
 ## Edge Cases
 
-- A signal delivered while the run is paused is recorded but not accepted, and
-  it is not applied when the run resumes. Re-send it after the run resumes, with
-  a new idempotency key: the original key returns the earlier delivery as a
-  `duplicate`. This is interim behaviour until [#601](https://github.com/builtbyberry/laravel-swarm/issues/601) accepts it on
-  resume. See [Pause, Resume, Cancel, And Recover](durable-execution.md#pause-resume-cancel-and-recover).
+- A signal delivered while the run is paused is accepted when the run has an
+  open wait of that name, and the run continues once it is resumed. See
+  [Signals While Paused](#signals-while-paused) for when it is recorded instead.
 - A run waiting at a parallel join with an open wait is not released to its
   join until every wait is closed and every branch is done, whichever comes
   last. Under `fail_run` a failing branch still fails the run at once. See
