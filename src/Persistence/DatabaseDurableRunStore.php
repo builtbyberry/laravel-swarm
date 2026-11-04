@@ -13,6 +13,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\StoresDurableNativeStepResults;
 use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostDurableLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Persistence\Concerns\ConfirmsHeldLease;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\InteractsWithJsonColumns;
 use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
 use BuiltByBerry\LaravelSwarm\Responses\CitationEvidenceLimits;
@@ -33,6 +34,7 @@ use Illuminate\Support\Collection;
  */
 class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationStorage, ChecksNativeStepResultStorage, DurableRunStore, StoresDurableCitationEvidence, StoresDurableNativeStepResults
 {
+    use ConfirmsHeldLease;
     use InteractsWithJsonColumns;
 
     protected CitationEvidenceCodec $citations;
@@ -2610,26 +2612,11 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
     }
 
     /**
-     * Whether a guarded write that changed no row still matches its lease guard.
+     * Unlike guardedUpdate(), a 0 here is always read as a lost lease, with no
+     * stillHoldsLease() re-check: every branch write clears execution_token or
+     * writes a fresh started_at, so none can leave the row unchanged. A branch
+     * write that can ever be a no-op must add the re-check, or MySQL will refuse it.
      *
-     * MySQL reports changed rows, not matched rows (Laravel does not set
-     * PDO::MYSQL_ATTR_FOUND_ROWS), so a write whose values all equal the stored
-     * ones (an unchanged current_node_id within the same second as the lease
-     * acquisition) returns 0 while the lease is still held. Postgres and SQLite
-     * report matched rows, so there 0 means the lease is gone and this finds no row.
-     *
-     * The re-read is a locking read so it sees the latest committed row, not the
-     * caller's transaction snapshot: under REPEATABLE READ a plain read could still
-     * show a lease another worker has since taken. Inside a transaction, the lock
-     * then holds the row for the rest of the caller's writes; an autocommit caller
-     * gets the ownership check only.
-     */
-    protected function stillHoldsLease(Builder $guarded): bool
-    {
-        return (clone $guarded)->lockForUpdate()->first(['run_id']) !== null;
-    }
-
-    /**
      * @param  array<string, mixed>  $values
      */
     protected function guardedBranchUpdate(string $runId, string $branchId, string $executionToken, array $values): void

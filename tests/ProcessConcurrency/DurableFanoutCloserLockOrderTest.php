@@ -76,9 +76,10 @@ function fanoutCloserDirs(?string $add = null, bool $clear = false): array
 }
 
 /**
- * Fake agent outputs that each take longer than a second: on MySQL a step that starts
- * and finishes within one second trips the pre-existing history-lease bug (release
- * finding MYSQL-LEASE); these tests are not about it.
+ * Fake agent outputs that each take longer than a second. The delay was added while
+ * MySQL read a step that started and finished within one second as a lost history
+ * lease (release finding MYSQL-LEASE, since fixed); it is kept so these tests' timing
+ * is unchanged.
  */
 function fanoutCloserSlow(string $output): Closure
 {

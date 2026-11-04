@@ -259,7 +259,9 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   re-read the lease guard, under a row lock, when a guarded write changes no row.
   A lease that is still held counts as written; a lease another worker took or
   that expired is refused as before. Postgres and SQLite already reported matched
-  rows and are unaffected. No schema change.
+  rows and are unaffected. No schema change. A run this left stranded before you
+  upgrade needs no manual repair: once its lease expires, `swarm:recover` picks it
+  up as it does any stranded run, and the retry no longer fails the same way.
 
 ## v0.28.1 - 2026-10-10
 

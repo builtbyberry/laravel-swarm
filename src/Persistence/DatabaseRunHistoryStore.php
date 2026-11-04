@@ -18,6 +18,7 @@ use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\MissingQueueLeaseSchemaException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Persistence\Concerns\ConfirmsHeldLease;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\InteractsWithJsonColumns;
 use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
 use BuiltByBerry\LaravelSwarm\Responses\CitationEvidenceLimits;
@@ -41,6 +42,7 @@ use Throwable;
  */
 class DatabaseRunHistoryStore implements ChecksCitationStorage, ChecksNativeStepResultStorage, ClaimsQueuedRunExecution, ReadableRunHistoryStore, RecordsCitationSteps, RecordsContextualRunFailure, RunHistoryStore
 {
+    use ConfirmsHeldLease;
     use InteractsWithJsonColumns;
 
     protected CitationEvidenceCodec $citations;
@@ -591,6 +593,13 @@ class DatabaseRunHistoryStore implements ChecksCitationStorage, ChecksNativeStep
     }
 
     /**
+     * With an execution token, the write is lease-guarded and a write that changed
+     * no row is re-checked with stillHoldsLease(): a lease still held returns 1,
+     * the one row the guard matched, so callers treat it as written. Callers that
+     * take a side effect on 1 (callback settlement in complete() and fail()) are
+     * safe because those writes clear execution_token and so always change the
+     * row; a lease-guarded write that keeps the token must not arm anything on 1.
+     *
      * @param  array<string, mixed>  $values
      */
     protected function update(string $runId, array $values, ?string $executionToken = null, ?int $leaseSeconds = null): int
@@ -619,27 +628,6 @@ class DatabaseRunHistoryStore implements ChecksCitationStorage, ChecksNativeStep
         }
 
         return $query->update($values);
-    }
-
-    /**
-     * Whether a lease-guarded write that changed no row still matches its guard.
-     *
-     * MySQL reports changed rows, not matched rows (Laravel does not set
-     * PDO::MYSQL_ATTR_FOUND_ROWS), so a lease renewal whose values all equal the
-     * stored ones (a step recorded within the same second as the previous write)
-     * returns 0 while the lease is still held. Postgres and SQLite report matched
-     * rows, so there 0 means the lease is gone and this finds no row. A confirmed
-     * no-op counts as the one row the guard matched.
-     *
-     * The re-read is a locking read so it sees the latest committed row, not the
-     * caller's transaction snapshot: under REPEATABLE READ a plain read could still
-     * show a lease another worker has since taken. Inside a transaction, the lock
-     * then holds the row for the rest of the caller's writes; an autocommit caller
-     * gets the ownership check only.
-     */
-    protected function stillHoldsLease(Builder $guarded): bool
-    {
-        return (clone $guarded)->lockForUpdate()->first(['run_id']) !== null;
     }
 
     protected function isTerminalStatus(string $status): bool
