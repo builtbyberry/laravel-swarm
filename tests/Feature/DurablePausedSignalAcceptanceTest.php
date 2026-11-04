@@ -453,9 +453,12 @@ test('a paused run\'s signal recorded because it was sent inside a transaction i
     $logger->shouldHaveReceived('notice')->once()->withArgs(fn (string $message, array $context): bool => str_contains($message, 'inside a database transaction')
         && $context === ['run_id' => $runId, 'signal_name' => 'approval_received']);
 
+    // The same key again inside a transaction is a duplicate: nothing new to explain.
+    DB::transaction(fn () => $handler->signal($runId, 'approval_received', null, 'in-transaction'));
     $handler->signal($runId, 'approval_received', null, 'outside');
 
     $logger->shouldHaveReceived('notice')->once();
+    $logger->shouldHaveReceived('notice')->withArgs(fn (string $message): bool => str_contains($message, 'If the run has an open wait of that name'));
 });
 
 test('swarm:signal says what happened to the signal and to the run', function () {
@@ -503,15 +506,15 @@ test('swarm:signal names why a paused run\'s open wait did not accept the signal
         $mock->shouldReceive('inspect')->once()->andReturn($real->inspect($runId));
         app()->instance(DurableSwarmManager::class, $mock);
         Artisan::call('swarm:signal', ['runId' => $runId, 'name' => 'approval_received', '--idempotency-key' => 'cause']);
-        $expected = "The run is paused and the run's durable store cannot accept a signal while the run is paused.";
+        $expected = 'The run is paused and its durable store cannot accept a signal while the run is paused. Re-send it after the run is resumed';
     } else {
         DB::transaction(fn () => Artisan::call('swarm:signal', ['runId' => $runId, 'name' => 'approval_received', '--idempotency-key' => 'cause']));
-        $expected = 'The run is paused and the signal was sent inside a database transaction.';
+        $expected = 'either the signal was sent inside a database transaction, or the wait opened after it arrived. If the wait was open when you sent it, re-send it after the run is resumed';
     }
 
     expect(Artisan::output())->toContain('Signal recorded but not accepted.')
         ->toContain($expected)
-        ->toContain('re-send it after the run is resumed, with a new idempotency key');
+        ->toContain('with a new idempotency key');
 })->with(['inside a database transaction' => 'transaction', 'store without the acceptance capability' => 'store']);
 
 test('swarm:signal reports a run still waiting and a run released', function () {

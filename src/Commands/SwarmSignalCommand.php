@@ -100,10 +100,11 @@ class SwarmSignalCommand extends Command
         }
 
         if ($runStatus === 'paused') {
-            $cause = $store instanceof AcceptsDurableSignals
-                ? 'the signal was sent inside a database transaction'
-                : "the run's durable store cannot accept a signal while the run is paused";
-            $this->components->warn("Signal recorded but not accepted. The run is paused and {$cause}. To apply it, re-send it after the run is resumed, with a new idempotency key.");
+            // Read after delivery: the wait may have opened after the signal arrived, so
+            // with a capable store the cause is not certain and both are named.
+            $this->components->warn($store instanceof AcceptsDurableSignals
+                ? "Signal recorded but not accepted. The run is paused with an open wait named [{$name}]: either the signal was sent inside a database transaction, or the wait opened after it arrived. If the wait was open when you sent it, re-send it after the run is resumed, with a new idempotency key."
+                : 'Signal recorded but not accepted. The run is paused and its durable store cannot accept a signal while the run is paused. Re-send it after the run is resumed, with a new idempotency key.');
 
             return;
         }

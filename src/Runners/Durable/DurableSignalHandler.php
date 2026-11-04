@@ -138,17 +138,20 @@ class DurableSignalHandler
             }
         }
 
-        if ($run['status'] === 'paused' && $this->connection->transactionLevel() > 0) {
-            // Nothing in the result tells the caller why; this says it.
-            $this->safeLog($this->logger, 'notice', 'laravel-swarm: a signal for a paused durable run was sent inside a database transaction, so it is recorded and not accepted; send it again after the run is resumed, with a new idempotency key.', [
+        // No open wait of this name, a run that is neither waiting nor paused, or a paused
+        // run inside an application transaction: recorded, not accepted.
+        $signal = $this->durableRuns->recordSignal($runId, $name, $capturedPayload, $idempotencyKey);
+
+        if ($run['status'] === 'paused' && $this->connection->transactionLevel() > 0 && ($signal['duplicate'] ?? false) !== true) {
+            // Nothing in the result says why a paused run's signal was not tried for
+            // acceptance; this does. Whether a wait of that name is open is not checked.
+            $this->safeLog($this->logger, 'notice', 'laravel-swarm: a signal for a paused durable run was sent inside a database transaction, so it was recorded without being accepted. If the run has an open wait of that name, send the signal again after the run is resumed, with a new idempotency key.', [
                 'run_id' => $runId,
                 'signal_name' => $name,
             ]);
         }
 
-        // No open wait of this name, a run that is neither waiting nor paused, or a paused
-        // run inside an application transaction: recorded, not accepted.
-        return [$this->durableRuns->recordSignal($runId, $name, $capturedPayload, $idempotencyKey), false];
+        return [$signal, false];
     }
 
     /**
