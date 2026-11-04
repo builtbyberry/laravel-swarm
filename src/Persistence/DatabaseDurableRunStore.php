@@ -2613,9 +2613,13 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
 
     /**
      * Unlike guardedUpdate(), a 0 here is always read as a lost lease, with no
-     * stillHoldsLease() re-check: every branch write clears execution_token or
-     * writes a fresh started_at, so none can leave the row unchanged. A branch
-     * write that can ever be a no-op must add the re-check, or MySQL will refuse it.
+     * stillHoldsLease() re-check. That holds because of how the branch advancer
+     * calls these writes: every write but markBranchRunning() clears
+     * execution_token, and markBranchRunning() runs once per lease, where it either
+     * moves the branch out of `pending` or, on a re-lease, writes a started_at newer
+     * than the one stored before the old lease expired. Calling markBranchRunning()
+     * twice on one lease within the same second would change nothing, and MySQL
+     * would refuse it here; any branch write that can be a no-op needs the re-check.
      *
      * @param  array<string, mixed>  $values
      */

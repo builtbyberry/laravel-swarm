@@ -259,9 +259,13 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   re-read the lease guard, under a row lock, when a guarded write changes no row.
   A lease that is still held counts as written; a lease another worker took or
   that expired is refused as before. Postgres and SQLite already reported matched
-  rows and are unaffected. No schema change. A run this left stranded before you
-  upgrade needs no manual repair: once its lease expires, `swarm:recover` picks it
-  up as it does any stranded run, and the retry no longer fails the same way.
+  rows and are unaffected. No schema change. Runs this left stranded before you
+  upgrade are not all recovered on their own. A `multi_worker` continuation left
+  `running` is dispatched again by `swarm:recover` once its lease and grace period
+  expire, and now finishes. A `fail_run` parent left `pending` while its history
+  shows `waiting`, and a queued run without a durable row left `running`, are not
+  picked up by `swarm:recover`: cancel the durable parent with `swarm:cancel` and
+  dispatch those runs again.
 
 ## v0.28.1 - 2026-10-10
 
