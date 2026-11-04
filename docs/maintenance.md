@@ -496,12 +496,15 @@ next durable step can observe a timeout outcome.
   accepting the job, `swarm:recover` picks up the stuck `pending` run and
   redispatches it on the next poll.
 
-- **`swarm:recover` itself** — Recovery dispatches directly without writing to
-  the outbox. This is by design: recover is the repair tool for exactly the
-  crash window the outbox prevents, so it cannot use the outbox to dispatch
-  (that would be circular). Recovery has the same narrow crash window as
-  pre-outbox dispatch; if recover crashes mid-dispatch, the run remains
-  `pending` and the next `swarm:recover` invocation redispatches it.
+- **Ordinary `swarm:recover` redispatches**: Recovery pushes already-committed
+  overdue work directly, including queued-hierarchical resumes with an expired
+  history lease. If a push is lost, that work remains eligible for a later sweep.
+  A **waiting join released by recovery** instead commits its release and
+  continuation outbox row together. Its queued-hierarchical resume waits for the
+  next relay run, just like normal queued-hierarchical join releases. Its
+  step-durable continuation is pushed after commit when eager dispatch is enabled
+  on a non-`sync` driver; otherwise it also waits for the relay. A failed eager
+  push leaves the reserved row for the relay after the reservation timeout.
 
 Prune-based retention is complementary to queue design, not a substitute for
 it. The built-in lightweight queue mode is a good fit for normal background

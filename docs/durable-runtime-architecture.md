@@ -78,7 +78,7 @@ Each durable step is processed by a normal Laravel queue job:
 | `BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm` | `$manager->advance($runId, $stepIndex, $outboxEntryId)` |
 | `BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableBranch` | `$manager->advanceBranch($runId, $branchId, $outboxEntryId)` |
 
-**Building** the next job (correct connection, queue, and job class) is centralized in `BuiltByBerry\LaravelSwarm\Runners\Durable\DurableJobDispatcher`. `$outboxEntryId` is set only on a job pushed directly on commit (see below); relay and recovery pushes carry `null`.
+**Building** the next job (correct connection, queue, and job class) is centralized in `BuiltByBerry\LaravelSwarm\Runners\Durable\DurableJobDispatcher`. `$outboxEntryId` is set only on a job pushed directly on commit (see below); relay pushes and ordinary direct recovery redispatches carry `null`. A waiting join released by recovery uses `DurableJoinRelease`: its step job carries the entry id when eager dispatch pushes it after commit, otherwise the relay delivers it. Queued-hierarchical join resumes stay relay-driven.
 
 ### From checkpoint to queue: the outbox, the relay, and eager dispatch
 
@@ -112,7 +112,7 @@ queues the continuation itself.
 The released migration that creates `swarm_durable_outbox` describes only the
 relay path in its docblock; this section is the description of both.
 
-If you need to **record or stub dispatches** in tests, bind `DurableJobDispatcher` in the container before resolving `DurableSwarmManager`. That double sees relay and recovery dispatches only: with eager dispatch on, pushes on commit build the job through `makeStepJob()` / `makeBranchJob()` and go straight to the queue, so observe them with `Queue::fake()`. The package’s own feature tests use that pattern; see `tests/Feature/DurableSwarmTest.php` for a working example.
+If you need to **record or stub dispatches** in tests, bind `DurableJobDispatcher` in the container before resolving `DurableSwarmManager`. That double sees relay dispatches and ordinary direct recovery redispatches: with eager dispatch on, pushes on commit build the job through `makeStepJob()` / `makeBranchJob()` and go straight to the queue, so observe them with `Queue::fake()`. This includes step-durable joins released by recovery; queued-hierarchical joins released by recovery reach the dispatcher through the relay. The package’s own feature tests use that pattern; see `tests/Feature/DurableSwarmTest.php` for a working example.
 
 ## Collaborator responsibilities
 

@@ -6,7 +6,6 @@ namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
-use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
 use BuiltByBerry\LaravelSwarm\Events\SwarmWaitTimedOut;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
@@ -124,14 +123,14 @@ class DurableRecoveryCoordinator
             graceSeconds: (int) $this->config->get('swarm.durable.recovery.grace_seconds', 300),
         );
 
-        // Runs this pass failed, tried to fail, or skipped — never released to a join:
-        // kept out of the redispatched set.
+        // Runs this pass failed, tried to fail, or skipped are kept out of the
+        // redispatched set, even if a recovery marker failed after release committed.
         $failedJoinRunIds = [];
 
         foreach ($waitingJoins as $run) {
             // One run whose context cannot be read (missing, or undecryptable after an
-            // APP_KEY rotation) or whose failure write throws must not stop the sweep:
-            // it is reported and skipped, and every other run and phase still recovers.
+            // APP_KEY rotation) or whose failure, release, or marker write throws must not
+            // stop the sweep: report it, skip it, and recover every other run and phase.
             try {
                 $owesFailure = $this->joinRelease->owesFailure($run);
 
@@ -153,9 +152,17 @@ class DurableRecoveryCoordinator
                             'current_node_id' => $run['current_node_id'] ?? null,
                         ]);
                     }
+
+                    continue;
+                }
+
+                // Release and continuation intent commit together. Read this boundary's
+                // branches again through the shared release, not the earlier branch sweep.
+                if ($this->joinRelease->releaseIfReady($run)) {
+                    $this->durableRuns->markRecoveryDispatched($run['run_id']);
                 }
             } catch (Throwable $exception) {
-                $this->safeLog($this->logger, 'warning', 'laravel-swarm: skipping a durable waiting join during recovery; it is retried on the next sweep.', [
+                $this->safeLog($this->logger, 'warning', 'laravel-swarm: skipping a durable waiting join during recovery; any committed continuation remains owned by the outbox.', [
                     'run_id' => $run['run_id'],
                     'swarm_class' => $run['swarm_class'] ?? null,
                     'current_node_id' => $run['current_node_id'] ?? null,
@@ -165,21 +172,6 @@ class DurableRecoveryCoordinator
                 $failedJoinRunIds[] = (string) $run['run_id'];
 
                 continue;
-            }
-
-            if ($owesFailure) {
-                continue;
-            }
-
-            if ($this->durableRuns->releaseWaitingRunForJoin($run['run_id'], (int) $run['next_step_index'])) {
-                if (($run['coordination_profile'] ?? CoordinationProfile::StepDurable->value) === CoordinationProfile::QueueHierarchicalParallel->value) {
-                    $this->jobs->dispatchQueuedHierarchicalResume($run);
-                } else {
-                    $dispatch = $dispatchStep($run['run_id'], (int) $run['next_step_index'], $run['queue_connection'], $run['queue_name']);
-                    unset($dispatch);
-                }
-
-                $this->durableRuns->markRecoveryDispatched($run['run_id']);
             }
         }
 

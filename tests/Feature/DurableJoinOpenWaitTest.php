@@ -33,6 +33,9 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalParallelFail
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelFailingSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
+use Illuminate\Database\Query\Builder;
+use Illuminate\Queue\Connectors\ConnectorInterface;
+use Illuminate\Queue\NullQueue;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
@@ -1081,4 +1084,264 @@ describe('recovery and dispatch boundaries', function () {
         expect($failed)->toBe(! $replacementStore)
             ->and($store->find($runId)['status'])->toBe($replacementStore ? 'waiting' : 'pending');
     })->with(['bundled store' => false, 'replacement store' => true]);
+});
+
+final class JoinRecoveryQueue extends NullQueue
+{
+    public static bool $fail = false;
+
+    public function push($job, $data = '', $queue = null)
+    {
+        if (self::$fail) {
+            throw new RuntimeException('recovery queue unavailable');
+        }
+
+        return parent::push($job, $data, $queue);
+    }
+}
+
+function joinRecoveryThrowingQueue(): void
+{
+    JoinRecoveryQueue::$fail = false;
+    config()->set('queue.connections.durable-test', ['driver' => 'join-recovery']);
+    app('queue')->extend('join-recovery', fn (): ConnectorInterface => new class implements ConnectorInterface
+    {
+        public function connect(array $config)
+        {
+            return new JoinRecoveryQueue;
+        }
+    });
+    expect(Queue::connection('durable-test'))->toBeInstanceOf(JoinRecoveryQueue::class);
+}
+
+/**
+ * Remove the fixture wait without a closer so recovery alone can release the join.
+ */
+function joinRecoveryCandidate(string $profile): string
+{
+    if ($profile === 'qh') {
+        $runId = 'join-recovery-'.Str::uuid();
+        joinWaitQueuedRun($runId, completeBranches: false);
+    } elseif ($profile === 'hierarchical') {
+        $runId = FakeHierarchicalFullSwarm::make()->dispatchDurable('hierarchical-task')->runId;
+        $manager = app(DurableSwarmManager::class);
+        (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+        (new AdvanceDurableSwarm($runId, 1))->handle($manager);
+        $manager->wait($runId, 'approval');
+    } else {
+        $runId = joinWaitParallelRun(completeBranches: false);
+    }
+
+    joinWaitMarkBranchesCompleted($runId);
+    DB::table('swarm_durable_waits')->where('run_id', $runId)->where('name', 'approval')->delete();
+    DB::table('swarm_durable_runs')->where('run_id', $runId)->update([
+        'queue_connection' => 'durable-test',
+        'queue_name' => 'recovered-joins',
+    ]);
+    joinWaitAgeRun($runId);
+    expect(array_column(app(DurableRunStore::class)->recoverableWaitingJoins(runId: $runId), 'run_id'))->toBe([$runId]);
+
+    return $runId;
+}
+
+function joinRecoveryRows(string $runId, int $baseline): Builder
+{
+    $run = app(DurableRunStore::class)->find($runId);
+
+    return DB::table('swarm_durable_outbox')->where('run_id', $runId)->where('id', '>', $baseline)
+        ->where('dispatch_type', $run['coordination_profile'] === 'queue_hierarchical_parallel' ? 'queued_resume' : 'step');
+}
+
+/** @return list<AdvanceDurableSwarm|ResumeQueuedHierarchicalSwarm> */
+function joinRecoveryJobs(string $runId, int $step): array
+{
+    $jobs = [];
+
+    foreach (Queue::pushedJobs() as $pushes) {
+        foreach ($pushes as $push) {
+            $job = $push['job'];
+            if (($job instanceof AdvanceDurableSwarm && $job->stepIndex === $step || $job instanceof ResumeQueuedHierarchicalSwarm) && $job->runId === $runId) {
+                $jobs[] = $job;
+            }
+        }
+    }
+
+    return $jobs;
+}
+
+function joinRecoveryAssertJob(string $profile, string $runId, int $step): AdvanceDurableSwarm|ResumeQueuedHierarchicalSwarm
+{
+    $jobs = joinRecoveryJobs($runId, $step);
+    expect($jobs)->toHaveCount(1);
+    $job = $jobs[0];
+    expect($job)->toBeInstanceOf($profile === 'qh' ? ResumeQueuedHierarchicalSwarm::class : AdvanceDurableSwarm::class)
+        ->and($job->runId)->toBe($runId)
+        ->and($job->connection)->toBe('durable-test')
+        ->and($job->queue)->toBe('recovered-joins');
+
+    return $job;
+}
+
+describe('swarm:recover releases a join through the outbox', function () {
+    beforeEach(function () {
+        joinWaitRuntime(queuedHierarchical: true);
+        config()->set('swarm.durable.eager_dispatch', false);
+        Artisan::call('migrate:fresh', ['--database' => 'testing']);
+        FakeHierarchicalCoordinator::fake([joinWaitHierarchicalPlan()]);
+        FakeResearcher::fake(['research-out']);
+        FakeWriter::fake(['writer-out']);
+        FakeEditor::fake(['editor-out']);
+    });
+
+    test('recovery writes one continuation outbox row and pushes nothing itself; the relay delivers the job that completes the run', function (string $profile) {
+        $runId = joinRecoveryCandidate($profile);
+        $manager = app(DurableSwarmManager::class);
+        $step = (int) $manager->find($runId)['next_step_index'];
+        $baseline = (int) DB::table('swarm_durable_outbox')->max('id');
+        Queue::fake();
+
+        $recovered = $manager->recover();
+
+        expect(joinRecoveryRows($runId, $baseline)->count())->toBe(1)
+            ->and($manager->find($runId)['status'])->toBe('pending')
+            ->and($recovered)->toContain($runId)
+            ->and(joinRecoveryJobs($runId, $step))->toBe([]);
+        $row = joinRecoveryRows($runId, $baseline)->first();
+        expect($row->queue_connection)->toBe('durable-test')->and($row->queue_name)->toBe('recovered-joins');
+        if ($profile !== 'qh') {
+            expect((int) json_decode($row->payload, true, flags: JSON_THROW_ON_ERROR)['step_index'])->toBe($step);
+        }
+
+        Artisan::call('swarm:relay');
+        $job = joinRecoveryAssertJob($profile, $runId, $step);
+        $job->handle(app($profile === 'qh' ? QueuedHierarchicalCoordinator::class : DurableSwarmManager::class));
+
+        expect($manager->find($runId)['status'])->toBe('completed')
+            ->and(app(RunHistoryStore::class)->find($runId)['status'])->toBe('completed');
+    })->with(['parallel', 'hierarchical', 'qh']);
+
+    test('when the queue is down, the recovered intent survives the failed relay push and is delivered once its reservation goes stale', function (string $profile) {
+        Exceptions::fake();
+        joinRecoveryThrowingQueue();
+        $runId = joinRecoveryCandidate($profile);
+        $manager = app(DurableSwarmManager::class);
+        $step = (int) $manager->find($runId)['next_step_index'];
+        $baseline = (int) DB::table('swarm_durable_outbox')->max('id');
+        JoinRecoveryQueue::$fail = true;
+
+        $manager->recover();
+        expect(joinRecoveryRows($runId, $baseline)->count())->toBe(1)
+            ->and($manager->find($runId)['status'])->toBe('pending');
+        $result = app(DurableOutbox::class)->drain();
+        expect($result->failed)->toBeGreaterThan(0)
+            ->and(joinRecoveryRows($runId, $baseline)->count())->toBe(1)
+            ->and(joinRecoveryRows($runId, $baseline)->value('reserved_at'))->not->toBeNull();
+
+        JoinRecoveryQueue::$fail = false;
+        Queue::fake();
+        expect(app(DurableOutbox::class)->drain()->claimed)->toBe(0);
+        $this->travel((int) config('swarm.durable.relay.reservation_timeout_seconds') + 1)->seconds();
+        Artisan::call('swarm:relay');
+        joinRecoveryAssertJob($profile, $runId, $step);
+        expect(joinRecoveryRows($runId, $baseline)->count())->toBe(0);
+    })->with(['parallel', 'hierarchical', 'qh']);
+
+    test('an outbox insert failure rolls back only its candidate and later phases still run', function () {
+        $broken = null;
+        $realOutbox = app(DurableOutbox::class);
+        $outbox = Mockery::mock($realOutbox);
+        $outbox->shouldReceive('enqueueStep')->andReturnUsing(function (...$args) use (&$broken, $realOutbox): int {
+            if ($args[0] === $broken) {
+                throw new RuntimeException('recovery outbox unavailable');
+            }
+
+            return $realOutbox->enqueueStep(...$args);
+        });
+        app()->instance(DurableOutbox::class, $outbox);
+        $broken = joinRecoveryCandidate('parallel');
+        DB::table('swarm_durable_runs')->where('run_id', $broken)->update(['updated_at' => now('UTC')->subMinutes(30)]);
+        $healthy = joinRecoveryCandidate('parallel');
+        $timeout = joinWaitParallelRun(completeBranches: false);
+        $manager = app(DurableSwarmManager::class);
+        DB::table('swarm_durable_waits')->where('run_id', $timeout)->update(['timeout_at' => now('UTC')->subMinute()]);
+        $baseline = (int) DB::table('swarm_durable_outbox')->max('id');
+        Queue::fake();
+
+        $recovered = $manager->recover();
+
+        expect($manager->find($broken)['status'])->toBe('waiting')
+            ->and(joinRecoveryRows($broken, $baseline)->count())->toBe(0)
+            ->and($recovered)->not->toContain($broken)
+            ->and($manager->find($healthy)['status'])->toBe('pending')
+            ->and(joinRecoveryRows($healthy, $baseline)->count())->toBe(1)
+            ->and($recovered)->toContain($healthy)
+            ->and($manager->inspect($timeout)->waits[0]['status'])->toBe('timed_out')
+            ->and(app(ContextStore::class)->find($timeout)['metadata']['durable_wait_outcomes']['approval']['status'])->toBe('timed_out');
+    });
+
+    test('eager recovery pushes once only after the outer commit with its outbox id', function (string $profile) {
+        $runId = joinRecoveryCandidate($profile);
+        $manager = app(DurableSwarmManager::class);
+        $step = (int) $manager->find($runId)['next_step_index'];
+        $baseline = (int) DB::table('swarm_durable_outbox')->max('id');
+        config()->set('swarm.durable.eager_dispatch', true);
+        Queue::fake();
+
+        DB::transaction(function () use ($manager, $runId, $step, $baseline) {
+            $manager->recover();
+            expect(joinRecoveryJobs($runId, $step))->toBe([])
+                ->and(joinRecoveryRows($runId, $baseline)->count())->toBe(1);
+        });
+
+        $job = joinRecoveryAssertJob($profile, $runId, $step);
+        expect($job->outboxEntryId)->toBe((int) joinRecoveryRows($runId, $baseline)->value('id'));
+        app(DurableOutbox::class)->drain();
+        expect(joinRecoveryJobs($runId, $step))->toHaveCount(1);
+    })->with(['parallel', 'hierarchical']);
+
+    test('rolling back eager recovery restores the waiting join and drops its intent and push', function (string $profile) {
+        $runId = joinRecoveryCandidate($profile);
+        $manager = app(DurableSwarmManager::class);
+        $step = (int) $manager->find($runId)['next_step_index'];
+        $baseline = (int) DB::table('swarm_durable_outbox')->max('id');
+        config()->set('swarm.durable.eager_dispatch', true);
+        Queue::fake();
+        DB::beginTransaction();
+        try {
+            $manager->recover();
+            expect(joinRecoveryRows($runId, $baseline)->count())->toBe(1)
+                ->and(joinRecoveryJobs($runId, $step))->toBe([]);
+        } finally {
+            DB::rollBack();
+        }
+
+        expect($manager->find($runId)['status'])->toBe('waiting')
+            ->and(joinRecoveryRows($runId, $baseline)->count())->toBe(0)
+            ->and(joinRecoveryJobs($runId, $step))->toBe([]);
+    })->with(['parallel', 'hierarchical']);
+
+    test('a failed eager push leaves a reserved intent for the relay after its timeout', function (string $profile) {
+        Exceptions::fake();
+        joinRecoveryThrowingQueue();
+        $runId = joinRecoveryCandidate($profile);
+        $manager = app(DurableSwarmManager::class);
+        $step = (int) $manager->find($runId)['next_step_index'];
+        $baseline = (int) DB::table('swarm_durable_outbox')->max('id');
+        config()->set('swarm.durable.eager_dispatch', true);
+        JoinRecoveryQueue::$fail = true;
+
+        DB::transaction(fn () => $manager->recover());
+        expect(joinRecoveryRows($runId, $baseline)->count())->toBe(1)
+            ->and(joinRecoveryRows($runId, $baseline)->value('reserved_at'))->not->toBeNull();
+        Exceptions::assertReported(fn (RuntimeException $e): bool => str_contains($e->getMessage(), 'Eager durable dispatch failed'));
+        JoinRecoveryQueue::$fail = false;
+        Queue::fake();
+        app(DurableOutbox::class)->drain();
+        expect(joinRecoveryJobs($runId, $step))->toBe([])
+            ->and(joinRecoveryRows($runId, $baseline)->count())->toBe(1);
+        $this->travel((int) config('swarm.durable.relay.reservation_timeout_seconds') + 1)->seconds();
+        Artisan::call('swarm:relay');
+        joinRecoveryAssertJob($profile, $runId, $step);
+        expect(joinRecoveryRows($runId, $baseline)->count())->toBe(0);
+    })->with(['parallel', 'hierarchical']);
 });
