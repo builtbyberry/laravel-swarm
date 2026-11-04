@@ -2598,16 +2598,35 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
         $now = Carbon::now('UTC');
         $values['updated_at'] = $now;
 
-        $updated = $this->table()
+        $guarded = $this->table()
             ->where('run_id', $runId)
             ->where('execution_token', $executionToken)
             ->whereNotNull('leased_until')
-            ->where('leased_until', '>=', $now)
-            ->update($values);
+            ->where('leased_until', '>=', $now);
 
-        if ($updated === 0) {
+        if ((clone $guarded)->update($values) === 0 && ! $this->stillHoldsLease($guarded)) {
             throw new LostDurableLeaseException("Durable swarm run [{$runId}] no longer owns the execution lease.");
         }
+    }
+
+    /**
+     * Whether a guarded write that changed no row still matches its lease guard.
+     *
+     * MySQL reports changed rows, not matched rows (Laravel does not set
+     * PDO::MYSQL_ATTR_FOUND_ROWS), so a write whose values all equal the stored
+     * ones (an unchanged current_node_id within the same second as the lease
+     * acquisition) returns 0 while the lease is still held. Postgres and SQLite
+     * report matched rows, so there 0 means the lease is gone and this finds no row.
+     *
+     * The re-read is a locking read so it sees the latest committed row, not the
+     * caller's transaction snapshot: under REPEATABLE READ a plain read could still
+     * show a lease another worker has since taken. Inside a transaction, the lock
+     * then holds the row for the rest of the caller's writes; an autocommit caller
+     * gets the ownership check only.
+     */
+    protected function stillHoldsLease(Builder $guarded): bool
+    {
+        return (clone $guarded)->lockForUpdate()->first(['run_id']) !== null;
     }
 
     /**

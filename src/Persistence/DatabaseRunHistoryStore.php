@@ -608,11 +608,38 @@ class DatabaseRunHistoryStore implements ChecksCitationStorage, ChecksNativeStep
             if ($leaseSeconds !== null) {
                 $values['leased_until'] = $timestamp->copy()->addSeconds($leaseSeconds);
             }
-        } elseif (isset($values['status']) && is_string($values['status']) && $this->isTerminalStatus($values['status'])) {
+
+            $updated = (clone $query)->update($values);
+
+            return $updated === 0 && $this->stillHoldsLease($query) ? 1 : $updated;
+        }
+
+        if (isset($values['status']) && is_string($values['status']) && $this->isTerminalStatus($values['status'])) {
             $query->whereNotIn('status', ['completed', 'failed', 'cancelled']);
         }
 
         return $query->update($values);
+    }
+
+    /**
+     * Whether a lease-guarded write that changed no row still matches its guard.
+     *
+     * MySQL reports changed rows, not matched rows (Laravel does not set
+     * PDO::MYSQL_ATTR_FOUND_ROWS), so a lease renewal whose values all equal the
+     * stored ones (a step recorded within the same second as the previous write)
+     * returns 0 while the lease is still held. Postgres and SQLite report matched
+     * rows, so there 0 means the lease is gone and this finds no row. A confirmed
+     * no-op counts as the one row the guard matched.
+     *
+     * The re-read is a locking read so it sees the latest committed row, not the
+     * caller's transaction snapshot: under REPEATABLE READ a plain read could still
+     * show a lease another worker has since taken. Inside a transaction, the lock
+     * then holds the row for the rest of the caller's writes; an autocommit caller
+     * gets the ownership check only.
+     */
+    protected function stillHoldsLease(Builder $guarded): bool
+    {
+        return (clone $guarded)->lockForUpdate()->first(['run_id']) !== null;
     }
 
     protected function isTerminalStatus(string $status): bool

@@ -246,6 +246,20 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   capability `Contracts\AcceptsDurableSignals`; a custom store without it keeps
   the earlier behaviour. See
   [UPGRADING](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#a-wait-closing-while-its-run-fans-out).
+- **On MySQL, a write that changes nothing is no longer read as a lost lease
+  (#609).** MySQL counts the rows an `UPDATE` changes, not the rows it matches,
+  and Laravel does not ask it for matched rows. So a lease-guarded write whose
+  values were all already stored came back as 0 and was treated as a lost lease.
+  Two such writes failed in practice. A `queue()` `multi_worker` hierarchical run
+  could not finish its continuation or, under `fail_run`, fail its parent: the
+  lease's node-state write left the current node as it was, and
+  `LostDurableLeaseException` was thrown. A queued or durable step that finished
+  within the same second it started also had its history lease renewal rejected,
+  so the run was left `running` until `swarm:recover` picked it up. Both stores now
+  re-read the lease guard, under a row lock, when a guarded write changes no row.
+  A lease that is still held counts as written; a lease another worker took or
+  that expired is refused as before. Postgres and SQLite already reported matched
+  rows and are unaffected. No schema change.
 
 ## v0.28.1 - 2026-10-10
 
