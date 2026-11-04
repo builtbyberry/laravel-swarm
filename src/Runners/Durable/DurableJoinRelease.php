@@ -17,10 +17,8 @@ use Throwable;
 
 /**
  * Releases a run waiting at a branch boundary to its join: for the last branch to
- * finish, for resume, and for a wait closer (signal, wait timeout, child outcome)
- * once it has committed. swarm:recover's waiting-join sweep is the one other path:
- * it releases through the same store call but dispatches the join itself
- * ({@see DurableRecoveryCoordinator::recover()}).
+ * finish, for resume, for swarm:recover's waiting-join sweep, and for a wait closer
+ * (signal, wait timeout, child outcome) once it has committed.
  *
  * The release itself is {@see DurableRunStore::releaseWaitingRunForJoin()}, which
  * refuses while the run has an open wait. A boundary whose `fail_run` policy already

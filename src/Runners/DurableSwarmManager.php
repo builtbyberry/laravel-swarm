@@ -237,11 +237,9 @@ class DurableSwarmManager
      */
     public function recover(?string $runId = null, ?string $swarmClass = null, int $limit = 50): array
     {
-        // Recovery dispatches directly (not via the outbox) because it is already a
-        // catch-up mechanism: it reads committed DB state and dispatches what is overdue.
-        // A direct dispatch here cannot produce the "state changed but job never queued"
-        // hazard the outbox guards against — the state is already committed before recover()
-        // is called. Double-dispatch is safe because acquireLease() is idempotent.
+        // Ordinary recovery redispatches committed work directly. Waiting-join releases
+        // instead commit their new continuation intent through the shared join release:
+        // see DurableRecoveryCoordinator::recover() and DurableJoinRelease::releaseIfReady().
         return $this->recovery->recover(
             $runId,
             $swarmClass,
