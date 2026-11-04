@@ -255,7 +255,7 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   lease's node-state write left the current node as it was, and
   `LostDurableLeaseException` was thrown. A queued or durable step that finished
   within the same second it started also had its history lease renewal rejected,
-  so the run was left `running` until `swarm:recover` picked it up. Both stores now
+  so the run was left `running` with no worker driving it. Both stores now
   re-read the lease guard, under a row lock, when a guarded write changes no row.
   A lease that is still held counts as written; a lease another worker took or
   that expired is refused as before. Postgres and SQLite already reported matched
