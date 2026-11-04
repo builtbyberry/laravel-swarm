@@ -299,9 +299,14 @@ categories.
 | `wait.created`    | A durable wait was registered. Includes `wait_name`, `reason`, and `timeout_seconds`. |
 | `signal.received` | A signal arrived. Includes `signal_name`, `accepted`, `duplicate`, and `status`. |
 
-`accepted: true` means the signal released a waiting run. `accepted: false`
-means the run was not in a waiting state; the signal is recorded but did not
-advance execution.
+`accepted: true` means the open wait of that name closed with this signal. The
+run continues only when nothing else holds it: not while it is paused (it
+continues when it is resumed), while another wait is open, or while it is
+waiting on its branches. `accepted: false` means no open wait accepted it: the
+run had no open wait of that name, or it was paused and the signal was sent
+inside a database transaction or to a store without atomic acceptance. The
+signal is recorded but did not advance execution. See
+[Signals While Paused](durable-waits-and-signals.md#signals-while-paused).
 
 ### Operator Commands
 

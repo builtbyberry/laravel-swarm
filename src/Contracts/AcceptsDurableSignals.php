@@ -27,6 +27,10 @@ interface AcceptsDurableSignals
      * wait release takes, with no ordinary read before the run row is locked. It closes
      * the wait itself and does not call releaseWaitWithSignal().
      *
+     * It is called for a waiting run and for a paused one. It closes the open wait
+     * whatever the run's status, and must not move a paused run out of `paused`: the
+     * signal is accepted, and the run continues only when it is resumed.
+     *
      * Returns null when the run has no single open wait of that name: nothing is
      * written, and the caller records the signal with recordSignal(). Otherwise returns
      * what recordSignal() returned — the signal as recorded, with `duplicate` — plus

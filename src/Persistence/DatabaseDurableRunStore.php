@@ -1935,9 +1935,9 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
      * override this to keep its behaviour when a signal is accepted. It does call
      * recordSignal() and syncRunWaitSummary().
      *
-     * It closes an open wait whatever the run's status. A paused run stays paused
-     * (syncRunWaitSummary() never moves one); which runs reach this is the caller's
-     * decision (see DurableSignalHandler::acceptAtomically()).
+     * It closes an open wait whatever the run's status. A paused run stays paused:
+     * syncRunWaitSummary() never moves one. Which runs it is called for is the caller's
+     * decision.
      */
     public function acceptSignal(string $runId, string $name, mixed $payload, ?string $idempotencyKey): ?array
     {
@@ -2694,13 +2694,6 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
             ->first();
 
         if ($latestOpenWait === null) {
-            // A run at a branch boundary stays waiting when its last wait closes: it is
-            // still waiting on its branches, and its join is released through
-            // releaseWaitingRunForJoin() — by the last branch to finish, or by the closer
-            // once it has committed — never by the wait closing on its own. This is the
-            // row shape waitForBranches() leaves: it never writes the wait columns. A
-            // fan-out not yet committed is not seen here; the run goes pending and the
-            // fan-out's own commit sets it back to waiting at its new node.
             if (($run->status ?? null) === 'paused') {
                 // A paused run stays paused when its last wait closes (a signal accepted
                 // or a child finished during the pause): resume() moves it. The summary of
@@ -2719,6 +2712,13 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
                 return;
             }
 
+            // A run at a branch boundary stays waiting when its last wait closes: it is
+            // still waiting on its branches, and its join is released through
+            // releaseWaitingRunForJoin() — by the last branch to finish, or by the closer
+            // once it has committed — never by the wait closing on its own. This is the
+            // row shape waitForBranches() leaves: it never writes the wait columns. A
+            // fan-out not yet committed is not seen here; the run goes pending and the
+            // fan-out's own commit sets it back to waiting at its new node.
             if (($run->status ?? null) !== 'waiting') {
                 return;
             }

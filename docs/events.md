@@ -384,7 +384,7 @@ Event::listen(SwarmWaitTimedOut::class, function (SwarmWaitTimedOut $event): voi
 
 **Full class:** `BuiltByBerry\LaravelSwarm\Events\SwarmSignalled`
 
-**When it fires:** when an external signal is delivered to a waiting durable run. The `accepted` property tells you whether the signal was recognized and applied.
+**When it fires:** when an external signal is delivered to a durable run. The `accepted` property tells you whether an open wait of that name closed with it.
 
 | Property | Type | Description |
 |---|---|---|
@@ -392,7 +392,7 @@ Event::listen(SwarmWaitTimedOut::class, function (SwarmWaitTimedOut $event): voi
 | `$swarmClass` | `string` | Fully qualified class name of the swarm. |
 | `$topology` | `string` | Topology string. |
 | `$signalName` | `string` | The name of the signal that was sent. |
-| `$accepted` | `bool` | `true` if the run accepted and applied the signal; `false` if it was rejected (e.g., the run was not in a waiting state). |
+| `$accepted` | `bool` | `true` if an open wait of that name closed with the signal. The run continues only when nothing else holds it: a paused run stays paused until it is resumed, and a run with another open wait or at a branch join stays waiting. `false` if the signal was recorded without being accepted (no open wait of that name, or a paused run signalled inside a database transaction or on a store without atomic acceptance; see [Signals While Paused](durable-waits-and-signals.md#signals-while-paused)). |
 | `$executionMode` | `string` | Execution mode. Defaults to `durable`. |
 
 ```php

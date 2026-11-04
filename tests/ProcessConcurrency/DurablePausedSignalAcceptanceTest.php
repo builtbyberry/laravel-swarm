@@ -81,9 +81,10 @@ function pausedSignalRealBarrierDirs(?string $add = null, bool $clear = false): 
 }
 
 /**
- * Fake agent outputs that each take longer than a second: on MySQL a step that starts
- * and finishes within one second trips the pre-existing history-lease bug (release
- * finding MYSQL-LEASE), which this file is not about.
+ * Fake agent outputs that each take longer than a second. A step that started and
+ * finished within one second used to trip a MySQL history-lease bug (release finding
+ * MYSQL-LEASE, since fixed); the delay is kept so this file's timing matches the
+ * other durable real-DB tests.
  *
  * @param  array<int, string>  $outputs
  */
@@ -442,17 +443,6 @@ test('the wait summary is cleared when a paused run\'s last wait closes, on the 
         ->and($run->wait_timeout_at)->toBeNull();
 });
 
-test('inside an application transaction a paused run\'s signal is recorded, not accepted, on the real engine', function (): void {
-    $runId = pausedSignalRealPausedRun();
-
-    $result = DB::transaction(fn () => app(DurableSwarmManager::class)->signal($runId, 'approval', null, 'in-transaction'));
-
-    expect($result->accepted)->toBeFalse()
-        ->and($result->status)->toBe('recorded')
-        ->and(pausedSignalRealWait($runId)->status)->toBe('waiting')
-        ->and(app(DurableSwarmManager::class)->resume($runId)->isWaiting())->toBeTrue();
-});
-
 test('a wait signalled while paused is neither a timeout candidate nor releasable as timed out, on the real engine', function (): void {
     $runId = FakeSequentialSwarm::make()->dispatchDurable('timeout-real-db')->runId;
     $manager = app(DurableSwarmManager::class);
@@ -471,13 +461,21 @@ test('a wait signalled while paused is neither a timeout candidate nor releasabl
         ->and(pausedSignalRealWait($runId, 'a')->status)->toBe('signalled');
 });
 
-test('a store without the atomic acceptance capability records a paused run\'s signal, on the real engine', function (): void {
+test('a paused run\'s signal is recorded, not accepted, when it cannot be accepted atomically, on the real engine', function (string $path): void {
     $runId = pausedSignalRealPausedRun();
-    $handler = app()->makeWith(DurableSignalHandler::class, ['durableRuns' => new DecoratingDurableRunStore(app(DurableRunStore::class))]);
+    $stepRows = pausedSignalRealStepRows($runId);
 
-    expect($handler->signal($runId, 'approval', null, 'fallback')->accepted)->toBeFalse()
-        ->and(pausedSignalRealWait($runId)->status)->toBe('waiting');
-});
+    $result = $path === 'transaction'
+        ? DB::transaction(fn () => app(DurableSwarmManager::class)->signal($runId, 'approval', null, 'in-transaction'))
+        : app()->makeWith(DurableSignalHandler::class, ['durableRuns' => new DecoratingDurableRunStore(app(DurableRunStore::class))])->signal($runId, 'approval', null, 'fallback');
+
+    expect($result->accepted)->toBeFalse()
+        ->and($result->status)->toBe('recorded')
+        ->and(pausedSignalRealWait($runId)->status)->toBe('waiting')
+        ->and(pausedSignalRealRunStatus($runId))->toBe('paused')
+        ->and(pausedSignalRealStepRows($runId))->toBe($stepRows)
+        ->and(app(DurableSwarmManager::class)->resume($runId)->isWaiting())->toBeTrue();
+})->with(['inside an application transaction' => 'transaction', 'store without the acceptance capability' => 'store']);
 
 // ---------------------------------------------------------------------------------------
 // Races, barrier-controlled.

@@ -281,7 +281,21 @@ Use `swarm:signal` when an operator should continue a run from the console:
 php artisan swarm:signal <run-id> approval_received --payload='{"approved":true}' --idempotency-key=approval-123
 ```
 
-Inspect the run before or after signalling:
+It prints what happened to the signal and to the run:
+
+| Output | What to do |
+| --- | --- |
+| `Signal accepted and run released.` | Nothing: the next step is queued. |
+| `Signal accepted. The run is paused and continues when it is resumed.` | Resume the run when you are ready (`swarm:resume`). |
+| `Signal accepted. The run is still waiting ...` | Nothing: another wait is open, or the run is waiting on its branches. |
+| `Duplicate signal ...` | Nothing: that idempotency key is already recorded. |
+| `Signal recorded. The wait named [...] already closed ...` | Nothing: an earlier signal or outcome already satisfied it; this one is not applied. |
+| `Signal recorded. The run is [completed] ...` | Nothing: the run has finished; no wait will accept it. |
+| `Signal recorded. No open wait named [...] ...` | Check the signal name, or wait until the run opens that wait and send it again. |
+| `Signal recorded but not accepted. The run is paused ...` | Re-send it after resume with a new idempotency key (see [Signals While Paused](#signals-while-paused)). |
+
+Inspect the run before or after signalling. `--json` lists each wait with its
+name and status:
 
 ```bash
 php artisan swarm:inspect <run-id>
@@ -344,7 +358,10 @@ ApprovalSwarm::assertDispatchedDurably(['document_id' => 100]);
 
 Use database-backed feature tests when you need to prove wait creation, signal
 release, timeout recovery, paused behavior, or idempotency. `SwarmFake` does not
-execute the durable runtime.
+execute the durable runtime. A paused run accepts a signal only outside a
+database transaction, so test that with `DatabaseMigrations` or
+`DatabaseTruncation` rather than `RefreshDatabase` (see
+[Signals While Paused](#signals-while-paused)).
 
 ## Related Documentation
 

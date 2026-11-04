@@ -82,12 +82,20 @@ finished) has nothing left to wait on and resumes to `pending` as before.
     send them again after resume with a new key.
   - If you already re-send paused-time signals after resume with a new key, that
     second delivery is now recorded and not applied twice; you can stop re-sending.
-  - During a rolling deploy, workers still on the old code record a paused run's
-    signal without accepting it, so keep the re-send rule until every worker runs
-    the new code.
-  - Rolling back is safe. A wait closed by a signal while the run was paused is an
-    ordinary signalled wait: older code resumes such a run to `pending` and runs
-    its next step with the signal applied. There is no schema change.
+  - During a rolling deploy, any process that delivers signals and still runs the
+    old code records a paused run's signal without accepting it. Signals are
+    accepted where `signal()` is called (web nodes serving the signal webhook, hosts
+    running `swarm:signal`, application code calling `SwarmOperator::signal()`), not
+    in queue workers. Keep the re-send rule until every one of those runs the new
+    code.
+  - Rolling back is safe for data. A wait closed by a signal while the run was
+    paused is an ordinary signalled wait: older code resumes such a run to `pending`
+    and runs its next step with the signal applied. There is no schema change. After
+    a rollback, though, signals delivered while a run is paused are again only
+    recorded, so go back to re-sending them after resume with a new idempotency key.
+  - A custom store that implements `AcceptsDurableSignals` now has `acceptSignal()`
+    called for paused runs as well as waiting ones. It must close the wait without
+    moving a paused run out of `paused`; the bundled database store does.
   - An application transaction that signals a paused run and then resumes it can
     deadlock on MySQL with another process signalling the same run. The database
     aborts one side completely; retry it, for example with

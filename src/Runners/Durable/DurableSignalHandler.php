@@ -89,8 +89,9 @@ class DurableSignalHandler
      *
      * A paused run's open wait is accepted too, but only outside an application
      * transaction (the swarm connection's transaction level is 0 when signal() is called).
-     * The wait closes with the signal and the run stays paused; resume() continues it.
-     * Inside an application transaction the signal is recorded and not accepted, as it was
+     * The wait closes with the signal and nothing is continued from here: the run is
+     * left to resume (see DurableLifecycleController::resume()). Inside an application
+     * transaction the signal is recorded and not accepted, as it was
      * before paused runs were accepted: there, an acceptance would publish the context
      * from the application's older snapshot and keep the run row locked until the
      * application commits, which a later resume() in the same transaction then deadlocks
@@ -135,6 +136,14 @@ class DurableSignalHandler
 
                 return [$accepted, $released];
             }
+        }
+
+        if ($run['status'] === 'paused' && $this->connection->transactionLevel() > 0) {
+            // Nothing in the result tells the caller why; this says it.
+            $this->safeLog($this->logger, 'notice', 'laravel-swarm: a signal for a paused durable run was sent inside a database transaction, so it is recorded and not accepted; send it again after the run is resumed, with a new idempotency key.', [
+                'run_id' => $runId,
+                'signal_name' => $name,
+            ]);
         }
 
         // No open wait of this name, a run that is neither waiting nor paused, or a paused
@@ -222,8 +231,7 @@ class DurableSignalHandler
             $this->joinRelease->releaseAfterCommit($runId);
         }
 
-        // A paused run continues nothing here: resume() reads that no wait is open and
-        // queues the next step, or returns the run to its branch join.
+        // A paused run is continued by resume(), not from here.
     }
 
     /**

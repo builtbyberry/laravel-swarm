@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Commands\SwarmSignalCommand;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
@@ -10,6 +11,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\SwarmOperator;
 use BuiltByBerry\LaravelSwarm\Enums\DurableDispatchType;
 use BuiltByBerry\LaravelSwarm\Enums\DurableLifecycleStatus;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
+use BuiltByBerry\LaravelSwarm\Responses\DurableSignalResult;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableSignalHandler;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
@@ -26,6 +28,7 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Route;
+use Psr\Log\LoggerInterface;
 
 /**
  * A signal delivered to a paused durable run whose wait of that name is open is accepted at
@@ -132,6 +135,12 @@ test('a signal delivered while paused is accepted at delivery, the run stays pau
         ->and(pausedSignalContextMetadata($runId)['durable_signals']['approval_received']['signal_id'])->toBe($signalId)
         ->and(pausedSignalSignalStatus($signalId))->toBe('consumed')
         // Nothing continues while the run is paused.
+        ->and(pausedSignalStepIntents($runId))->toBe($beforeSignal);
+
+    // swarm:recover leaves a paused run whose wait closed alone.
+    $manager->recover(runId: $runId);
+
+    expect($manager->find($runId)['status'])->toBe('paused')
         ->and(pausedSignalStepIntents($runId))->toBe($beforeSignal);
 
     $sameKey = $manager->signal($runId, 'approval_received', ['approved' => true], 'while-paused');
@@ -255,21 +264,6 @@ test('the wait summary is cleared when the last wait of a paused run closes, by 
         ->and($run['waiting_since'])->toBeNull()
         ->and($run['wait_timeout_at'])->toBeNull();
 })->with(['signal' => 'signal', 'child outcome' => 'child']);
-
-test('inside an application transaction a paused run\'s signal is recorded, not accepted', function () {
-    [$runId, $manager] = pausedSignalWaitingRun();
-    $manager->pause($runId);
-
-    $result = DB::transaction(fn () => app(SwarmOperator::class)->signal($runId, 'approval_received', ['approved' => true], 'in-transaction'));
-
-    expect($result->accepted)->toBeFalse()
-        ->and($result->status)->toBe('recorded')
-        ->and(pausedSignalWaitRow($runId, 'approval_received')['status'])->toBe('waiting')
-        ->and($manager->find($runId)['status'])->toBe('paused');
-
-    expect($manager->resume($runId)->isWaiting())->toBeTrue()
-        ->and($manager->find($runId)['status'])->toBe('waiting');
-});
 
 test('a signal sent from an after-commit callback of a committed transaction is accepted while paused', function () {
     [$runId, $manager] = pausedSignalWaitingRun();
@@ -408,26 +402,58 @@ test('a signal delivered while paused beats a timeout that passed during the pau
 
     expect($manager->signal($runId, 'approval_received', ['approved' => true], 'late')->accepted)->toBeTrue();
 
+    $beforeRecover = pausedSignalStepIntents($runId);
+    $manager->recover(runId: $runId);
+    $beforeResume = pausedSignalStepIntents($runId);
+
+    // swarm:recover leaves a paused run whose wait closed alone, even past every grace.
+    expect($manager->find($runId)['status'])->toBe('paused')
+        ->and($beforeResume)->toBe($beforeRecover);
+
     $manager->resume($runId);
     $manager->recover(runId: $runId);
+
+    expect(pausedSignalStepIntents($runId)['outbox'])->toBe($beforeResume['outbox'] + 1);
 
     expect(pausedSignalWaitRow($runId, 'approval_received')['status'])->toBe('signalled')
         ->and(pausedSignalContextMetadata($runId)['durable_wait_outcomes']['approval_received']['status'])->toBe('signalled')
         ->and($manager->find($runId)['status'])->toBe('pending');
 });
 
-test('a store without the atomic acceptance capability records a paused run\'s signal without accepting it', function () {
+test('a paused run\'s signal is recorded, not accepted, when it cannot be accepted atomically', function (string $path) {
     [$runId, $manager] = pausedSignalWaitingRun();
     $manager->pause($runId);
+    $before = pausedSignalStepIntents($runId);
 
-    $handler = app()->makeWith(DurableSignalHandler::class, ['durableRuns' => new DecoratingDurableRunStore(app(DurableRunStore::class))]);
-    $result = $handler->signal($runId, 'approval_received', ['approved' => true], 'fallback');
+    $result = $path === 'transaction'
+        ? DB::transaction(fn () => app(SwarmOperator::class)->signal($runId, 'approval_received', ['approved' => true], 'in-transaction'))
+        : app()->makeWith(DurableSignalHandler::class, ['durableRuns' => new DecoratingDurableRunStore(app(DurableRunStore::class))])->signal($runId, 'approval_received', ['approved' => true], 'fallback');
 
     expect($result->accepted)->toBeFalse()
+        ->and($result->duplicate)->toBeFalse()
         ->and($result->status)->toBe('recorded')
-        ->and(pausedSignalWaitRow($runId, 'approval_received')['status'])->toBe('waiting');
+        ->and(pausedSignalWaitRow($runId, 'approval_received')['status'])->toBe('waiting')
+        ->and($manager->find($runId)['status'])->toBe('paused')
+        ->and(pausedSignalStepIntents($runId))->toBe($before);
 
-    expect($manager->resume($runId)->isWaiting())->toBeTrue();
+    expect($manager->resume($runId)->isWaiting())->toBeTrue()
+        ->and($manager->find($runId)['status'])->toBe('waiting');
+})->with(['inside an application transaction' => 'transaction', 'store without the acceptance capability' => 'store']);
+
+test('a paused run\'s signal recorded because it was sent inside a transaction is logged, and an accepted one is not', function () {
+    [$runId, $manager] = pausedSignalWaitingRun();
+    $manager->pause($runId);
+    $logger = Mockery::spy(LoggerInterface::class);
+    $handler = app()->makeWith(DurableSignalHandler::class, ['logger' => $logger]);
+
+    DB::transaction(fn () => $handler->signal($runId, 'approval_received', null, 'in-transaction'));
+
+    $logger->shouldHaveReceived('notice')->once()->withArgs(fn (string $message, array $context): bool => str_contains($message, 'inside a database transaction')
+        && $context === ['run_id' => $runId, 'signal_name' => 'approval_received']);
+
+    $handler->signal($runId, 'approval_received', null, 'outside');
+
+    $logger->shouldHaveReceived('notice')->once();
 });
 
 test('swarm:signal says what happened to the signal and to the run', function () {
@@ -440,15 +466,51 @@ test('swarm:signal says what happened to the signal and to the run', function ()
     Artisan::call('swarm:signal', ['runId' => $runId, 'name' => 'approval_received', '--idempotency-key' => 'cmd-1']);
     expect(Artisan::output())->toContain('Duplicate signal: this idempotency key is already recorded for the run. Nothing changed.');
 
+    // The wait already closed with cmd-1: re-sending, before or after resume, applies nothing.
     Artisan::call('swarm:signal', ['runId' => $runId, 'name' => 'approval_received', '--idempotency-key' => 'cmd-2']);
-    expect(Artisan::output())->toContain('Signal recorded but not accepted.')
-        ->toContain('no open wait named [approval_received]');
+    expect(Artisan::output())->toContain('Signal recorded. The wait named [approval_received] already closed (signalled); this signal is not applied.')
+        ->not->toContain('re-send');
 
     $manager->resume($runId);
 
     Artisan::call('swarm:signal', ['runId' => $runId, 'name' => 'approval_received', '--idempotency-key' => 'cmd-3']);
-    expect(Artisan::output())->toContain('Signal recorded. No open wait named [approval_received] accepted it.');
+    expect(Artisan::output())->toContain('The wait named [approval_received] already closed (signalled)');
+
+    Artisan::call('swarm:signal', ['runId' => $runId, 'name' => 'no_such_wait', '--idempotency-key' => 'cmd-4']);
+    expect(Artisan::output())->toContain('Signal recorded. No open wait named [no_such_wait] accepted it.');
+
+    (new AdvanceDurableSwarm($runId, 1))->handle($manager);
+
+    Artisan::call('swarm:signal', ['runId' => $runId, 'name' => 'approval_received', '--idempotency-key' => 'cmd-5']);
+    expect(Artisan::output())->toContain('Signal recorded. The run is [completed]; no wait will accept it.');
 });
+
+test('swarm:signal names why a paused run\'s open wait did not accept the signal', function (string $cause) {
+    [$runId, $manager] = pausedSignalWaitingRun();
+    $manager->pause($runId);
+
+    if ($cause === 'store') {
+        // The durable graph hands its signal handler the store it was built with, so a
+        // store without the capability is given to the command alone, with a manager that
+        // reports what such a store's signal() returns for a paused run's open wait.
+        $decorating = new DecoratingDurableRunStore(app(DurableRunStore::class));
+        app()->when(SwarmSignalCommand::class)->needs(DurableRunStore::class)->give(fn () => $decorating);
+        $real = app(DurableSwarmManager::class);
+        $mock = Mockery::mock(DurableSwarmManager::class);
+        $mock->shouldReceive('signal')->once()->andReturn(new DurableSignalResult($runId, 'approval_received', 'recorded', false));
+        $mock->shouldReceive('inspect')->once()->andReturn($real->inspect($runId));
+        app()->instance(DurableSwarmManager::class, $mock);
+        Artisan::call('swarm:signal', ['runId' => $runId, 'name' => 'approval_received', '--idempotency-key' => 'cause']);
+        $expected = "The run is paused and the run's durable store cannot accept a signal while the run is paused.";
+    } else {
+        DB::transaction(fn () => Artisan::call('swarm:signal', ['runId' => $runId, 'name' => 'approval_received', '--idempotency-key' => 'cause']));
+        $expected = 'The run is paused and the signal was sent inside a database transaction.';
+    }
+
+    expect(Artisan::output())->toContain('Signal recorded but not accepted.')
+        ->toContain($expected)
+        ->toContain('re-send it after the run is resumed, with a new idempotency key');
+})->with(['inside a database transaction' => 'transaction', 'store without the acceptance capability' => 'store']);
 
 test('swarm:signal reports a run still waiting and a run released', function () {
     Queue::fake();
