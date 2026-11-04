@@ -18,6 +18,7 @@ use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\MissingQueueLeaseSchemaException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Persistence\Concerns\ConfirmsHeldLease;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\InteractsWithJsonColumns;
 use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
 use BuiltByBerry\LaravelSwarm\Responses\CitationEvidenceLimits;
@@ -41,6 +42,7 @@ use Throwable;
  */
 class DatabaseRunHistoryStore implements ChecksCitationStorage, ChecksNativeStepResultStorage, ClaimsQueuedRunExecution, ReadableRunHistoryStore, RecordsCitationSteps, RecordsContextualRunFailure, RunHistoryStore
 {
+    use ConfirmsHeldLease;
     use InteractsWithJsonColumns;
 
     protected CitationEvidenceCodec $citations;
@@ -591,6 +593,13 @@ class DatabaseRunHistoryStore implements ChecksCitationStorage, ChecksNativeStep
     }
 
     /**
+     * With an execution token, the write is lease-guarded and a write that changed
+     * no row is re-checked with stillHoldsLease(): a lease still held returns 1,
+     * the one row the guard matched, so callers treat it as written. Callers that
+     * take a side effect on 1 (callback settlement in complete() and fail()) are
+     * safe because those writes clear execution_token and so always change the
+     * row; a lease-guarded write that keeps the token must not arm anything on 1.
+     *
      * @param  array<string, mixed>  $values
      */
     protected function update(string $runId, array $values, ?string $executionToken = null, ?int $leaseSeconds = null): int
@@ -608,7 +617,13 @@ class DatabaseRunHistoryStore implements ChecksCitationStorage, ChecksNativeStep
             if ($leaseSeconds !== null) {
                 $values['leased_until'] = $timestamp->copy()->addSeconds($leaseSeconds);
             }
-        } elseif (isset($values['status']) && is_string($values['status']) && $this->isTerminalStatus($values['status'])) {
+
+            $updated = (clone $query)->update($values);
+
+            return $updated === 0 && $this->stillHoldsLease($query) ? 1 : $updated;
+        }
+
+        if (isset($values['status']) && is_string($values['status']) && $this->isTerminalStatus($values['status'])) {
             $query->whereNotIn('status', ['completed', 'failed', 'cancelled']);
         }
 

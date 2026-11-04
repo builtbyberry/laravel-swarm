@@ -8,10 +8,12 @@ use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostDurableLeaseException;
+use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableBranch;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\InvokeSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\ResumeQueuedHierarchicalSwarm;
+use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Runners\QueuedHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
@@ -27,7 +29,9 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\ProcessConcurrency\Fixtures\JoinOpenWait\JoinOpenWaitWorker;
 use BuiltByBerry\LaravelSwarm\Tests\ProcessConcurrency\Fixtures\ResumeOpenWait\LockBarrier;
 use Illuminate\Concurrency\ConcurrencyManager;
+use Illuminate\Database\Connection;
 use Illuminate\Filesystem\Filesystem;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Psr\Log\LoggerInterface;
@@ -83,9 +87,10 @@ function joinOpenWaitDbBarrierDirs(?string $add = null, bool $clear = false): ar
 }
 
 /**
- * Fake agent outputs that each take longer than a second: on MySQL a step that starts
- * and finishes within one second trips the pre-existing history-lease bug (release
- * finding MYSQL-LEASE); this test is not about it.
+ * Fake agent outputs that each take longer than a second. The delay was added while
+ * MySQL read a step that started and finished within one second as a lost history
+ * lease (release finding MYSQL-LEASE, since fixed); it is kept so these tests' timing
+ * is unchanged.
  *
  * @param  array<int, string>  $outputs
  */
@@ -106,8 +111,8 @@ function joinOpenWaitDbFakeAgents(): void
 }
 
 /**
- * The coordinator's route plan, answered after more than a second (MYSQL-LEASE, as
- * above: an instant coordinator step leaves the queued run's history `running`).
+ * The coordinator's route plan, answered after more than a second (the delay dates
+ * from MYSQL-LEASE, as above, and is kept for the same reason).
  *
  * @param  array<string, mixed>  $plan
  */
@@ -131,20 +136,6 @@ function joinOpenWaitDbPlan(): array
             'finish_node' => ['type' => 'finish', 'output_from' => 'editor_node'],
         ],
     ];
-}
-
-/**
- * On MySQL a queued-hierarchical continuation cannot finish, and a fail_run parent
- * cannot be failed, because of a pre-existing durable-lease bug outside this
- * component (release finding MYSQL-QH-NODE-LEASE: acquireLease()'s node-state guard
- * reads MySQL's 0 changed rows as a lost lease). There these tests assert everything
- * up to that write — the join held, history waiting, exactly one queued resume, no
- * join on a fail_run boundary — and stop; Postgres (and the SQLite feature tests)
- * assert completion.
- */
-function joinOpenWaitDbQueuedCompletionBlocked(): bool
-{
-    return DB::connection()->getDriverName() === 'mysql';
 }
 
 function joinOpenWaitDbStepRows(string $runId): int
@@ -563,10 +554,6 @@ test('queued-hierarchical: branch completion, resume and recover hold the join w
         ->and(joinOpenWaitDbRunStatus($runId))->toBe('pending')
         ->and(joinOpenWaitDbResumeRows($runId))->toBe(1);
 
-    if (joinOpenWaitDbQueuedCompletionBlocked()) {
-        return;
-    }
-
     (new ResumeQueuedHierarchicalSwarm($runId))->handle(app(QueuedHierarchicalCoordinator::class));
 
     expect(app(RunHistoryStore::class)->find($runId)['status'])->toBe('completed');
@@ -601,18 +588,6 @@ test('queued-hierarchical fail_run: a signal between the branch failure and the 
     $branches = collect(app(DurableRunStore::class)->branchesFor($runId, 'parallel_node'));
 
     (new AdvanceDurableBranch($runId, (string) $branches->firstWhere('agent_class', FakeWriter::class)['branch_id']))->handle($manager);
-
-    if (joinOpenWaitDbQueuedCompletionBlocked()) {
-        // The failure write itself is what MYSQL-QH-NODE-LEASE breaks: the parent is
-        // released for failure and its lease guard then throws. It is never joined.
-        expect(fn () => (new AdvanceDurableBranch($runId, (string) $branches->firstWhere('agent_class', FailingPromptAgent::class)['branch_id']))->handle($manager))
-            ->toThrow(LostDurableLeaseException::class);
-        expect($hookRan)->toBeTrue()
-            ->and(joinOpenWaitDbResumeRows($runId))->toBe(0)
-            ->and(app(RunHistoryStore::class)->find($runId)['status'])->not->toBe('completed');
-
-        return;
-    }
 
     (new AdvanceDurableBranch($runId, (string) $branches->firstWhere('agent_class', FailingPromptAgent::class)['branch_id']))->handle($manager);
 
@@ -697,10 +672,6 @@ test('a wait timing out while the last branch asks for the join: the join waits 
         ->and(app(RunHistoryStore::class)->find($runId)['status'])->toBe('waiting')
         ->and(joinOpenWaitDbResumeRows($runId))->toBe(1);
 
-    if (joinOpenWaitDbQueuedCompletionBlocked()) {
-        return;
-    }
-
     (new ResumeQueuedHierarchicalSwarm($runId))->handle(app(QueuedHierarchicalCoordinator::class));
 
     expect(app(RunHistoryStore::class)->find($runId)['status'])->toBe('completed');
@@ -775,4 +746,191 @@ test('closing the last wait never waits on branch rows, so it cannot deadlock wi
         ->and($signaller)->toBe(['outcome' => 'accepted'], json_encode($signaller))
         ->and(joinOpenWaitDbRunStatus($runId))->toBe('pending')
         ->and(joinOpenWaitDbStepRows($runId))->toBe($stepRows + 1);
+});
+
+/*
+ * The lease guards on the real engines (MYSQL-QH-NODE-LEASE, MYSQL-LEASE). MySQL
+ * reports changed rows, not matched rows, so a lease-held write whose values all
+ * equal the stored ones returns 0; the stores then re-read the guard to tell that
+ * no-op from a lost lease. Time is frozen so the no-op is exact, not a same-second
+ * coincidence. On Postgres a held lease never returns 0, so the no-op tests pass
+ * either way there; the lost-lease tests hold on both engines.
+ */
+
+function joinOpenWaitDbLeasedDurableRun(): array
+{
+    $runId = FakeHierarchicalFullSwarm::make()->dispatchDurable('lease-guard-task')->runId;
+    $token = app(DurableRunStore::class)->acquireLease($runId, 0, 300);
+    expect($token)->not->toBeNull();
+
+    return [$runId, (string) $token];
+}
+
+function joinOpenWaitDbLeasedHistoryRun(): array
+{
+    $runId = 'join-open-wait-db-history-lease-'.bin2hex(random_bytes(4));
+    $acquisition = app(RunHistoryStore::class)->acquireQueuedRun($runId, FakeHierarchicalFullSwarm::class, 'hierarchical', RunContext::from('lease-guard-task', $runId), [], 3600, 300);
+    expect($acquisition->outcome)->toBe('fresh');
+
+    return [$runId, (string) $acquisition->executionToken];
+}
+
+/**
+ * Run a write and count the locking re-reads of the lease guard it made on the table.
+ * MySQL reaches the re-read only on a write that changed no row; Postgres reports
+ * matched rows, so a lease-held write never reaches it there.
+ */
+function joinOpenWaitDbLeaseRereads(string $table, Closure $write): int
+{
+    $rereads = 0;
+    DB::listen(function ($query) use ($table, &$rereads): void {
+        $sql = strtolower($query->sql);
+
+        if (str_starts_with($sql, 'select') && str_contains($sql, 'for update') && str_contains($sql, $table)) {
+            $rereads++;
+        }
+    });
+    $write();
+
+    return $rereads;
+}
+
+function joinOpenWaitDbExpectedRereads(): int
+{
+    return DB::connection()->getDriverName() === 'mysql' ? 1 : 0;
+}
+
+function joinOpenWaitDbSecondConnection(): Connection
+{
+    config()->set('database.connections.lease-guard-other', config('database.connections.'.DB::getDefaultConnection()));
+
+    return DB::connection('lease-guard-other');
+}
+
+/**
+ * Open a transaction on the stores' connection and take its read snapshot of the run
+ * row, as a worker does when it reads the run before its guarded write. On MySQL the
+ * transaction is REPEATABLE READ (its default), so a plain read inside it keeps
+ * showing the row as it was here.
+ */
+function joinOpenWaitDbSnapshotOf(string $table, string $runId): void
+{
+    if (DB::connection()->getDriverName() === 'mysql') {
+        DB::statement('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+    }
+
+    DB::beginTransaction();
+    expect(DB::table($table)->where('run_id', $runId)->value('execution_token'))->not->toBeNull();
+}
+
+test('a durable lease-held write that changes nothing is not a lost lease, at the node-state write and at markRunning', function (): void {
+    Carbon::setTestNow(Carbon::now('UTC')->startOfSecond());
+    [$runId, $token] = joinOpenWaitDbLeasedDurableRun();
+    $store = app(DurableRunStore::class);
+
+    $store->markRunning($runId, $token, 0);
+    $nodeId = DB::table('swarm_durable_runs')->where('run_id', $runId)->value('current_node_id');
+    expect($nodeId)->not->toBeNull();
+
+    // The same write again, in the same second: every value equals the stored one, so on
+    // MySQL it changes no row and the guard is re-read.
+    expect(joinOpenWaitDbLeaseRereads('swarm_durable_runs', fn () => $store->markRunning($runId, $token, 0)))
+        ->toBe(joinOpenWaitDbExpectedRereads());
+
+    // A new lease in the same second on a run whose node is unchanged: acquireLease()'s
+    // node-state write is the no-op MYSQL-QH-NODE-LEASE named.
+    DB::table('swarm_durable_runs')->where('run_id', $runId)->update(['leased_until' => Carbon::now('UTC')->subSecond()]);
+    $next = null;
+    expect(joinOpenWaitDbLeaseRereads('swarm_durable_runs', function () use ($store, $runId, &$next): void {
+        $next = $store->acquireLease($runId, 0, 300);
+    }))->toBe(joinOpenWaitDbExpectedRereads());
+
+    expect($next)->not->toBeNull()->not->toBe($token);
+    $run = DB::table('swarm_durable_runs')->where('run_id', $runId)->first();
+    expect($run->status)->toBe('running')
+        ->and($run->execution_token)->toBe($next)
+        ->and($run->current_node_id)->toBe($nodeId);
+
+    Carbon::setTestNow();
+});
+
+test('a durable lease that was taken or has expired is still refused', function (): void {
+    [$runId, $token] = joinOpenWaitDbLeasedDurableRun();
+    $store = app(DurableRunStore::class);
+
+    DB::table('swarm_durable_runs')->where('run_id', $runId)->update(['execution_token' => 'another-worker']);
+    expect(fn () => $store->markRunning($runId, $token, 0))->toThrow(LostDurableLeaseException::class);
+
+    DB::table('swarm_durable_runs')->where('run_id', $runId)->update(['execution_token' => $token, 'leased_until' => Carbon::now('UTC')->subMinute()]);
+    expect(fn () => $store->markRunning($runId, $token, 0))->toThrow(LostDurableLeaseException::class);
+
+    expect(DB::table('swarm_durable_runs')->where('run_id', $runId)->value('status'))->toBe('pending');
+});
+
+test('a durable lease taken by another worker after this transaction read the run is refused, not confirmed from the stale snapshot', function (): void {
+    [$runId, $token] = joinOpenWaitDbLeasedDurableRun();
+    $other = joinOpenWaitDbSecondConnection();
+    joinOpenWaitDbSnapshotOf('swarm_durable_runs', $runId);
+
+    try {
+        $other->table('swarm_durable_runs')->where('run_id', $runId)->update(['execution_token' => 'another-worker']);
+
+        expect(fn () => app(DurableRunStore::class)->markRunning($runId, $token, 0))->toThrow(LostDurableLeaseException::class);
+        expect(DB::table('swarm_durable_runs')->where('run_id', $runId)->lockForUpdate()->first(['status', 'execution_token']))
+            ->toEqual((object) ['status' => 'pending', 'execution_token' => 'another-worker']);
+    } finally {
+        DB::rollBack();
+        $other->disconnect();
+    }
+});
+
+test('a history lease-held step write that changes nothing is not a lost lease', function (): void {
+    Carbon::setTestNow(Carbon::now('UTC')->startOfSecond());
+    [$runId, $token] = joinOpenWaitDbLeasedHistoryRun();
+    $history = app(RunHistoryStore::class);
+
+    // Same TTL and lease as the acquisition, in the same second: the renewal writes the
+    // stored expires_at, leased_until and updated_at back unchanged.
+    $history->recordStep($runId, new SwarmStep(FakeWriter::class, 'in', 'first', metadata: ['index' => 0]), 3600, $token, 300);
+    expect(joinOpenWaitDbLeaseRereads('swarm_run_histories', fn () => $history->recordStep($runId, new SwarmStep(FakeEditor::class, 'first', 'second', metadata: ['index' => 1]), 3600, $token, 300)))
+        ->toBe(joinOpenWaitDbExpectedRereads());
+
+    expect(DB::table('swarm_run_steps')->where('run_id', $runId)->orderBy('step_index')->pluck('agent_class')->all())
+        ->toBe([FakeWriter::class, FakeEditor::class])
+        ->and(DB::table('swarm_run_histories')->where('run_id', $runId)->value('execution_token'))->toBe($token);
+
+    Carbon::setTestNow();
+});
+
+test('a history lease that was taken or has expired is still refused, and its step is not written', function (): void {
+    [$runId, $token] = joinOpenWaitDbLeasedHistoryRun();
+    $history = app(RunHistoryStore::class);
+
+    DB::table('swarm_run_histories')->where('run_id', $runId)->update(['execution_token' => 'another-worker']);
+    expect(fn () => $history->recordStep($runId, new SwarmStep(FakeWriter::class, 'in', 'out', metadata: ['index' => 0]), 3600, $token, 300))
+        ->toThrow(LostSwarmLeaseException::class);
+
+    DB::table('swarm_run_histories')->where('run_id', $runId)->update(['execution_token' => $token, 'leased_until' => Carbon::now('UTC')->subMinute()]);
+    expect(fn () => $history->recordStep($runId, new SwarmStep(FakeWriter::class, 'in', 'out', metadata: ['index' => 0]), 3600, $token, 300))
+        ->toThrow(LostSwarmLeaseException::class);
+
+    expect(DB::table('swarm_run_steps')->where('run_id', $runId)->count())->toBe(0);
+});
+
+test('a history lease taken by another worker after this transaction read the run is refused, not confirmed from the stale snapshot', function (): void {
+    [$runId, $token] = joinOpenWaitDbLeasedHistoryRun();
+    $other = joinOpenWaitDbSecondConnection();
+    joinOpenWaitDbSnapshotOf('swarm_run_histories', $runId);
+
+    try {
+        $other->table('swarm_run_histories')->where('run_id', $runId)->update(['execution_token' => 'another-worker']);
+
+        expect(fn () => app(RunHistoryStore::class)->recordStep($runId, new SwarmStep(FakeWriter::class, 'in', 'out', metadata: ['index' => 0]), 3600, $token, 300))
+            ->toThrow(LostSwarmLeaseException::class);
+        // A step row this transaction wrote would be visible to it without a lock.
+        expect(DB::table('swarm_run_steps')->where('run_id', $runId)->count())->toBe(0);
+    } finally {
+        DB::rollBack();
+        $other->disconnect();
+    }
 });

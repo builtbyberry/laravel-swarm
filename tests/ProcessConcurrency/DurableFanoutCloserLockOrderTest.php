@@ -76,9 +76,10 @@ function fanoutCloserDirs(?string $add = null, bool $clear = false): array
 }
 
 /**
- * Fake agent outputs that each take longer than a second: on MySQL a step that starts
- * and finishes within one second trips the pre-existing history-lease bug (release
- * finding MYSQL-LEASE); these tests are not about it.
+ * Fake agent outputs that each take longer than a second. The delay was added while
+ * MySQL read a step that started and finished within one second as a lost history
+ * lease (release finding MYSQL-LEASE, since fixed); it is kept so these tests' timing
+ * is unchanged.
  */
 function fanoutCloserSlow(string $output): Closure
 {
@@ -431,13 +432,6 @@ test('step-durable hierarchical: a signal closing the wait while the coordinator
     $runId = FakeHierarchicalFullSwarm::make()->dispatchDurable('hierarchical-durable-task')->runId;
     (new AdvanceDurableSwarm($runId, 0))->handle(app(DurableSwarmManager::class));
     expect(app(DurableSwarmManager::class)->find($runId)['route_cursor']['current_node_id'] ?? null)->toBe('parallel_node');
-    // On MySQL the step-1 lease's node-state write leaves current_node_id unchanged, MySQL
-    // reports no changed row, and the store reads that as a lost lease (release finding
-    // MYSQL-QH-NODE-LEASE, its own component); this test is not about it. Clearing the
-    // column lets that write change the row; the lease sets it again.
-    if (DB::connection()->getDriverName() === 'mysql') {
-        DB::table('swarm_durable_runs')->where('run_id', $runId)->update(['current_node_id' => null]);
-    }
     $dir = fanoutCloserDir();
 
     [$fanOut, $closer] = $this->app->make(ConcurrencyManager::class)->driver('process')->run([

@@ -13,6 +13,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\StoresDurableNativeStepResults;
 use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostDurableLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Persistence\Concerns\ConfirmsHeldLease;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\InteractsWithJsonColumns;
 use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
 use BuiltByBerry\LaravelSwarm\Responses\CitationEvidenceLimits;
@@ -33,6 +34,7 @@ use Illuminate\Support\Collection;
  */
 class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationStorage, ChecksNativeStepResultStorage, DurableRunStore, StoresDurableCitationEvidence, StoresDurableNativeStepResults
 {
+    use ConfirmsHeldLease;
     use InteractsWithJsonColumns;
 
     protected CitationEvidenceCodec $citations;
@@ -2598,19 +2600,28 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
         $now = Carbon::now('UTC');
         $values['updated_at'] = $now;
 
-        $updated = $this->table()
+        $guarded = $this->table()
             ->where('run_id', $runId)
             ->where('execution_token', $executionToken)
             ->whereNotNull('leased_until')
-            ->where('leased_until', '>=', $now)
-            ->update($values);
+            ->where('leased_until', '>=', $now);
 
-        if ($updated === 0) {
+        if ((clone $guarded)->update($values) === 0 && ! $this->stillHoldsLease($guarded)) {
             throw new LostDurableLeaseException("Durable swarm run [{$runId}] no longer owns the execution lease.");
         }
     }
 
     /**
+     * Unlike guardedUpdate(), a 0 here is always read as a lost lease, with no
+     * stillHoldsLease() re-check. Every branch write in this file except
+     * markBranchRunning() clears execution_token, so it always changes the row.
+     * markBranchRunning() changes the row only when status or started_at differs
+     * from what is stored; a second call on the same lease within the same second
+     * would change nothing and be refused here on MySQL. Its once-per-lease use is
+     * the caller's: see DurableBranchAdvancer
+     * (src/Runners/Durable/DurableBranchAdvancer.php). A branch write that can be a
+     * no-op needs the stillHoldsLease() re-check.
+     *
      * @param  array<string, mixed>  $values
      */
     protected function guardedBranchUpdate(string $runId, string $branchId, string $executionToken, array $values): void
