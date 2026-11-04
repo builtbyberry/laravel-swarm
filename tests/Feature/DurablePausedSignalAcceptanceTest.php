@@ -403,6 +403,8 @@ test('a signal delivered while paused beats a timeout that passed during the pau
     expect($manager->signal($runId, 'approval_received', ['approved' => true], 'late')->accepted)->toBeTrue();
 
     $beforeRecover = pausedSignalStepIntents($runId);
+    // Past recovery's grace for the acceptance's own write.
+    $this->travel(301)->seconds();
     $manager->recover(runId: $runId);
     $beforeResume = pausedSignalStepIntents($runId);
 
