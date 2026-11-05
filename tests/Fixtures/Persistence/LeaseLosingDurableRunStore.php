@@ -16,7 +16,7 @@ final class LeaseLosingDurableRunStore extends DatabaseDurableRunStore
     public ?string $loseLeaseOnFailFor = null;
 
     /**
-     * @param  array<string, mixed>|null  $failure
+     * @param  array{message?: string, class: class-string<\Throwable>, timed_out?: bool}|null  $failure
      */
     public function markFailed(string $runId, string $executionToken, ?array $failure = null): void
     {
