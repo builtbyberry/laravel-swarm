@@ -737,19 +737,7 @@ class SwarmRunner
             return null;
         }
 
-        // Everything the continuation reads is read under the lease. What was read above
-        // may predate the release this lease was taken for — an earlier boundary's
-        // cursor, a context from before a signal published its outcome. A read that fails
-        // here is thrown, not recorded as a run failure: the lease expires and
-        // swarm:recover reclaims the continuation, as after a worker that died holding it.
-        $durableRun = $this->durableRuns->find($runId);
-        $payload = $this->contextStore->find($runId);
-
-        if ($durableRun === null || $payload === null) {
-            throw new SwarmException("Swarm run [{$runId}] lost its durable record or persisted context after its continuation lease was taken.");
-        }
-
-        $context = RunContext::fromPayload($payload);
+        [$durableRun, $context] = $this->readQueuedHierarchicalContinuation($runId);
 
         $state = new SwarmExecutionState(
             swarm: $swarm,
@@ -810,6 +798,28 @@ class SwarmRunner
             $this->handleResumeFailure($state, $swarm, $topology, $context, $exception, $startedAt, $contextTtl, $runId);
             throw $exception;
         }
+    }
+
+    /**
+     * Read what a queued-hierarchical continuation runs from, once its lease is held.
+     * What resumeQueuedHierarchicalAfterJoin() read before taking the lease may predate
+     * the release the lease was taken for — an earlier boundary's cursor, a context from
+     * before a signal published its outcome. A read that fails here is thrown, not
+     * recorded as a run failure: the lease expires and swarm:recover reclaims the
+     * continuation, as after a worker that died holding it.
+     *
+     * @return array{0: array<string, mixed>, 1: RunContext}
+     */
+    protected function readQueuedHierarchicalContinuation(string $runId): array
+    {
+        $durableRun = $this->durableRuns->find($runId);
+        $payload = $this->contextStore->find($runId);
+
+        if ($durableRun === null || $payload === null) {
+            throw new SwarmException("Swarm run [{$runId}] lost its durable record or persisted context after its continuation lease was taken.");
+        }
+
+        return [$durableRun, RunContext::fromPayload($payload)];
     }
 
     /**
