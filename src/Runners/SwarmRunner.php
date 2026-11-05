@@ -22,6 +22,7 @@ use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStarted;
 use BuiltByBerry\LaravelSwarm\Exceptions\GuardrailViolation;
+use BuiltByBerry\LaravelSwarm\Exceptions\LostDurableLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\MissingActorException;
 use BuiltByBerry\LaravelSwarm\Exceptions\MissingQueueLeaseSchemaException;
@@ -738,6 +739,18 @@ class SwarmRunner
         }
 
         [$durableRun, $context] = $this->readQueuedHierarchicalContinuation($runId);
+
+        // The join applies the durable parallel failure policy before anything runs past
+        // it, as the step-durable join does. A join that must fail is failed through the
+        // durable terminal path, and the job returns normally: a policy failure is final,
+        // not something a retry could change.
+        try {
+            if ($this->durable->failQueueHierarchicalJoinIfPolicyFails($runId, $context)) {
+                return null;
+            }
+        } catch (LostSwarmLeaseException|LostDurableLeaseException) {
+            return null;
+        }
 
         $state = new SwarmExecutionState(
             swarm: $swarm,

@@ -1013,14 +1013,14 @@ test('queued hierarchical collect_failures fails the run exactly as the step-dur
 
     foreach ([$queuedRunId => 'queue', $durableRunId => 'durable'] as $runId => $mode) {
         $message = qhfpExpectedFailureMessage($runId);
-        Event::assertDispatchedTimes(SwarmFailed::class, fn (SwarmFailed $event): bool => $event->runId === $runId, 1);
+        expect(Event::dispatched(SwarmFailed::class, fn (SwarmFailed $event): bool => $event->runId === $runId))->toHaveCount(1);
         Event::assertDispatched(SwarmFailed::class, fn (SwarmFailed $event): bool => $event->runId === $runId
             && $event->executionMode === $mode
             && $event->exceptionClass === SwarmException::class
             && $event->exception->getMessage() === $message
             && array_column((array) ($event->metadata['durable_parallel_branches'] ?? []), 'status', 'node_id') === ['writer_node' => 'completed', 'failing_node' => 'failed']);
         Event::assertNotDispatched(SwarmCompleted::class, fn (SwarmCompleted $event): bool => $event->runId === $runId);
-        expect(collect($sink->recordsForCategory('durable.failed'))->where('payload.run_id', $runId)->count())->toBe(1);
+        expect(collect($sink->recordsForCategory('durable.failed'))->where('run_id', $runId)->count())->toBe(1);
     }
 
     // No further work runs: the finish node never resolves, and FakeWriter ran once per run.
@@ -1112,17 +1112,14 @@ test('a queued hierarchical join that must fail but cannot take the durable leas
     Event::assertNotDispatched(SwarmCompleted::class);
 
     // Both leases lapse; swarm:recover re-dispatches the stranded resume, which fails the run once.
-    Carbon::setTestNow(now()->addMinutes(10)->addSeconds((int) config('swarm.durable.recovery.grace_seconds', 0)));
+    expireContinuationLease($runId);
+    DB::table('swarm_durable_runs')->where('run_id', $runId)->update(['leased_until' => now('UTC')->subMinutes(10)]);
 
-    try {
-        Bus::fake([ResumeQueuedHierarchicalSwarm::class]);
-        Artisan::call('swarm:recover');
-        Bus::assertDispatched(ResumeQueuedHierarchicalSwarm::class, fn (ResumeQueuedHierarchicalSwarm $job): bool => $job->runId === $runId);
+    Bus::fake([ResumeQueuedHierarchicalSwarm::class]);
+    Artisan::call('swarm:recover');
+    Bus::assertDispatched(ResumeQueuedHierarchicalSwarm::class, fn (ResumeQueuedHierarchicalSwarm $job): bool => $job->runId === $runId);
 
-        qhfpResume($runId);
-    } finally {
-        Carbon::setTestNow();
-    }
+    qhfpResume($runId);
 
     $record = qhfpFailureRecord($runId);
     expect($record['history_status'])->toBe('failed')

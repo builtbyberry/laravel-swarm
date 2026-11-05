@@ -8,6 +8,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
+use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
 use BuiltByBerry\LaravelSwarm\Enums\DurableParallelFailurePolicy;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
@@ -255,6 +256,53 @@ class DurableSwarmManager
                 fn (array $freshRun, string $token, RunContext $context, int $stepLeaseSeconds, ?string $parentNodeId) => $this->advancer->failCurrentRunFromBranchFailures($freshRun, $token, $context, $stepLeaseSeconds, $parentNodeId),
             ),
         );
+    }
+
+    /**
+     * Apply the durable parallel failure policy at a queued-hierarchical join before
+     * its continuation runs, as DurableHierarchicalCoordinator::runStep() does for the
+     * step-durable join: the same branchJoinShouldFail() decides, and the same
+     * DurableRunTerminalHandler::failCurrentRunFromBranchFailures() writes the failure,
+     * so both profiles leave the same record and events.
+     *
+     * Returns true when the join must fail, whether or not this call failed it: the
+     * caller must then not run the continuation. The run is failed under the durable
+     * row's lease, taken here the way LeaseManager settles the coordination row. When
+     * another holder has that lease nothing is written; the caller's history
+     * continuation lease stays held until it expires, and swarm:recover then
+     * re-dispatches the resume, which decides again. A crash between taking the lease
+     * and the failure commit leaves the same shape (release finding
+     * FAIL-RUN-PARENT-SETTLEMENT-CRASH-WINDOW).
+     *
+     * @internal Called by SwarmRunner::resumeQueuedHierarchicalAfterJoin().
+     */
+    public function failQueueHierarchicalJoinIfPolicyFails(string $runId, RunContext $context): bool
+    {
+        $run = $this->durableRuns->find($runId);
+
+        if ($run === null
+            || ($run['coordination_profile'] ?? '') !== CoordinationProfile::QueueHierarchicalParallel->value
+            || ! is_string($run['current_node_id'] ?? null)) {
+            return false;
+        }
+
+        $parentNodeId = $run['current_node_id'];
+
+        if (! $this->hierarchicalCoordinator->branchJoinShouldFail($run, $context, $parentNodeId)) {
+            return false;
+        }
+
+        $stepTimeout = max(1, (int) ($run['step_timeout_seconds'] ?? 300));
+        $token = $this->durableRuns->acquireLease($runId, (int) $run['next_step_index'], $stepTimeout);
+
+        if ($token === null) {
+            return true;
+        }
+
+        $fresh = $this->durableRuns->find($runId) ?? $run;
+        $this->advancer->failCurrentRunFromBranchFailures($fresh, $token, $context, $stepTimeout, $parentNodeId);
+
+        return true;
     }
 
     public function updateQueueRouting(string $runId, ?string $connection, ?string $queue): void
