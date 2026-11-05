@@ -1544,6 +1544,11 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
             ->join($historyTable.' as histories', 'runs.run_id', '=', 'histories.run_id')
             ->where('runs.coordination_profile', CoordinationProfile::QueueHierarchicalParallel->value)
             ->whereNull('runs.finished_at')
+            // Only a run still released to its join: the continuation lease is taken only
+            // while the durable row is 'pending', so redispatching any other run would be a
+            // resume that is refused, sweep after sweep. A run whose durable row moved on
+            // (a wait opened, paused) is continued by its own release or resume().
+            ->where('runs.status', 'pending')
             ->where('histories.status', 'running')
             ->whereNotNull('histories.leased_until')
             ->where('histories.leased_until', '<', $threshold)

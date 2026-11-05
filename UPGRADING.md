@@ -222,6 +222,29 @@ extends the durable store:
   different waits of one run with the same idempotency key can also deadlock.
   Replace all workers together to avoid these.
 
+### A queued-hierarchical resume runs only once its join is released
+
+No configuration or schema change. A `ResumeQueuedHierarchicalSwarm` job now runs
+the continuation only while the run's durable coordination row is `pending`
+(released to its join); a stray or duplicate delivery is acknowledged and does
+nothing (#610).
+
+- **Custom `ClaimsQueuedRunExecution` history stores**, and classes extending
+  `DatabaseRunHistoryStore` that override `acquireQueuedRunContinuationLease()`,
+  must follow the same rule or keep letting a stray resume run the continuation
+  early: take the continuation lease, fresh or as a crash reclaim, only while the
+  durable row is `pending`, and otherwise return a non-acquired outcome without
+  touching the history row. Read the durable row with an exclusive lock, before
+  the history row, inside the acquisition transaction; that is the order the
+  fan-out and the wait closers take, and the other order can deadlock with a
+  fan-out.
+- **`DatabaseRunHistoryStore::isQueueHierarchicalParallelRun()` is removed.** Its
+  scope check is now part of the locked read in
+  `lockQueueHierarchicalRunReleasedToJoin()`. A subclass that called or overrode
+  it must move that logic; an override of the old method is no longer called.
+- **During a rolling deploy** a resume handled by a worker still on the old code
+  can still run early. Replace all workers together.
+
 ## Upgrading to v0.28.1
 
 This patch deliberately departs from the additive-only patch policy stated
