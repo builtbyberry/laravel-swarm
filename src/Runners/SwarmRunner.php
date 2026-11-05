@@ -719,23 +719,37 @@ class SwarmRunner
             throw new SwarmException("Unable to resolve queued hierarchical swarm [{$durableRun['swarm_class']}] from the container.");
         }
 
-        $payload = $this->contextStore->find($runId);
-
-        if ($payload === null) {
+        if ($this->contextStore->find($runId) === null) {
             throw new SwarmException("Swarm run [{$runId}] is missing persisted context.");
         }
 
-        $context = RunContext::fromPayload($payload);
         $topology = Topology::Hierarchical;
         $timeoutSeconds = $this->resolver->resolveTimeoutSeconds($swarm);
         $maxAgentExecutions = $this->resolver->resolveMaxAgentExecutions($swarm);
         $contextTtl = (int) $this->config->get('swarm.context.ttl', 3600);
         $queueLeaseSeconds = $this->leases->resolveQueueLeaseSeconds($timeoutSeconds);
+
+        // The lease is taken only while the run is released to its join; a stray or
+        // duplicate delivery is acknowledged here as a no-op.
         $acquisition = $this->historyStore->acquireQueuedRunContinuationLease($runId, $contextTtl, $queueLeaseSeconds);
 
         if (! $acquisition->acquired()) {
             return null;
         }
+
+        // Everything the continuation reads is read under the lease. What was read above
+        // may predate the release this lease was taken for — an earlier boundary's
+        // cursor, a context from before a signal published its outcome. A read that fails
+        // here is thrown, not recorded as a run failure: the lease expires and
+        // swarm:recover reclaims the continuation, as after a worker that died holding it.
+        $durableRun = $this->durableRuns->find($runId);
+        $payload = $this->contextStore->find($runId);
+
+        if ($durableRun === null || $payload === null) {
+            throw new SwarmException("Swarm run [{$runId}] lost its durable record or persisted context after its continuation lease was taken.");
+        }
+
+        $context = RunContext::fromPayload($payload);
 
         $state = new SwarmExecutionState(
             swarm: $swarm,

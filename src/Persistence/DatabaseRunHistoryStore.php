@@ -142,6 +142,25 @@ class DatabaseRunHistoryStore implements ChecksCitationStorage, ChecksNativeStep
         $executionToken = RunContext::newRunId();
 
         return $this->connection->transaction(function () use ($runId, $ttlSeconds, $leaseSeconds, $timestamp, $executionToken): QueuedRunAcquisition {
+            // The continuation runs only for a run its join has released: the durable
+            // coordination row is 'pending' from the release until the continuation's next
+            // fan-out or its completion. Any other state — still 'waiting' at a boundary,
+            // paused, terminal — means this delivery is a stray or a duplicate, and taking
+            // the lease would run the continuation past an open wait or before the branches
+            // are terminal. The release and its queued resume commit together, so a genuine
+            // resume always finds the row released.
+            //
+            // The durable row is locked first and exclusively. A locking read is current on
+            // both engines (an ordinary MySQL read could reuse an older snapshot) and waits
+            // for a release still in flight instead of reading it as 'waiting'. Durable row
+            // before history row is the order every transaction that writes both takes
+            // (fan-out, pause/resume/cancel, the wait closers); exclusive, not shared, so a
+            // holder that later writes the durable row is never an upgrade two deliveries
+            // could deadlock on.
+            if (! $this->queueHierarchicalRunIsReleasedToJoin($runId)) {
+                return QueuedRunAcquisition::duplicateRunning();
+            }
+
             /** @var object|null $record */
             $record = $this->table()->where('run_id', $runId)->lockForUpdate()->first();
 
@@ -160,7 +179,6 @@ class DatabaseRunHistoryStore implements ChecksCitationStorage, ChecksNativeStep
             if (($record->status ?? null) === 'running'
                 && ($record->leased_until ?? null) !== null
                 && $timestamp->gt(Carbon::parse((string) $record->leased_until))
-                && $this->isQueueHierarchicalParallelRun($runId)
             ) {
                 $this->table()->where('run_id', $runId)->update([
                     'execution_token' => $executionToken,
@@ -641,19 +659,24 @@ class DatabaseRunHistoryStore implements ChecksCitationStorage, ChecksNativeStep
     }
 
     /**
-     * Scope the continuation-lease reclaim narrowly to the queued-hierarchical
-     * coordination profile. The profile lives on the durable runs table (the
-     * history row has no coordination_profile column), so confirm it there with a
-     * single indexed read — other profiles resume through the durable lease path
-     * and must never be reclaimed here.
+     * Lock the run's durable coordination row and report whether it is a
+     * queued-hierarchical run released to its join ('pending'). The profile lives
+     * on the durable runs table (the history row has no coordination_profile
+     * column); scoping the continuation lease — fresh and reclaim alike — to it
+     * keeps every other profile, which resumes through the durable lease path, out.
      */
-    protected function isQueueHierarchicalParallelRun(string $runId): bool
+    protected function queueHierarchicalRunIsReleasedToJoin(string $runId): bool
     {
-        return $this->connection
+        /** @var object|null $run */
+        $run = $this->connection
             ->table((string) $this->config->get('swarm.tables.durable', 'swarm_durable_runs'))
             ->where('run_id', $runId)
-            ->where('coordination_profile', CoordinationProfile::QueueHierarchicalParallel->value)
-            ->exists();
+            ->lockForUpdate()
+            ->first(['status', 'coordination_profile']);
+
+        return $run !== null
+            && ($run->coordination_profile ?? null) === CoordinationProfile::QueueHierarchicalParallel->value
+            && ($run->status ?? null) === 'pending';
     }
 
     protected function stepTable(): Builder

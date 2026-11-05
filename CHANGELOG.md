@@ -148,9 +148,32 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   the bound instance. A double that records calls in its own properties (or a
   Mockery mock of the class) should override or stub `forDrain()` to return
   itself, so the calls are recorded on the instance your test reads.
+- **Custom `ClaimsQueuedRunExecution` history stores** have a new rule to follow
+  (#610): `acquireQueuedRunContinuationLease()` takes the lease, fresh or as a
+  crash reclaim, only while the run's durable coordination row is `pending`
+  (released to its join), and otherwise returns a non-acquired outcome without
+  touching the history row. The bundled `DatabaseRunHistoryStore` reads the
+  durable row with a lock before the history row. A custom store that does not
+  check keeps letting a stray resume job run the continuation early.
 
 ### Fixed
 
+- **A stray or duplicate queued-hierarchical resume job no longer runs the
+  continuation early (#610).** A `ResumeQueuedHierarchicalSwarm` job that
+  arrived while its run was not released to its join, such as a late duplicate
+  from an earlier pass of a parallel node, could take the continuation lease
+  anyway. With an open wait the run completed past the wait; with branches still
+  running, the run failed with "invoked before parallel branches are terminal".
+  The job now runs the continuation only while the run's durable row is
+  `pending`, and is otherwise acknowledged as a no-op: it is not failed, not
+  retried and not logged. A resume that arrives while its own join release is
+  still committing waits for it and then runs. The same rule applies to the
+  crash reclaim of a continuation whose worker died. A resume job now reads the
+  run's durable row and context after it takes the lease, so a delivery that
+  started before a signal or a later join release continues from the current
+  boundary and context instead of an older one. If one of those reads fails, the
+  run is not failed: the lease expires and `swarm:recover` reclaims the
+  continuation. No migration or config change.
 - **A signal delivered while a durable run is paused is accepted (#601).** With
   the bundled database store, a signal sent to a paused run that has an open
   wait of that name now closes that wait, records its payload and outcome, and
