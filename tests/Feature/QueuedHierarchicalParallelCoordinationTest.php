@@ -36,6 +36,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Persistence\LeaseLosingDurableRunStore;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\RecordingSwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalFullSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalParallelFailBranchSwarm;
@@ -1127,4 +1128,32 @@ test('a queued hierarchical join that must fail but cannot take the durable leas
         ->and($record['history_error_matches'])->toBeTrue();
     Event::assertDispatchedTimes(SwarmFailed::class, 1);
     Event::assertNotDispatched(SwarmCompleted::class);
+});
+
+test('a queued hierarchical join that must fail but loses its durable lease mid-write returns normally and runs nothing (#612)', function () {
+    Event::fake([SwarmFailed::class, SwarmCompleted::class]);
+    config()->set('swarm.durable.parallel.failure_policy', 'collect_failures');
+    FakeHierarchicalCoordinator::fake([qhfpPlan()]);
+    FakeWriter::fake(['writer-out']);
+
+    $runId = 'qhfp-lease-lost';
+    qhfpStartQueued($runId);
+    qhfpAdvanceBranch($runId, FailingPromptAgent::class);
+    qhfpAdvanceBranch($runId, FakeWriter::class);
+
+    $store = app(LeaseLosingDurableRunStore::class);
+    $store->loseLeaseOnFailFor = $runId;
+    app()->instance(DurableRunStore::class, $store);
+    app()->forgetInstance(DurableSwarmManager::class);
+    app()->forgetInstance(SwarmRunner::class);
+
+    expect(app(SwarmRunner::class)->resumeQueuedHierarchicalAfterJoin($runId))->toBeNull();
+
+    // Nothing was settled: the failure write rolled back, and no continuation ran.
+    expect(app(DurableSwarmManager::class)->find($runId)['status'])->toBe('pending')
+        ->and(DB::table('swarm_run_histories')->where('run_id', $runId)->value('status'))->toBe('running')
+        ->and(app(RunHistoryStore::class)->find($runId)['output'] ?? null)->toBeNull();
+    Event::assertNotDispatched(SwarmFailed::class);
+    Event::assertNotDispatched(SwarmCompleted::class);
+    FakeWriter::assertPrompted('writer-branch');
 });

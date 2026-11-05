@@ -267,12 +267,12 @@ class DurableSwarmManager
      *
      * Returns true when the join must fail, whether or not this call failed it: the
      * caller must then not run the continuation. The run is failed under the durable
-     * row's lease, taken here the way LeaseManager settles the coordination row. When
+     * row's lease, taken with LeaseManager::acquireCoordinationLease(). When
      * another holder has that lease nothing is written; the caller's history
      * continuation lease stays held until it expires, and swarm:recover then
-     * re-dispatches the resume, which decides again. A crash between taking the lease
-     * and the failure commit leaves the same shape (release finding
-     * FAIL-RUN-PARENT-SETTLEMENT-CRASH-WINDOW).
+     * re-dispatches the resume, which decides again. A worker that dies between taking
+     * the durable lease and the failure commit leaves the same shape: nothing written,
+     * both leases left to expire, and the run failed by the resume recovery sends.
      *
      * @internal Called by SwarmRunner::resumeQueuedHierarchicalAfterJoin().
      */
@@ -292,15 +292,14 @@ class DurableSwarmManager
             return false;
         }
 
-        $stepTimeout = max(1, (int) ($run['step_timeout_seconds'] ?? 300));
-        $token = $this->durableRuns->acquireLease($runId, (int) $run['next_step_index'], $stepTimeout);
+        $lease = LeaseManager::acquireCoordinationLease($this->durableRuns, $run);
 
-        if ($token === null) {
+        if ($lease === null) {
             return true;
         }
 
         $fresh = $this->durableRuns->find($runId) ?? $run;
-        $this->advancer->failCurrentRunFromBranchFailures($fresh, $token, $context, $stepTimeout, $parentNodeId);
+        $this->advancer->failCurrentRunFromBranchFailures($fresh, $lease['token'], $context, $lease['step_timeout'], $parentNodeId);
 
         return true;
     }

@@ -176,9 +176,10 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   throwing, so the failure is not retried. `fail_run` is unchanged: the failing
   branch's worker still fails the run at once. `partial_success` with at least
   one completed branch still continues with the completed branches' outputs.
-  If you relied on these runs completing, handle `SwarmFailed`, or use
-  `partial_success` to keep going whenever at least one branch completed. No
-  migration or config change.
+  The rule also applies to runs already waiting at a join when you deploy: such
+  a run with a failed branch fails when its resume arrives. If you relied on
+  these runs completing, handle `SwarmFailed`, or use `partial_success` to keep
+  going whenever at least one branch completed. No migration or config change.
 - **A stray or duplicate queued-hierarchical resume job no longer runs the
   continuation early (#610).** A `ResumeQueuedHierarchicalSwarm` job that
   arrived while its run was not released to its join, such as a late duplicate
