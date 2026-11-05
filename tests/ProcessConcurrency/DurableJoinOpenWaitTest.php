@@ -14,6 +14,7 @@ use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\InvokeSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\ResumeQueuedHierarchicalSwarm;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
+use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableJoinRelease;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Runners\QueuedHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
@@ -1021,3 +1022,195 @@ test('a failed continuation insert rolls back the join release on the real engin
         ->and($recovered)->not->toContain($runId);
     Queue::assertNothingPushed();
 })->with(['parallel', 'qh']);
+
+/**
+ * A queued-hierarchical run waiting at its join with every branch written terminal
+ * straight to the table, so nothing has released the join yet.
+ */
+function strayResumeDbAtJoin(): string
+{
+    joinOpenWaitDbFakeCoordinator(joinOpenWaitDbPlan());
+    $runId = 'qh-stray-db-'.bin2hex(random_bytes(4));
+    (new InvokeSwarm(FakeHierarchicalFullSwarm::class, RunContext::from('queued-hierarchical-task', $runId)->toQueuePayload()))->handle(app(SwarmRunner::class));
+    joinOpenWaitDbMarkBranchesCompleted($runId);
+
+    expect(joinOpenWaitDbRunStatus($runId))->toBe('waiting');
+
+    return $runId;
+}
+
+function strayResumeDbHistory(string $runId): object
+{
+    return DB::table('swarm_run_histories')->where('run_id', $runId)->first();
+}
+
+/**
+ * Releases the run to its join and holds the release — run row written, outbox row
+ * not yet — until the resume worker is observed blocked on it.
+ */
+function strayResumeDbHoldingRelease(string $runId, string $dir): Closure
+{
+    return static function () use ($runId, $dir): array {
+        $store = JoinOpenWaitWorker::bootHooked();
+        $me = LockBarrier::connectionId();
+        $contended = false;
+        $locks = null;
+        $store->afterJoinCheck = static function (string $runId, bool $released) use ($dir, $me, &$contended, &$locks): void {
+            LockBarrier::signal($dir, 'release-holds-run');
+            $contended = LockBarrier::awaitBlockedBy((int) LockBarrier::await($dir, 'resume-id'), $me);
+            $locks = $contended ? null : LockBarrier::lockWaitSnapshot();
+        };
+
+        try {
+            $released = app(DurableJoinRelease::class)->releaseIfReady(app(DurableRunStore::class)->find($runId));
+        } catch (Throwable $e) {
+            return ['outcome' => 'aborted', 'failure' => LockBarrier::failure($e)];
+        }
+
+        return ['outcome' => $released ? 'released' : 'refused', 'contended' => $contended, 'locks' => $locks];
+    };
+}
+
+/**
+ * Plays the continuation's next fan-out (QueuedHierarchicalDurableCoordinator::enter):
+ * writes the durable run row to 'waiting' first and, only once the resume worker is
+ * observed blocked on it, writes the history row 'waiting' with the join flag.
+ */
+function strayResumeDbHoldingFanOut(string $runId, string $dir): Closure
+{
+    return static function () use ($runId, $dir): array {
+        JoinOpenWaitWorker::boot();
+        $me = LockBarrier::connectionId();
+
+        try {
+            DB::beginTransaction();
+            DB::table('swarm_durable_runs')->where('run_id', $runId)->update(['status' => 'waiting', 'updated_at' => now('UTC')]);
+            LockBarrier::signal($dir, 'fanout-holds-run');
+
+            if (! LockBarrier::awaitBlockedBy((int) LockBarrier::await($dir, 'resume-id'), $me)) {
+                $locks = LockBarrier::lockWaitSnapshot();
+                DB::rollBack();
+
+                return ['outcome' => 'no-contention', 'locks' => $locks];
+            }
+
+            $metadata = json_decode((string) DB::table('swarm_run_histories')->where('run_id', $runId)->value('metadata'), true, flags: JSON_THROW_ON_ERROR);
+            $metadata['queue_hierarchical_waiting_parallel'] = true;
+            DB::table('swarm_run_histories')->where('run_id', $runId)->update([
+                'status' => 'waiting',
+                'execution_token' => null,
+                'leased_until' => null,
+                'metadata' => json_encode($metadata, JSON_THROW_ON_ERROR),
+            ]);
+            DB::commit();
+        } catch (Throwable $e) {
+            DB::rollBack();
+
+            return ['outcome' => 'aborted', 'failure' => LockBarrier::failure($e)];
+        }
+
+        return ['outcome' => 'committed'];
+    };
+}
+
+/**
+ * Delivers the queued resume once the other worker holds the run row. Reports whether
+ * this delivery ran the continuation itself.
+ */
+function strayResumeDbResumer(string $runId, string $dir, string $after): Closure
+{
+    return static function () use ($runId, $dir, $after): array {
+        JoinOpenWaitWorker::boot();
+        LockBarrier::signal($dir, 'resume-id', (string) LockBarrier::connectionId());
+        LockBarrier::await($dir, $after);
+
+        try {
+            $response = app(SwarmRunner::class)->resumeQueuedHierarchicalAfterJoin($runId);
+        } catch (Throwable $e) {
+            return ['outcome' => 'aborted', 'failure' => LockBarrier::failure($e)];
+        }
+
+        return ['outcome' => $response !== null ? 'completed' : 'no-op'];
+    };
+}
+
+test('queued-hierarchical: a duplicate resume while an open wait holds the join changes nothing; the genuine resume completes the run (#610)', function (): void {
+    joinOpenWaitDbFakeCoordinator(joinOpenWaitDbPlan());
+    $runId = 'qh-stray-db-wait-'.bin2hex(random_bytes(4));
+    (new InvokeSwarm(FakeHierarchicalFullSwarm::class, RunContext::from('queued-hierarchical-task', $runId)->toQueuePayload()))->handle(app(SwarmRunner::class));
+    $manager = app(DurableSwarmManager::class);
+    $manager->wait($runId, 'approval');
+
+    foreach (app(DurableRunStore::class)->branchesFor($runId, 'parallel_node') as $branch) {
+        (new AdvanceDurableBranch($runId, (string) $branch['branch_id']))->handle($manager);
+    }
+
+    expect(app(SwarmRunner::class)->resumeQueuedHierarchicalAfterJoin($runId))->toBeNull()
+        ->and(joinOpenWaitDbRunStatus($runId))->toBe('waiting')
+        ->and(strayResumeDbHistory($runId)->status)->toBe('waiting');
+
+    expect($manager->signal($runId, 'approval')->accepted)->toBeTrue()
+        ->and(joinOpenWaitDbResumeRows($runId))->toBe(1);
+
+    expect(app(SwarmRunner::class)->resumeQueuedHierarchicalAfterJoin($runId))->not->toBeNull()
+        ->and(app(SwarmRunner::class)->resumeQueuedHierarchicalAfterJoin($runId))->toBeNull()
+        ->and(strayResumeDbHistory($runId)->status)->toBe('completed');
+});
+
+test('queued-hierarchical: a duplicate resume while branches are still active does not fail the run; it then completes (#610)', function (): void {
+    joinOpenWaitDbFakeCoordinator(joinOpenWaitDbPlan());
+    $runId = 'qh-stray-db-active-'.bin2hex(random_bytes(4));
+    (new InvokeSwarm(FakeHierarchicalFullSwarm::class, RunContext::from('queued-hierarchical-task', $runId)->toQueuePayload()))->handle(app(SwarmRunner::class));
+    $manager = app(DurableSwarmManager::class);
+
+    expect(app(SwarmRunner::class)->resumeQueuedHierarchicalAfterJoin($runId))->toBeNull()
+        ->and(joinOpenWaitDbRunStatus($runId))->toBe('waiting')
+        ->and(strayResumeDbHistory($runId)->status)->toBe('waiting');
+
+    foreach (app(DurableRunStore::class)->branchesFor($runId, 'parallel_node') as $branch) {
+        (new AdvanceDurableBranch($runId, (string) $branch['branch_id']))->handle($manager);
+    }
+
+    expect(joinOpenWaitDbRunStatus($runId))->toBe('pending')
+        ->and(app(SwarmRunner::class)->resumeQueuedHierarchicalAfterJoin($runId))->not->toBeNull()
+        ->and(strayResumeDbHistory($runId)->status)->toBe('completed');
+});
+
+test('queued-hierarchical: a resume delivered while its join release is in flight waits for it and runs the continuation (#610)', function (): void {
+    $runId = strayResumeDbAtJoin();
+    $dir = joinOpenWaitDbBarrierDir();
+
+    [$releaser, $resumer] = $this->app->make(ConcurrencyManager::class)->driver('process')->run([
+        strayResumeDbHoldingRelease($runId, $dir),
+        strayResumeDbResumer($runId, $dir, 'release-holds-run'),
+    ]);
+
+    expect($releaser)->toBe(['outcome' => 'released', 'contended' => true, 'locks' => null], json_encode($releaser))
+        ->and($resumer)->toBe(['outcome' => 'completed'], json_encode($resumer))
+        ->and(strayResumeDbHistory($runId)->status)->toBe('completed')
+        ->and(joinOpenWaitDbResumeRows($runId))->toBe(1);
+
+    // The release's own queued resume arrives after the continuation ran: a no-op.
+    expect(app(SwarmRunner::class)->resumeQueuedHierarchicalAfterJoin($runId))->toBeNull()
+        ->and(strayResumeDbHistory($runId)->status)->toBe('completed');
+});
+
+test('queued-hierarchical: a duplicate resume during the next fan-out waits on the run row, then leaves the new boundary alone (#610)', function (): void {
+    $runId = strayResumeDbAtJoin();
+    expect(app(DurableJoinRelease::class)->releaseIfReady(app(DurableRunStore::class)->find($runId)))->toBeTrue();
+
+    // The genuine resume holds the continuation lease and is fanning out again.
+    expect(app(RunHistoryStore::class)->acquireQueuedRunContinuationLease($runId, 3600, 300)->outcome)->toBe('fresh');
+    $dir = joinOpenWaitDbBarrierDir();
+
+    [$fanOut, $resumer] = $this->app->make(ConcurrencyManager::class)->driver('process')->run([
+        strayResumeDbHoldingFanOut($runId, $dir),
+        strayResumeDbResumer($runId, $dir, 'fanout-holds-run'),
+    ]);
+
+    expect($fanOut)->toBe(['outcome' => 'committed'], json_encode($fanOut))
+        ->and($resumer)->toBe(['outcome' => 'no-op'], json_encode($resumer))
+        ->and(joinOpenWaitDbRunStatus($runId))->toBe('waiting')
+        ->and(strayResumeDbHistory($runId)->status)->toBe('waiting')
+        ->and(json_decode((string) strayResumeDbHistory($runId)->metadata, true)['queue_hierarchical_waiting_parallel'] ?? null)->toBeTrue();
+});

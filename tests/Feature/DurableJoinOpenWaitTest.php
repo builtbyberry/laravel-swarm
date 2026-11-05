@@ -3,12 +3,14 @@
 declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
+use BuiltByBerry\LaravelSwarm\Contracts\ClaimsQueuedRunExecution;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Enums\DurableDispatchType;
 use BuiltByBerry\LaravelSwarm\Events\SwarmChildCompleted;
+use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableBranch;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
@@ -28,6 +30,8 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Persistence\DecoratingDurableRunStore;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Persistence\FailingFindContextStore;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Persistence\HookedContinuationRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Persistence\MarkerFailingDurableRunStore;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalFullSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalParallelFailBranchSwarm;
@@ -37,6 +41,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Queue\Connectors\ConnectorInterface;
 use Illuminate\Queue\NullQueue;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
@@ -1439,4 +1444,257 @@ describe('swarm:recover releases a join through the outbox', function () {
         joinRecoveryPushedJob($profile, $runId, $step);
         expect(joinRecoveryRows($runId, $baseline)->count())->toBe(0);
     })->with(['parallel', 'hierarchical']);
+});
+
+/**
+ * Bind a history store whose continuation-lease acquisition runs $hook first, once.
+ */
+function strayResumeHookAcquisition(Closure $hook): void
+{
+    $store = app(HookedContinuationRunHistoryStore::class);
+    $store->beforeContinuationLease = $hook;
+    app()->instance(RunHistoryStore::class, $store);
+    app()->forgetInstance(SwarmRunner::class);
+    app()->forgetInstance(QueuedHierarchicalCoordinator::class);
+    app()->forgetInstance(DurableSwarmManager::class);
+}
+
+function strayResumeInvoke(string $runId): void
+{
+    $context = RunContext::from('queued-hierarchical-task', $runId);
+    (new InvokeSwarm(FakeHierarchicalFullSwarm::class, $context->toQueuePayload()))->handle(app(SwarmRunner::class));
+}
+
+function strayResumeAdvanceBranches(string $runId, string $nodeId): void
+{
+    $manager = app(DurableSwarmManager::class);
+
+    foreach (app(DurableRunStore::class)->branchesFor($runId, $nodeId) as $branch) {
+        if (! in_array($branch['status'] ?? null, ['completed', 'failed', 'cancelled'], true)) {
+            (new AdvanceDurableBranch($runId, (string) $branch['branch_id']))->handle($manager);
+        }
+    }
+}
+
+function strayResumeHistoryWaitingFlag(string $runId): bool
+{
+    return (bool) (app(RunHistoryStore::class)->find($runId)['metadata']['queue_hierarchical_waiting_parallel'] ?? false);
+}
+
+/**
+ * A ResumeQueuedHierarchicalSwarm job runs the continuation only when the run's
+ * durable row has been released to its join ('pending'). A stray or duplicate
+ * delivery while the row is still 'waiting' — or paused, or on its next boundary —
+ * changes nothing (#610).
+ */
+describe('stray queued-hierarchical resume (#610)', function () {
+    beforeEach(function () {
+        joinWaitRuntime(queuedHierarchical: true);
+        Artisan::call('migrate:fresh', ['--database' => 'testing']);
+        FakeHierarchicalCoordinator::fake([joinWaitHierarchicalPlan()]);
+        FakeWriter::fake(['writer-out']);
+        FakeEditor::fake(['editor-out']);
+        Event::fake([SwarmCompleted::class, SwarmFailed::class]);
+    });
+
+    test('a duplicate resume while an open wait holds the join changes nothing; the genuine resume completes the run once', function () {
+        $runId = 'qh-stray-open-wait';
+        joinWaitQueuedRun($runId);
+        $manager = app(DurableSwarmManager::class);
+
+        joinWaitResumeQueued($runId);
+
+        expect($manager->find($runId)['status'])->toBe('waiting')
+            ->and(app(RunHistoryStore::class)->find($runId)['status'])->toBe('waiting')
+            ->and(strayResumeHistoryWaitingFlag($runId))->toBeTrue()
+            ->and(joinWaitDispatches($runId)['queued_resume'])->toBe(0);
+        Event::assertNotDispatched(SwarmCompleted::class);
+        Event::assertNotDispatched(SwarmFailed::class);
+
+        expect($manager->signal($runId, 'approval')->accepted)->toBeTrue()
+            ->and($manager->find($runId)['status'])->toBe('pending')
+            ->and(joinWaitDispatches($runId)['queued_resume'])->toBe(1);
+
+        joinWaitResumeQueued($runId);
+        joinWaitResumeQueued($runId);
+
+        expect(app(RunHistoryStore::class)->find($runId)['status'])->toBe('completed')
+            ->and(app(RunHistoryStore::class)->find($runId)['output'])->toBe('editor-out');
+        Event::assertDispatchedTimes(SwarmCompleted::class, 1);
+        Event::assertNotDispatched(SwarmFailed::class);
+    });
+
+    test('a duplicate resume while branches are still active does not fail the run; the run then completes normally', function () {
+        $runId = 'qh-stray-active-branches';
+        strayResumeInvoke($runId);
+        $manager = app(DurableSwarmManager::class);
+
+        joinWaitResumeQueued($runId);
+
+        expect($manager->find($runId)['status'])->toBe('waiting')
+            ->and(app(RunHistoryStore::class)->find($runId)['status'])->toBe('waiting')
+            ->and(strayResumeHistoryWaitingFlag($runId))->toBeTrue();
+        Event::assertNotDispatched(SwarmFailed::class);
+
+        strayResumeAdvanceBranches($runId, 'parallel_node');
+
+        expect($manager->find($runId)['status'])->toBe('pending')
+            ->and(joinWaitDispatches($runId)['queued_resume'])->toBe(1);
+
+        joinWaitResumeQueued($runId);
+
+        expect(app(RunHistoryStore::class)->find($runId)['status'])->toBe('completed');
+        Event::assertDispatchedTimes(SwarmCompleted::class, 1);
+        Event::assertNotDispatched(SwarmFailed::class);
+    });
+
+    test('a crashed continuation is reclaimed only while its durable row is still released', function () {
+        $runId = 'qh-stray-reclaim';
+        strayResumeInvoke($runId);
+        strayResumeAdvanceBranches($runId, 'parallel_node');
+
+        /** @var ClaimsQueuedRunExecution $history */
+        $history = app(RunHistoryStore::class);
+        expect($history->acquireQueuedRunContinuationLease($runId, 3600, 300)->outcome)->toBe('fresh');
+
+        // The worker died holding the lease; its lease has expired.
+        DB::table('swarm_run_histories')->where('run_id', $runId)->update(['leased_until' => now('UTC')->subMinutes(10)]);
+
+        DB::table('swarm_durable_runs')->where('run_id', $runId)->update(['status' => 'waiting']);
+        joinWaitResumeQueued($runId);
+
+        expect(DB::table('swarm_run_histories')->where('run_id', $runId)->value('status'))->toBe('running')
+            ->and(Carbon::parse(DB::table('swarm_run_histories')->where('run_id', $runId)->value('leased_until'))->isPast())->toBeTrue();
+        Event::assertNotDispatched(SwarmCompleted::class);
+
+        DB::table('swarm_durable_runs')->where('run_id', $runId)->update(['status' => 'pending']);
+        joinWaitResumeQueued($runId);
+
+        expect($history->find($runId)['status'])->toBe('completed');
+        Event::assertDispatchedTimes(SwarmCompleted::class, 1);
+    });
+
+    test('a resume delivered while the released run is paused changes nothing; resume() re-releases the join once', function () {
+        $runId = 'qh-stray-paused';
+        strayResumeInvoke($runId);
+        strayResumeAdvanceBranches($runId, 'parallel_node');
+        $manager = app(DurableSwarmManager::class);
+
+        expect($manager->find($runId)['status'])->toBe('pending')
+            ->and(joinWaitDispatches($runId)['queued_resume'])->toBe(1);
+
+        $manager->pause($runId);
+        joinWaitResumeQueued($runId);
+
+        expect($manager->find($runId)['status'])->toBe('paused');
+        Event::assertNotDispatched(SwarmCompleted::class);
+
+        $manager->resume($runId);
+
+        expect($manager->find($runId)['status'])->toBe('pending')
+            ->and(joinWaitDispatches($runId)['queued_resume'])->toBe(2);
+
+        joinWaitResumeQueued($runId);
+        joinWaitResumeQueued($runId);
+
+        expect(app(RunHistoryStore::class)->find($runId)['status'])->toBe('completed');
+        Event::assertDispatchedTimes(SwarmCompleted::class, 1);
+    });
+
+    test('a duplicate that read the run before a signal released the join continues from the context the signal published', function () {
+        $runId = 'qh-stray-stale-context';
+        joinWaitQueuedRun($runId);
+
+        // The duplicate has done its pre-lease reads; the signal commits its outcome and
+        // releases the join before the duplicate asks for the lease.
+        strayResumeHookAcquisition(function (string $runId): void {
+            expect(app(DurableSwarmManager::class)->signal($runId, 'approval')->accepted)->toBeTrue();
+        });
+
+        joinWaitResumeQueued($runId);
+
+        $context = app(ContextStore::class)->find($runId);
+
+        expect(app(RunHistoryStore::class)->find($runId)['status'])->toBe('completed')
+            ->and($context['metadata']['durable_wait_outcomes']['approval']['status'] ?? null)->toBe('signalled');
+        Event::assertDispatchedTimes(SwarmCompleted::class, 1);
+    });
+
+    test('a duplicate that read the run at an earlier boundary continues from the boundary that is released now', function () {
+        FakeHierarchicalCoordinator::fake([[
+            'start_at' => 'first_parallel',
+            'nodes' => [
+                'first_parallel' => ['type' => 'parallel', 'branches' => ['writer_node', 'editor_node'], 'next' => 'second_parallel'],
+                'second_parallel' => ['type' => 'parallel', 'branches' => ['research_node', 'second_editor_node'], 'next' => 'finish_node'],
+                'writer_node' => ['type' => 'worker', 'agent' => FakeWriter::class, 'prompt' => 'writer-branch'],
+                'editor_node' => ['type' => 'worker', 'agent' => FakeEditor::class, 'prompt' => 'editor-branch'],
+                'research_node' => ['type' => 'worker', 'agent' => FakeResearcher::class, 'prompt' => 'research-branch'],
+                'second_editor_node' => ['type' => 'worker', 'agent' => FakeEditor::class, 'prompt' => 'second-editor-branch'],
+                'finish_node' => ['type' => 'finish', 'output_from' => 'research_node'],
+            ],
+        ]]);
+        FakeEditor::fake(['editor-out', 'second-editor-out']);
+        $researched = 0;
+        FakeResearcher::fake(function () use (&$researched): string {
+            $researched++;
+
+            return 'research-out';
+        });
+
+        $runId = 'qh-stray-stale-boundary';
+        strayResumeInvoke($runId);
+        strayResumeAdvanceBranches($runId, 'first_parallel');
+
+        expect(app(DurableSwarmManager::class)->find($runId)['status'])->toBe('pending');
+
+        // The duplicate read the run released at the first boundary. Before it asks for
+        // the lease, the genuine resume runs that boundary's continuation to the second
+        // fan-out, and the second boundary's branches finish and release it.
+        strayResumeHookAcquisition(function (string $runId): void {
+            joinWaitResumeQueued($runId);
+
+            expect(app(DurableSwarmManager::class)->find($runId)['current_node_id'])->toBe('second_parallel')
+                ->and(app(RunHistoryStore::class)->find($runId)['status'])->toBe('waiting');
+
+            strayResumeAdvanceBranches($runId, 'second_parallel');
+        });
+
+        joinWaitResumeQueued($runId);
+
+        expect(app(RunHistoryStore::class)->find($runId)['status'])->toBe('completed')
+            ->and(app(RunHistoryStore::class)->find($runId)['output'])->toBe('research-out')
+            ->and($researched)->toBe(1)
+            ->and(DB::table('swarm_durable_branches')->where('run_id', $runId)->where('parent_node_id', 'second_parallel')->count())->toBe(2);
+        Event::assertDispatchedTimes(SwarmCompleted::class, 1);
+        Event::assertNotDispatched(SwarmFailed::class);
+    });
+
+    test('a read that fails after the lease is taken does not fail the run; swarm:recover reclaims it', function () {
+        $runId = 'qh-stray-hydration-failure';
+        strayResumeInvoke($runId);
+        strayResumeAdvanceBranches($runId, 'parallel_node');
+
+        $contextStore = app(FailingFindContextStore::class);
+        $contextStore->failRunId = $runId;
+        $contextStore->failOnCall = 2;
+        app()->instance(ContextStore::class, $contextStore);
+        app()->forgetInstance(SwarmRunner::class);
+        app()->forgetInstance(QueuedHierarchicalCoordinator::class);
+
+        expect(fn () => joinWaitResumeQueued($runId))->toThrow(RuntimeException::class, "Context read for [{$runId}] failed.");
+
+        expect(DB::table('swarm_run_histories')->where('run_id', $runId)->value('status'))->toBe('running')
+            ->and(app(DurableSwarmManager::class)->find($runId)['status'])->toBe('pending');
+        Event::assertNotDispatched(SwarmFailed::class);
+
+        DB::table('swarm_run_histories')->where('run_id', $runId)->update(['leased_until' => now('UTC')->subMinutes(10)]);
+
+        expect(array_column(app(DurableRunStore::class)->recoverableQueuedResumes(runId: $runId), 'run_id'))->toBe([$runId]);
+
+        joinWaitResumeQueued($runId);
+
+        expect(app(RunHistoryStore::class)->find($runId)['status'])->toBe('completed');
+        Event::assertDispatchedTimes(SwarmCompleted::class, 1);
+        Event::assertNotDispatched(SwarmFailed::class);
+    });
 });
