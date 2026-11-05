@@ -68,10 +68,38 @@ the signal, let the child finish, or let `swarm:recover` time the wait out.
 runs. A run whose wait was released while it was paused (for example its child
 finished) has nothing left to wait on and resumes to `pending` as before.
 
-- A signal delivered while the run was paused is recorded, not accepted. Re-send
-  it after the run resumes, with a **new** idempotency key; the old key returns
-  the earlier delivery as a duplicate. This is interim behaviour until
-  [#601](https://github.com/builtbyberry/laravel-swarm/issues/601) accepts the paused-time delivery on resume.
+- **Signals delivered while paused (#601).** A signal sent to a paused run that
+  has an open wait of that name is now accepted at delivery: the wait closes, the
+  run stays paused, and resume queues its next step. `accepted` is `true` while the
+  run is still paused, so code that treated `accepted` as "the run is moving now"
+  should also check the run's status. A paused run's signal is still only recorded
+  when it is sent inside a database transaction (including transaction
+  middleware and the `RefreshDatabase` / `DatabaseTransactions` test traits) or
+  with a custom store that does not implement `AcceptsDurableSignals`; send those
+  again after resume with a **new** idempotency key, as before. See
+  [Signals While Paused](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-waits-and-signals.md#signals-while-paused).
+  - Signals that older code recorded while a run was paused are not recovered:
+    send them again after resume with a new key.
+  - If you already re-send paused-time signals after resume with a new key, that
+    second delivery is now recorded and not applied twice; you can stop re-sending.
+  - During a rolling deploy, any process that delivers signals and still runs the
+    old code records a paused run's signal without accepting it. Signals are
+    accepted where `signal()` is called (web nodes serving the signal webhook, hosts
+    running `swarm:signal`, application code calling `SwarmOperator::signal()`), not
+    in queue workers. Keep the re-send rule until every one of those runs the new
+    code.
+  - Rolling back is safe for data. A wait closed by a signal while the run was
+    paused is an ordinary signalled wait: older code resumes such a run to `pending`
+    and runs its next step with the signal applied. There is no schema change. After
+    a rollback, though, signals delivered while a run is paused are again only
+    recorded, so go back to re-sending them after resume with a new idempotency key.
+  - A custom store that implements `AcceptsDurableSignals` now has `acceptSignal()`
+    called for paused runs as well as waiting ones. It must close the wait without
+    moving a paused run out of `paused`; the bundled database store does.
+  - An application transaction that signals a paused run and then resumes it can
+    deadlock on MySQL with another process signalling the same run. The database
+    aborts one side completely; retry it, for example with
+    `DB::transaction(..., attempts: 3)`.
 - **Runs that already advanced past an open wait.** Under the old behaviour a run
   resumed past its open wait kept that wait row open (`status = 'waiting'`) while
   it moved on. If such a run is still in flight and is paused again after you

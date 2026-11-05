@@ -2161,36 +2161,6 @@ test('resuming a run paused in a child swarm wait restores the wait until the ch
     expect($manager->find($runId)['status'])->toBe('completed');
 })->with(['relay dispatch' => false, 'eager dispatch' => true]);
 
-test('a signal delivered while paused is recorded, and is accepted when re-sent with a new key after resume', function () {
-    [$response, $manager] = resumeWaitSignalRun(false);
-    $runId = $response->runId;
-
-    $manager->pause($runId);
-
-    $whilePaused = $response->signal('approval_received', ['approved' => true], 'while-paused');
-
-    expect($whilePaused->accepted)->toBeFalse()
-        ->and($whilePaused->status)->toBe('recorded');
-
-    $manager->resume($runId);
-
-    expect($manager->find($runId)['status'])->toBe('waiting')
-        ->and($manager->inspect($runId)->waits[0]['status'])->toBe('waiting')
-        ->and($manager->inspect($runId)->signals[0]['status'])->toBe('recorded');
-
-    $sameKey = $response->signal('approval_received', ['approved' => true], 'while-paused');
-
-    expect($sameKey->duplicate)->toBeTrue()
-        ->and($sameKey->accepted)->toBeFalse()
-        ->and($manager->find($runId)['status'])->toBe('waiting');
-
-    $newKey = $response->signal('approval_received', ['approved' => true], 'after-resume');
-
-    expect($newKey->accepted)->toBeTrue()
-        ->and($manager->find($runId)['status'])->toBe('pending')
-        ->and($manager->inspect($runId)->waits[0]['status'])->toBe('signalled');
-});
-
 test('a child that finished while its parent was paused is honoured when the parent resumes', function () {
     [$response, $manager, $childRunId] = resumeWaitChildRun(false);
     $runId = $response->runId;

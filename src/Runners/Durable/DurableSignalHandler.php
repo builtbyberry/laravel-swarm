@@ -87,12 +87,22 @@ class DurableSignalHandler
      * aborts leaves no signal behind, so the same idempotency key is accepted when it is
      * sent again.
      *
+     * A paused run's open wait is accepted too, but only outside an application
+     * transaction (the swarm connection's transaction level is 0 when signal() is called).
+     * The wait closes with the signal and nothing is continued from here: the run is
+     * left to resume (see DurableLifecycleController::resume()). Inside an application
+     * transaction the signal is recorded and not accepted, as it was
+     * before paused runs were accepted: there, an acceptance would publish the context
+     * from the application's older snapshot and keep the run row locked until the
+     * application commits, which a later resume() in the same transaction then deadlocks
+     * against. Laravel's testing transaction wrapper counts as an application transaction.
+     *
      * @param  array<string, mixed>  $run
      * @return array{0: array<string, mixed>, 1: bool}
      */
     protected function acceptAtomically(AcceptsDurableSignals $store, array $run, string $runId, string $name, mixed $capturedPayload, ?string $idempotencyKey): array
     {
-        if ($run['status'] === 'waiting') {
+        if ($run['status'] === 'waiting' || ($run['status'] === 'paused' && $this->connection->transactionLevel() === 0)) {
             // A key already recorded is answered without taking a lock — a webhook's
             // retries would otherwise each lock the wait and run rows — but only outside an
             // application transaction: inside one this read would fix MySQL's snapshot
@@ -128,14 +138,27 @@ class DurableSignalHandler
             }
         }
 
-        // No open wait of this name, or a run that is not waiting: recorded, not accepted.
-        return [$this->durableRuns->recordSignal($runId, $name, $capturedPayload, $idempotencyKey), false];
+        // No open wait of this name, a run that is neither waiting nor paused, or a paused
+        // run inside an application transaction: recorded, not accepted.
+        $signal = $this->durableRuns->recordSignal($runId, $name, $capturedPayload, $idempotencyKey);
+
+        if ($run['status'] === 'paused' && $this->connection->transactionLevel() > 0 && ($signal['duplicate'] ?? false) !== true) {
+            // Nothing in the result says why a paused run's signal was not tried for
+            // acceptance; this does. Whether a wait of that name is open is not checked.
+            $this->safeLog($this->logger, 'notice', 'laravel-swarm: a signal for a paused durable run was sent inside a database transaction, so it was recorded without being accepted. If the run has an open wait of that name, send the signal again after the run is resumed, with a new idempotency key.', [
+                'run_id' => $runId,
+                'signal_name' => $name,
+            ]);
+        }
+
+        return [$signal, false];
     }
 
     /**
      * A store without atomic acceptance: the signal is recorded first and accepted in its
      * own transaction, so an acceptance that aborts leaves the recorded signal behind and
-     * the same idempotency key is then a duplicate (see AcceptsDurableSignals).
+     * the same idempotency key is then a duplicate (see AcceptsDurableSignals). Only a
+     * waiting run's wait is accepted; a paused run's signal is recorded.
      *
      * @param  array<string, mixed>  $run
      * @return array{0: array<string, mixed>, 1: bool}
@@ -210,6 +233,8 @@ class DurableSignalHandler
             // open waits, and this transaction already holds the run row.
             $this->joinRelease->releaseAfterCommit($runId);
         }
+
+        // A paused run is continued by resume(), not from here.
     }
 
     /**

@@ -171,6 +171,11 @@ Common patterns:
   (`<env name="SWARM_DURABLE_PARALLEL_MAX_CONCURRENT_BRANCHES" value=""/>` in
   `phpunit.xml`) or use `DatabaseMigrations`. See
   [Capping branch fan-out](durable-execution.md#capping-branch-fan-out).
+- A signal sent to a paused run is accepted only outside a database transaction.
+  Under `RefreshDatabase` or `DatabaseTransactions` every test runs inside one, so
+  a paused run's signal is recorded and not accepted. Test paused-run signals with
+  `DatabaseMigrations` or `DatabaseTruncation`. See
+  [Signals While Paused](durable-waits-and-signals.md#signals-while-paused).
 
 For the full collaborator graph, container singleton rules, and which types
 must not be registered globally, read

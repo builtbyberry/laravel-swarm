@@ -180,10 +180,12 @@ For starts, the idempotency key is scoped to the swarm class and request body:
 
 For signals, the idempotency key is scoped to the run and signal handling path,
 so retried webhook deliveries do not duplicate signals. A signal delivered while
-the run is paused is recorded but not accepted, and a retry with the same key
-returns that recorded delivery as a duplicate. Re-deliver it after the run
-resumes with a new `Idempotency-Key` (interim behaviour until
-[#601](https://github.com/builtbyberry/laravel-swarm/issues/601)).
+the run is paused is accepted when the run has an open wait of that name: the
+response is HTTP 202 with `accepted: true`, the run stays paused, and it
+continues when it is resumed. If your application wraps the webhook route in a
+database transaction (a transaction middleware, for example), a paused run's
+signal is recorded but not accepted instead; see
+[Signals While Paused](durable-waits-and-signals.md#signals-while-paused).
 
 `swarm:prune` removes stale failed or abandoned no-run webhook idempotency rows
 using `swarm.durable.webhooks.idempotency_ttl`. Completed idempotency rows tied

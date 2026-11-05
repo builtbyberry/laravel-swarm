@@ -1934,6 +1934,10 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
      * not call that method: a subclass that overrides releaseWaitWithSignal() must also
      * override this to keep its behaviour when a signal is accepted. It does call
      * recordSignal() and syncRunWaitSummary().
+     *
+     * It closes an open wait whatever the run's status. A paused run stays paused:
+     * syncRunWaitSummary() never moves one. Which runs it is called for is the caller's
+     * decision.
      */
     public function acceptSignal(string $runId, string $name, mixed $payload, ?string $idempotencyKey): ?array
     {
@@ -2690,6 +2694,24 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
             ->first();
 
         if ($latestOpenWait === null) {
+            if (($run->status ?? null) === 'paused') {
+                // A paused run stays paused when its last wait closes (a signal accepted
+                // or a child finished during the pause): resume() moves it. The summary of
+                // the closed wait is cleared so the run no longer describes it.
+                $this->table()
+                    ->where('run_id', $runId)
+                    ->where('status', 'paused')
+                    ->whereNull('finished_at')
+                    ->update([
+                        'wait_reason' => null,
+                        'waiting_since' => null,
+                        'wait_timeout_at' => null,
+                        'updated_at' => $timestamp,
+                    ]);
+
+                return;
+            }
+
             // A run at a branch boundary stays waiting when its last wait closes: it is
             // still waiting on its branches, and its join is released through
             // releaseWaitingRunForJoin() — by the last branch to finish, or by the closer
