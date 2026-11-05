@@ -157,8 +157,8 @@ class DatabaseRunHistoryStore implements ChecksCitationStorage, ChecksNativeStep
             // (fan-out, pause/resume/cancel, the wait closers); exclusive, not shared, so a
             // holder that later writes the durable row is never an upgrade two deliveries
             // could deadlock on.
-            if (! $this->queueHierarchicalRunIsReleasedToJoin($runId)) {
-                return QueuedRunAcquisition::duplicateRunning();
+            if (! $this->lockQueueHierarchicalRunReleasedToJoin($runId)) {
+                return QueuedRunAcquisition::notReleased();
             }
 
             /** @var object|null $record */
@@ -659,13 +659,16 @@ class DatabaseRunHistoryStore implements ChecksCitationStorage, ChecksNativeStep
     }
 
     /**
-     * Lock the run's durable coordination row and report whether it is a
-     * queued-hierarchical run released to its join ('pending'). The profile lives
-     * on the durable runs table (the history row has no coordination_profile
-     * column); scoping the continuation lease — fresh and reclaim alike — to it
-     * keeps every other profile, which resumes through the durable lease path, out.
+     * Take an exclusive lock on the run's durable coordination row and report whether
+     * it is a queued-hierarchical run released to its join ('pending'). Call it only
+     * inside the continuation-lease transaction and before the history row is locked:
+     * the lock is held until that transaction ends, and the continuation lease's lock
+     * order (durable row, then history row) depends on it. The profile lives on the
+     * durable runs table (the history row has no coordination_profile column); scoping
+     * the continuation lease — fresh and reclaim alike — to it keeps every other
+     * profile, which resumes through the durable lease path, out.
      */
-    protected function queueHierarchicalRunIsReleasedToJoin(string $runId): bool
+    protected function lockQueueHierarchicalRunReleasedToJoin(string $runId): bool
     {
         /** @var object|null $run */
         $run = $this->connection

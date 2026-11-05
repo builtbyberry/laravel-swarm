@@ -805,8 +805,12 @@ class SwarmRunner
      * What resumeQueuedHierarchicalAfterJoin() read before taking the lease may predate
      * the release the lease was taken for — an earlier boundary's cursor, a context from
      * before a signal published its outcome. A read that fails here is thrown, not
-     * recorded as a run failure: the lease expires and swarm:recover reclaims the
-     * continuation, as after a worker that died holding it.
+     * recorded as a run failure: the job's own retries find the lease still held and
+     * do nothing, and once the lease and `swarm.durable.recovery.grace_seconds` have
+     * passed a scheduled swarm:recover reclaims the continuation, as after a worker
+     * that died holding it. That delay is the accepted cost of never failing a run on
+     * a transient read. Recovery finds the run through its durable row, so a run
+     * whose durable row is gone is not reclaimed and is left for an operator.
      *
      * @return array{0: array<string, mixed>, 1: RunContext}
      */

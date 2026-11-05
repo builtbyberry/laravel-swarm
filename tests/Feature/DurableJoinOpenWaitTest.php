@@ -1559,19 +1559,47 @@ describe('stray queued-hierarchical resume (#610)', function () {
 
         // The worker died holding the lease; its lease has expired.
         DB::table('swarm_run_histories')->where('run_id', $runId)->update(['leased_until' => now('UTC')->subMinutes(10)]);
+        $deadToken = DB::table('swarm_run_histories')->where('run_id', $runId)->value('execution_token');
 
         DB::table('swarm_durable_runs')->where('run_id', $runId)->update(['status' => 'waiting']);
         joinWaitResumeQueued($runId);
 
         expect(DB::table('swarm_run_histories')->where('run_id', $runId)->value('status'))->toBe('running')
-            ->and(Carbon::parse(DB::table('swarm_run_histories')->where('run_id', $runId)->value('leased_until'))->isPast())->toBeTrue();
+            ->and(DB::table('swarm_run_histories')->where('run_id', $runId)->value('execution_token'))->toBe($deadToken)
+            ->and(Carbon::parse(DB::table('swarm_run_histories')->where('run_id', $runId)->value('leased_until'))->isPast())->toBeTrue()
+            ->and(app(DurableRunStore::class)->recoverableQueuedResumes(runId: $runId))->toBe([]);
         Event::assertNotDispatched(SwarmCompleted::class);
 
         DB::table('swarm_durable_runs')->where('run_id', $runId)->update(['status' => 'pending']);
+
+        expect(array_column(app(DurableRunStore::class)->recoverableQueuedResumes(runId: $runId), 'run_id'))->toBe([$runId]);
+
         joinWaitResumeQueued($runId);
 
         expect($history->find($runId)['status'])->toBe('completed');
         Event::assertDispatchedTimes(SwarmCompleted::class, 1);
+    });
+
+    test('the continuation lease is never taken for a run that is not queued-hierarchical', function () {
+        $runId = 'qh-stray-other-profile';
+        strayResumeInvoke($runId);
+        strayResumeAdvanceBranches($runId, 'parallel_node');
+
+        /** @var ClaimsQueuedRunExecution $history */
+        $history = app(RunHistoryStore::class);
+        expect($history->acquireQueuedRunContinuationLease($runId, 3600, 300)->outcome)->toBe('fresh');
+        DB::table('swarm_run_histories')->where('run_id', $runId)->update(['leased_until' => now('UTC')->subMinutes(10)]);
+        $before = DB::table('swarm_run_histories')->where('run_id', $runId)->first();
+
+        // Released and stranded like a crashed continuation, but on another profile.
+        DB::table('swarm_durable_runs')->where('run_id', $runId)->update(['coordination_profile' => 'step_durable']);
+
+        expect($history->acquireQueuedRunContinuationLease($runId, 3600, 300)->outcome)->toBe('not_released');
+
+        $after = DB::table('swarm_run_histories')->where('run_id', $runId)->first();
+        expect($after->status)->toBe('running')
+            ->and($after->execution_token)->toBe($before->execution_token)
+            ->and($after->leased_until)->toBe($before->leased_until);
     });
 
     test('a resume delivered while the released run is paused changes nothing; resume() re-releases the join once', function () {
@@ -1669,17 +1697,20 @@ describe('stray queued-hierarchical resume (#610)', function () {
         Event::assertNotDispatched(SwarmFailed::class);
     });
 
-    test('a read that fails after the lease is taken does not fail the run; swarm:recover reclaims it', function () {
+    test('a read that fails after the lease is taken does not fail the run; swarm:recover redispatches it and the resume reclaims it', function () {
         $runId = 'qh-stray-hydration-failure';
         strayResumeInvoke($runId);
         strayResumeAdvanceBranches($runId, 'parallel_node');
 
+        // The resume reads the context twice: an existence check before the lease, then
+        // the read the continuation runs from, after it. Fail the second.
         $contextStore = app(FailingFindContextStore::class);
         $contextStore->failRunId = $runId;
         $contextStore->failOnCall = 2;
         app()->instance(ContextStore::class, $contextStore);
         app()->forgetInstance(SwarmRunner::class);
         app()->forgetInstance(QueuedHierarchicalCoordinator::class);
+        app()->forgetInstance(DurableSwarmManager::class);
 
         expect(fn () => joinWaitResumeQueued($runId))->toThrow(RuntimeException::class, "Context read for [{$runId}] failed.");
 
@@ -1688,10 +1719,14 @@ describe('stray queued-hierarchical resume (#610)', function () {
         Event::assertNotDispatched(SwarmFailed::class);
 
         DB::table('swarm_run_histories')->where('run_id', $runId)->update(['leased_until' => now('UTC')->subMinutes(10)]);
+        Queue::fake();
 
-        expect(array_column(app(DurableRunStore::class)->recoverableQueuedResumes(runId: $runId), 'run_id'))->toBe([$runId]);
+        Artisan::call('swarm:recover', ['--run-id' => $runId]);
 
-        joinWaitResumeQueued($runId);
+        $resumes = Queue::pushed(ResumeQueuedHierarchicalSwarm::class, fn (ResumeQueuedHierarchicalSwarm $job): bool => $job->runId === $runId);
+        expect($resumes)->toHaveCount(1);
+
+        $resumes->first()->handle(app(QueuedHierarchicalCoordinator::class));
 
         expect(app(RunHistoryStore::class)->find($runId)['status'])->toBe('completed');
         Event::assertDispatchedTimes(SwarmCompleted::class, 1);

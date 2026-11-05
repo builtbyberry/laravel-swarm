@@ -154,7 +154,9 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   (released to its join), and otherwise returns a non-acquired outcome without
   touching the history row. The bundled `DatabaseRunHistoryStore` reads the
   durable row with a lock before the history row. A custom store that does not
-  check keeps letting a stray resume job run the continuation early.
+  check keeps letting a stray resume job run the continuation early. The
+  protected `DatabaseRunHistoryStore::isQueueHierarchicalParallelRun()` is removed.
+  See [UPGRADING](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#a-queued-hierarchical-resume-runs-only-once-its-join-is-released).
 
 ### Fixed
 
@@ -172,8 +174,13 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   run's durable row and context after it takes the lease, so a delivery that
   started before a signal or a later join release continues from the current
   boundary and context instead of an older one. If one of those reads fails, the
-  run is not failed: the lease expires and `swarm:recover` reclaims the
-  continuation. No migration or config change.
+  job throws and may show in `failed_jobs`, but the run is not failed: its retries
+  find the lease held and do nothing, and once the lease and the recovery grace
+  period have passed a scheduled `swarm:recover` reclaims the continuation.
+  `swarm:recover` now also redispatches a crashed continuation only while its run
+  is still released, instead of a resume that would be refused on every sweep.
+  No migration or config change. See
+  [UPGRADING](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#a-queued-hierarchical-resume-runs-only-once-its-join-is-released).
 - **A signal delivered while a durable run is paused is accepted (#601).** With
   the bundled database store, a signal sent to a paused run that has an open
   wait of that name now closes that wait, records its payload and outcome, and

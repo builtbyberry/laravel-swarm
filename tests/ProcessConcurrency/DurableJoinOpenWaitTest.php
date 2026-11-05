@@ -1029,14 +1029,34 @@ test('a failed continuation insert rolls back the join release on the real engin
  */
 function strayResumeDbAtJoin(): string
 {
-    joinOpenWaitDbFakeCoordinator(joinOpenWaitDbPlan());
-    $runId = 'qh-stray-db-'.bin2hex(random_bytes(4));
-    (new InvokeSwarm(FakeHierarchicalFullSwarm::class, RunContext::from('queued-hierarchical-task', $runId)->toQueuePayload()))->handle(app(SwarmRunner::class));
+    $runId = strayResumeDbInvoke('qh-stray-db-');
     joinOpenWaitDbMarkBranchesCompleted($runId);
 
     expect(joinOpenWaitDbRunStatus($runId))->toBe('waiting');
 
     return $runId;
+}
+
+/**
+ * Invokes a queued-hierarchical run to its first fan-out; it waits at its join with
+ * its branches still to run.
+ */
+function strayResumeDbInvoke(string $prefix): string
+{
+    joinOpenWaitDbFakeCoordinator(joinOpenWaitDbPlan());
+    $runId = $prefix.bin2hex(random_bytes(4));
+    (new InvokeSwarm(FakeHierarchicalFullSwarm::class, RunContext::from('queued-hierarchical-task', $runId)->toQueuePayload()))->handle(app(SwarmRunner::class));
+
+    return $runId;
+}
+
+function strayResumeDbAdvanceBranches(string $runId): void
+{
+    $manager = app(DurableSwarmManager::class);
+
+    foreach (app(DurableRunStore::class)->branchesFor($runId, 'parallel_node') as $branch) {
+        (new AdvanceDurableBranch($runId, (string) $branch['branch_id']))->handle($manager);
+    }
 }
 
 function strayResumeDbHistory(string $runId): object
@@ -1072,9 +1092,11 @@ function strayResumeDbHoldingRelease(string $runId, string $dir): Closure
 }
 
 /**
- * Plays the continuation's next fan-out (QueuedHierarchicalDurableCoordinator::enter):
- * writes the durable run row to 'waiting' first and, only once the resume worker is
- * observed blocked on it, writes the history row 'waiting' with the join flag.
+ * Plays the continuation's next fan-out in the write order of
+ * QueuedHierarchicalDurableCoordinator::enter(), which it must stay in step with:
+ * waitForBranches() writes the durable run row 'waiting' first, then
+ * syncDurableState() writes the history row 'waiting' with the join flag. The history
+ * write waits until the resume worker is observed blocked on the run row.
  */
 function strayResumeDbHoldingFanOut(string $runId, string $dir): Closure
 {
@@ -1135,15 +1157,10 @@ function strayResumeDbResumer(string $runId, string $dir, string $after): Closur
 }
 
 test('queued-hierarchical: a duplicate resume while an open wait holds the join changes nothing; the genuine resume completes the run (#610)', function (): void {
-    joinOpenWaitDbFakeCoordinator(joinOpenWaitDbPlan());
-    $runId = 'qh-stray-db-wait-'.bin2hex(random_bytes(4));
-    (new InvokeSwarm(FakeHierarchicalFullSwarm::class, RunContext::from('queued-hierarchical-task', $runId)->toQueuePayload()))->handle(app(SwarmRunner::class));
+    $runId = strayResumeDbInvoke('qh-stray-db-wait-');
     $manager = app(DurableSwarmManager::class);
     $manager->wait($runId, 'approval');
-
-    foreach (app(DurableRunStore::class)->branchesFor($runId, 'parallel_node') as $branch) {
-        (new AdvanceDurableBranch($runId, (string) $branch['branch_id']))->handle($manager);
-    }
+    strayResumeDbAdvanceBranches($runId);
 
     expect(app(SwarmRunner::class)->resumeQueuedHierarchicalAfterJoin($runId))->toBeNull()
         ->and(joinOpenWaitDbRunStatus($runId))->toBe('waiting')
@@ -1158,18 +1175,13 @@ test('queued-hierarchical: a duplicate resume while an open wait holds the join 
 });
 
 test('queued-hierarchical: a duplicate resume while branches are still active does not fail the run; it then completes (#610)', function (): void {
-    joinOpenWaitDbFakeCoordinator(joinOpenWaitDbPlan());
-    $runId = 'qh-stray-db-active-'.bin2hex(random_bytes(4));
-    (new InvokeSwarm(FakeHierarchicalFullSwarm::class, RunContext::from('queued-hierarchical-task', $runId)->toQueuePayload()))->handle(app(SwarmRunner::class));
-    $manager = app(DurableSwarmManager::class);
+    $runId = strayResumeDbInvoke('qh-stray-db-active-');
 
     expect(app(SwarmRunner::class)->resumeQueuedHierarchicalAfterJoin($runId))->toBeNull()
         ->and(joinOpenWaitDbRunStatus($runId))->toBe('waiting')
         ->and(strayResumeDbHistory($runId)->status)->toBe('waiting');
 
-    foreach (app(DurableRunStore::class)->branchesFor($runId, 'parallel_node') as $branch) {
-        (new AdvanceDurableBranch($runId, (string) $branch['branch_id']))->handle($manager);
-    }
+    strayResumeDbAdvanceBranches($runId);
 
     expect(joinOpenWaitDbRunStatus($runId))->toBe('pending')
         ->and(app(SwarmRunner::class)->resumeQueuedHierarchicalAfterJoin($runId))->not->toBeNull()
