@@ -160,6 +160,26 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
 
 ### Fixed
 
+- **A queued-hierarchical join now applies the durable parallel failure policy
+  (#612).** When a `queue()` `multi_worker` hierarchical run reached its join, it
+  carried on with whichever branches completed and ignored the ones that failed,
+  so it completed where a `dispatchDurable()` hierarchical run with the same
+  branch outcomes fails. Under `collect_failures` (the default) a run with any
+  failed branch, and under `partial_success` a run whose every branch failed,
+  now fails once all its branches have finished, as
+  [Hierarchical Routing](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/hierarchical-routing.md)
+  already documented. The failure is the same as the step-durable one: the run's
+  history and durable row are `failed` with "Durable parallel branches failed:"
+  and the failed branch ids, the context carries `durable_parallel_branches`,
+  the `durable.failed` audit event is emitted, and `SwarmFailed` is dispatched
+  once with execution mode `queue`. The resume job returns normally rather than
+  throwing, so the failure is not retried. `fail_run` is unchanged: the failing
+  branch's worker still fails the run at once. `partial_success` with at least
+  one completed branch still continues with the completed branches' outputs.
+  The rule also applies to runs already waiting at a join when you deploy: such
+  a run with a failed branch fails when its resume arrives. If you relied on
+  these runs completing, handle `SwarmFailed`, or use `partial_success` to keep
+  going whenever at least one branch completed. No migration or config change.
 - **A stray or duplicate queued-hierarchical resume job no longer runs the
   continuation early (#610).** A `ResumeQueuedHierarchicalSwarm` job that
   arrived while its run was not released to its join, such as a late duplicate

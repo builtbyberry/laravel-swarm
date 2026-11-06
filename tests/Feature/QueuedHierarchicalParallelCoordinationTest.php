@@ -7,13 +7,16 @@ use BuiltByBerry\LaravelSwarm\Contracts\ClaimsQueuedRunExecution;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
 use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
+use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableBranch;
+use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceNativeAgentSettingsDurableBranch;
 use BuiltByBerry\LaravelSwarm\Jobs\InvokeNativeAgentSettingsSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\InvokeSwarm;
@@ -33,6 +36,8 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Persistence\LeaseLosingDurableRunStore;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\RecordingSwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalFullSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalParallelFailBranchSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Tools\NativeSettingsTool;
@@ -793,4 +798,362 @@ test('swarm recover re-dispatches a queued-hierarchical resume stranded in runni
     $history = DB::table('swarm_run_histories')->where('run_id', $runId)->first();
     expect($history->status)->toBe('running');
     expect((int) DB::table('swarm_durable_runs')->where('run_id', $runId)->value('recovery_count'))->toBeGreaterThanOrEqual(1);
+});
+
+/*
+ * A queued-hierarchical join applies the durable parallel failure policy exactly as
+ * the step-durable join does (#612): DurableHierarchicalCoordinator::branchJoinShouldFail()
+ * decides, and DurableRunTerminalHandler::failCurrentRunFromBranchFailures() writes the
+ * failure, so both profiles leave the same record and events.
+ */
+
+/**
+ * Two branches — FakeWriter and FailingPromptAgent — joined into a finish node. The
+ * all-failed case finishes on a literal output, so without the policy the run would
+ * complete rather than fail on a missing branch output; the mixed cases finish on the
+ * writer's output.
+ *
+ * @return array<string, mixed>
+ */
+function qhfpPlan(bool $literalFinish = false): array
+{
+    return [
+        'start_at' => 'parallel_node',
+        'nodes' => [
+            'parallel_node' => [
+                'type' => 'parallel',
+                'branches' => ['writer_node', 'failing_node'],
+                'next' => 'finish_node',
+            ],
+            'writer_node' => ['type' => 'worker', 'agent' => FakeWriter::class, 'prompt' => 'writer-branch'],
+            'failing_node' => ['type' => 'worker', 'agent' => FailingPromptAgent::class, 'prompt' => 'failing-branch'],
+            'finish_node' => $literalFinish
+                ? ['type' => 'finish', 'output' => 'literal-final']
+                : ['type' => 'finish', 'output_from' => 'writer_node'],
+        ],
+    ];
+}
+
+function qhfpWriterFails(): void
+{
+    FakeWriter::fake(function (): string {
+        throw new RuntimeException('Writer branch failed.');
+    });
+}
+
+/** Start a queued multi_worker run and leave it waiting at its join. */
+function qhfpStartQueued(string $runId): void
+{
+    (new InvokeSwarm(FakeHierarchicalParallelFailBranchSwarm::class, RunContext::from('queued-hierarchical-task', $runId)->toQueuePayload()))->handle(app(SwarmRunner::class));
+}
+
+/** Start a step-durable run of the same swarm and drive it to its parallel join. */
+function qhfpStartStepDurable(): string
+{
+    $runId = FakeHierarchicalParallelFailBranchSwarm::make()->dispatchDurable('durable-hierarchical-task')->runId;
+    $manager = app(DurableSwarmManager::class);
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+    (new AdvanceDurableSwarm($runId, 1))->handle($manager);
+
+    expect($manager->find($runId)['status'])->toBe('waiting');
+
+    return $runId;
+}
+
+/** Advance one branch of the run, chosen by agent class. */
+function qhfpAdvanceBranch(string $runId, string $agentClass): void
+{
+    $branch = DB::table('swarm_durable_branches')->where('run_id', $runId)->where('agent_class', $agentClass)->first();
+    expect($branch)->not->toBeNull();
+
+    (new AdvanceDurableBranch($runId, (string) $branch->branch_id))->handle(app(DurableSwarmManager::class));
+}
+
+function qhfpResume(string $runId): void
+{
+    (new ResumeQueuedHierarchicalSwarm($runId))->handle(app(QueuedHierarchicalCoordinator::class));
+}
+
+/** Run the step-durable join (and anything after it) until the run leaves `pending`. */
+function qhfpDriveStepDurableJoin(string $runId): void
+{
+    $manager = app(DurableSwarmManager::class);
+
+    for ($guard = 0; $guard < 5 && $manager->find($runId)['status'] === 'pending'; $guard++) {
+        (new AdvanceDurableSwarm($runId, (int) $manager->find($runId)['next_step_index']))->handle($manager);
+    }
+}
+
+/** The message the terminal path builds from the run's own failed branches. */
+function qhfpExpectedFailureMessage(string $runId): string
+{
+    $failed = array_values(array_filter(
+        app(DurableRunStore::class)->branchesFor($runId, 'parallel_node'),
+        static fn (array $branch): bool => $branch['status'] === 'failed',
+    ));
+
+    return 'Durable parallel branches failed: '.implode(', ', array_map(static fn (array $branch): string => (string) $branch['branch_id'], $failed));
+}
+
+/**
+ * The run's failure record with run-specific identifiers normalized away: what must be
+ * the same whichever profile ran the join.
+ *
+ * @return array<string, mixed>
+ */
+function qhfpFailureRecord(string $runId): array
+{
+    $history = app(RunHistoryStore::class)->find($runId);
+    $durable = app(DurableSwarmManager::class)->find($runId);
+    $context = RunContext::fromPayload((array) app(ContextStore::class)->find($runId));
+    $message = qhfpExpectedFailureMessage($runId);
+
+    $branches = [];
+    foreach ((array) ($context->metadata['durable_parallel_branches'] ?? []) as $branch) {
+        $failure = is_array($branch['failure'] ?? null) ? $branch['failure'] : [];
+        $branches[(string) $branch['node_id']] = [
+            'agent_class' => $branch['agent_class'],
+            'status' => $branch['status'],
+            'failure_class' => $failure['class'] ?? null,
+            'failure_message' => $failure['message'] ?? null,
+        ];
+    }
+    ksort($branches);
+
+    return [
+        'history_status' => $history['status'],
+        'history_error_class' => $history['error']['class'] ?? null,
+        'history_error_matches' => ($history['error']['message'] ?? null) === $message,
+        'durable_status' => $durable['status'],
+        'durable_failure_class' => $durable['failure']['class'] ?? null,
+        'durable_failure_matches' => ($durable['failure']['message'] ?? null) === $message,
+        'branches' => $branches,
+    ];
+}
+
+test('queued hierarchical partial_success with every branch failed fails the run (#612)', function () {
+    Event::fake([SwarmFailed::class, SwarmCompleted::class]);
+    config()->set('swarm.durable.parallel.failure_policy', 'partial_success');
+    FakeHierarchicalCoordinator::fake([qhfpPlan(literalFinish: true)]);
+    qhfpWriterFails();
+
+    $runId = 'qhfp-partial-all-failed';
+    qhfpStartQueued($runId);
+    qhfpAdvanceBranch($runId, FailingPromptAgent::class);
+
+    // One branch failed, its sibling has not run: partial_success still waits for it.
+    expect(app(DurableSwarmManager::class)->find($runId)['status'])->toBe('waiting')
+        ->and(app(RunHistoryStore::class)->find($runId)['status'])->toBe('waiting');
+
+    qhfpAdvanceBranch($runId, FakeWriter::class);
+    qhfpResume($runId);
+
+    $message = qhfpExpectedFailureMessage($runId);
+    $record = qhfpFailureRecord($runId);
+
+    expect($record['history_status'])->toBe('failed')
+        ->and($record['durable_status'])->toBe('failed')
+        ->and($record['history_error_matches'])->toBeTrue()
+        ->and($record['durable_failure_matches'])->toBeTrue()
+        ->and(array_column($record['branches'], 'status'))->toBe(['failed', 'failed']);
+
+    Event::assertDispatchedTimes(SwarmFailed::class, 1);
+    Event::assertDispatched(SwarmFailed::class, fn (SwarmFailed $event): bool => $event->runId === $runId
+        && $event->executionMode === 'queue'
+        && $event->exceptionClass === SwarmException::class
+        && $event->exception->getMessage() === $message);
+    Event::assertNotDispatched(SwarmCompleted::class);
+
+    // A redelivered resume finds the run finished and does nothing.
+    qhfpResume($runId);
+    Event::assertDispatchedTimes(SwarmFailed::class, 1);
+});
+
+test('queued hierarchical collect_failures fails the run exactly as the step-durable join does (#612)', function () {
+    Event::fake([SwarmFailed::class, SwarmCompleted::class]);
+    $sink = new RecordingSwarmAuditSink;
+    app()->instance(SwarmAuditSink::class, $sink);
+    config()->set('swarm.durable.parallel.failure_policy', 'collect_failures');
+    FakeHierarchicalCoordinator::fake([qhfpPlan(), qhfpPlan()]);
+    FakeWriter::fake(['writer-out', 'writer-out']);
+
+    $queuedRunId = 'qhfp-collect-queued';
+    qhfpStartQueued($queuedRunId);
+    qhfpAdvanceBranch($queuedRunId, FailingPromptAgent::class);
+
+    // The failed branch does not fail the parent while its sibling is unfinished.
+    expect(app(DurableSwarmManager::class)->find($queuedRunId)['status'])->toBe('waiting')
+        ->and(app(RunHistoryStore::class)->find($queuedRunId)['status'])->toBe('waiting');
+
+    qhfpAdvanceBranch($queuedRunId, FakeWriter::class);
+    qhfpResume($queuedRunId);
+
+    $durableRunId = qhfpStartStepDurable();
+    qhfpAdvanceBranch($durableRunId, FailingPromptAgent::class);
+    expect(app(DurableSwarmManager::class)->find($durableRunId)['status'])->toBe('waiting');
+    qhfpAdvanceBranch($durableRunId, FakeWriter::class);
+    qhfpDriveStepDurableJoin($durableRunId);
+
+    $queued = qhfpFailureRecord($queuedRunId);
+    $durable = qhfpFailureRecord($durableRunId);
+
+    // Both fail — checked on its own, so a policy that completes both cannot pass as parity.
+    expect($queued['history_status'])->toBe('failed')
+        ->and($queued['durable_status'])->toBe('failed')
+        ->and($queued['history_error_matches'])->toBeTrue()
+        ->and($queued['durable_failure_matches'])->toBeTrue()
+        ->and($queued['history_error_class'])->toBe(SwarmException::class)
+        ->and($queued['branches'])->toBe([
+            'failing_node' => ['agent_class' => FailingPromptAgent::class, 'status' => 'failed', 'failure_class' => RuntimeException::class, 'failure_message' => 'Queued swarm failed.'],
+            'writer_node' => ['agent_class' => FakeWriter::class, 'status' => 'completed', 'failure_class' => null, 'failure_message' => null],
+        ])
+        ->and($durable['history_status'])->toBe('failed');
+
+    // …and the queued-hierarchical record is the step-durable one.
+    expect($queued)->toBe($durable);
+
+    foreach ([$queuedRunId => 'queue', $durableRunId => 'durable'] as $runId => $mode) {
+        $message = qhfpExpectedFailureMessage($runId);
+        expect(Event::dispatched(SwarmFailed::class, fn (SwarmFailed $event): bool => $event->runId === $runId))->toHaveCount(1);
+        Event::assertDispatched(SwarmFailed::class, fn (SwarmFailed $event): bool => $event->runId === $runId
+            && $event->executionMode === $mode
+            && $event->exceptionClass === SwarmException::class
+            && $event->exception->getMessage() === $message
+            && array_column((array) ($event->metadata['durable_parallel_branches'] ?? []), 'status', 'node_id') === ['writer_node' => 'completed', 'failing_node' => 'failed']);
+        Event::assertNotDispatched(SwarmCompleted::class, fn (SwarmCompleted $event): bool => $event->runId === $runId);
+        expect(collect($sink->recordsForCategory('durable.failed'))->where('run_id', $runId)->count())->toBe(1);
+    }
+
+    // No further work runs: the finish node never resolves, and FakeWriter ran once per run.
+    FakeWriter::assertPrompted('writer-branch');
+    expect(app(RunHistoryStore::class)->find($queuedRunId)['output'] ?? null)->toBeNull();
+});
+
+test('queued hierarchical partial_success with a completed branch continues with its output, as step-durable does (#612)', function () {
+    Event::fake([SwarmFailed::class, SwarmCompleted::class]);
+    config()->set('swarm.durable.parallel.failure_policy', 'partial_success');
+    FakeHierarchicalCoordinator::fake([qhfpPlan(), qhfpPlan()]);
+    FakeWriter::fake(['writer-out', 'writer-out']);
+
+    $queuedRunId = 'qhfp-partial-mixed';
+    qhfpStartQueued($queuedRunId);
+    qhfpAdvanceBranch($queuedRunId, FailingPromptAgent::class);
+    qhfpAdvanceBranch($queuedRunId, FakeWriter::class);
+    qhfpResume($queuedRunId);
+
+    $durableRunId = qhfpStartStepDurable();
+    qhfpAdvanceBranch($durableRunId, FailingPromptAgent::class);
+    qhfpAdvanceBranch($durableRunId, FakeWriter::class);
+    qhfpDriveStepDurableJoin($durableRunId);
+
+    foreach ([$queuedRunId, $durableRunId] as $runId) {
+        $history = app(RunHistoryStore::class)->find($runId);
+
+        expect($history['status'])->toBe('completed')
+            ->and($history['output'])->toBe('writer-out');
+    }
+
+    expect(app(RunHistoryStore::class)->find($queuedRunId)['metadata']['executed_agent_classes'])->toBe([FakeWriter::class]);
+    Event::assertNotDispatched(SwarmFailed::class);
+});
+
+test('queued hierarchical fail_run still fails the run from the branch worker, and a later resume changes nothing (#612)', function () {
+    Event::fake([SwarmFailed::class, SwarmCompleted::class]);
+    config()->set('swarm.durable.parallel.failure_policy', 'fail_run');
+    FakeHierarchicalCoordinator::fake([qhfpPlan()]);
+    FakeWriter::fake(['writer-out']);
+
+    $runId = 'qhfp-fail-run';
+    qhfpStartQueued($runId);
+    qhfpAdvanceBranch($runId, FailingPromptAgent::class);
+
+    // Failed by the branch worker at once, with the sibling still unrun.
+    $record = qhfpFailureRecord($runId);
+    expect($record['history_status'])->toBe('failed')
+        ->and($record['durable_status'])->toBe('failed')
+        ->and($record['history_error_matches'])->toBeTrue()
+        ->and($record['branches']['failing_node']['status'])->toBe('failed')
+        ->and($record['branches']['writer_node']['status'])->toBe('pending');
+    Event::assertDispatchedTimes(SwarmFailed::class, 1);
+
+    qhfpResume($runId);
+
+    expect(qhfpFailureRecord($runId))->toBe($record);
+    Event::assertDispatchedTimes(SwarmFailed::class, 1);
+    Event::assertNotDispatched(SwarmCompleted::class);
+});
+
+test('a queued hierarchical join that must fail but cannot take the durable lease runs nothing; recovery then fails it once (#612)', function () {
+    Event::fake([SwarmFailed::class, SwarmCompleted::class]);
+    config()->set('swarm.durable.parallel.failure_policy', 'collect_failures');
+    FakeHierarchicalCoordinator::fake([qhfpPlan()]);
+    FakeWriter::fake(['writer-out']);
+
+    $runId = 'qhfp-lease-held';
+    qhfpStartQueued($runId);
+    qhfpAdvanceBranch($runId, FailingPromptAgent::class);
+    qhfpAdvanceBranch($runId, FakeWriter::class);
+
+    // The join is released; another holder has the durable lease, and the row stays pending.
+    DB::table('swarm_durable_runs')->where('run_id', $runId)->update([
+        'execution_token' => 'competing-holder',
+        'leased_until' => now('UTC')->addMinutes(5),
+    ]);
+    expect(app(DurableSwarmManager::class)->find($runId)['status'])->toBe('pending');
+
+    expect(app(SwarmRunner::class)->resumeQueuedHierarchicalAfterJoin($runId))->toBeNull();
+
+    // It took the history continuation lease, then ran no continuation and settled nothing.
+    $history = DB::table('swarm_run_histories')->where('run_id', $runId)->first();
+    expect($history->status)->toBe('running')
+        ->and($history->execution_token)->not->toBeNull()
+        ->and(app(DurableSwarmManager::class)->find($runId)['status'])->toBe('pending')
+        ->and(DB::table('swarm_durable_runs')->where('run_id', $runId)->value('execution_token'))->toBe('competing-holder');
+    Event::assertNotDispatched(SwarmFailed::class);
+    Event::assertNotDispatched(SwarmCompleted::class);
+
+    // Both leases lapse; swarm:recover re-dispatches the stranded resume, which fails the run once.
+    expireContinuationLease($runId);
+    DB::table('swarm_durable_runs')->where('run_id', $runId)->update(['leased_until' => now('UTC')->subMinutes(10)]);
+
+    Bus::fake([ResumeQueuedHierarchicalSwarm::class]);
+    Artisan::call('swarm:recover');
+    Bus::assertDispatched(ResumeQueuedHierarchicalSwarm::class, fn (ResumeQueuedHierarchicalSwarm $job): bool => $job->runId === $runId);
+
+    qhfpResume($runId);
+
+    $record = qhfpFailureRecord($runId);
+    expect($record['history_status'])->toBe('failed')
+        ->and($record['durable_status'])->toBe('failed')
+        ->and($record['history_error_matches'])->toBeTrue();
+    Event::assertDispatchedTimes(SwarmFailed::class, 1);
+    Event::assertNotDispatched(SwarmCompleted::class);
+});
+
+test('a queued hierarchical join that must fail but loses its durable lease mid-write returns normally and runs nothing (#612)', function () {
+    Event::fake([SwarmFailed::class, SwarmCompleted::class]);
+    config()->set('swarm.durable.parallel.failure_policy', 'collect_failures');
+    FakeHierarchicalCoordinator::fake([qhfpPlan()]);
+    FakeWriter::fake(['writer-out']);
+
+    $runId = 'qhfp-lease-lost';
+    qhfpStartQueued($runId);
+    qhfpAdvanceBranch($runId, FailingPromptAgent::class);
+    qhfpAdvanceBranch($runId, FakeWriter::class);
+
+    $store = app(LeaseLosingDurableRunStore::class);
+    $store->loseLeaseOnFailFor = $runId;
+    app()->instance(DurableRunStore::class, $store);
+    app()->forgetInstance(DurableSwarmManager::class);
+    app()->forgetInstance(SwarmRunner::class);
+
+    expect(app(SwarmRunner::class)->resumeQueuedHierarchicalAfterJoin($runId))->toBeNull();
+
+    // Nothing was settled: the failure write rolled back, and no continuation ran.
+    expect(app(DurableSwarmManager::class)->find($runId)['status'])->toBe('pending')
+        ->and(DB::table('swarm_run_histories')->where('run_id', $runId)->value('status'))->toBe('running')
+        ->and(app(RunHistoryStore::class)->find($runId)['output'] ?? null)->toBeNull();
+    Event::assertNotDispatched(SwarmFailed::class);
+    Event::assertNotDispatched(SwarmCompleted::class);
+    FakeWriter::assertPrompted('writer-branch');
 });
