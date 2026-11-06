@@ -149,8 +149,9 @@ test('swarm health parallel streaming option exercises the real provider-free pr
     config()->set('concurrency.default', 'process');
 
     $status = Artisan::call('swarm:health', ['--parallel-streaming' => true]);
-    expect($status)->toBe(0, Artisan::output());
-    expect(Artisan::output())
+    $output = Artisan::output();
+    expect($status)->toBe(0, $output);
+    expect($output)
         ->toContain('Parallel live streaming')
         ->toContain('provider-free child bootstrap and authenticated loopback handshake passed');
 });
