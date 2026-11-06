@@ -160,6 +160,17 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
 
 ### Fixed
 
+- **Parallel stream process results on newer Laravel releases (#625).** Live
+  parallel streams and `swarm:health --parallel-streaming` now support Laravel's
+  signed concurrency result envelopes. Each child receives a separate signing
+  key, and framed results require a valid HMAC before the class-free terminal
+  marker is read. Older supported Laravel versions keep their plain-JSON path;
+  signed mode never downgrades to it. Malformed results and child-reported
+  exceptions fail with redacted diagnostics. This preserves the upstream
+  authentication fix rather than pinning Laravel back or trusting unsigned
+  stdout. No migration or configuration change. Re-run the health probe after
+  updating Laravel.
+
 - **A queued-hierarchical join now applies the durable parallel failure policy
   (#612).** When a `queue()` `multi_worker` hierarchical run reached its join, it
   carried on with whichever branches completed and ignored the ones that failed,

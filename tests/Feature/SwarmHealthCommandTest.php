@@ -148,7 +148,8 @@ test('swarm health durable option verifies durable database readiness', function
 test('swarm health parallel streaming option exercises the real provider-free process transport', function (): void {
     config()->set('concurrency.default', 'process');
 
-    expect(Artisan::call('swarm:health', ['--parallel-streaming' => true]))->toBe(0);
+    $status = Artisan::call('swarm:health', ['--parallel-streaming' => true]);
+    expect($status)->toBe(0, Artisan::output());
     expect(Artisan::output())
         ->toContain('Parallel live streaming')
         ->toContain('provider-free child bootstrap and authenticated loopback handshake passed');

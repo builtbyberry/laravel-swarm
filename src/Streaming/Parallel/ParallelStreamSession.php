@@ -35,6 +35,7 @@ final class ParallelStreamSession
      * @param  resource  $server
      * @param  array<string, InvokedProcess|FakeInvokedProcess>  $processes
      * @param  list<string>  $branchIds
+     * @param  array<string, string>|null  $resultKeys  Null selects the legacy JSON form; a map requires signed results for every process.
      */
     public function __construct(
         private $server,
@@ -44,6 +45,7 @@ final class ParallelStreamSession
         private int $maxFrameBytes,
         private float $deadline,
         private int $cancelGraceMilliseconds,
+        private ?array $resultKeys = null,
     ) {
         $this->handshakes = new ParallelStreamHandshakeRegistry($token, $branchIds);
     }
@@ -286,21 +288,49 @@ final class ParallelStreamSession
     private function validateProcesses(): void
     {
         foreach ($this->processes as $branchId => $process) {
+            if ($this->resultKeys !== null && (! is_string($this->resultKeys[$branchId] ?? null) || $this->resultKeys[$branchId] === '')) {
+                throw new SwarmException("Parallel stream branch [{$branchId}] returned an invalid process result envelope.");
+            }
+
             $result = $process->wait();
             if ($result->failed()) {
                 throw new SwarmException("Parallel stream branch [{$branchId}] process failed with exit code [{$result->exitCode()}]; {$this->diagnostic($result)}.");
             }
 
             // Process stdout must never be allowed to construct an object here.
-            $envelope = json_decode($result->output(), true);
-            $value = is_array($envelope) && ($envelope['successful'] ?? null) === true
-                ? unserialize((string) ($envelope['result'] ?? ''), ['allowed_classes' => false])
-                : null;
+            $envelope = ParallelProcessResultEnvelope::decode($result->output(), $this->resultKeys[$branchId] ?? null);
+            $value = null;
+            if (($envelope['successful'] ?? null) === true && is_string($envelope['result'] ?? null)) {
+                try {
+                    $value = $this->unserializeProcessResult($envelope['result']);
+                } catch (\Throwable) {
+                    // Preserve the redacted failure below, including on malformed data.
+                }
+            }
             if (! is_array($value)
                 || ($value['branch_id'] ?? null) !== $branchId
                 || ($value['terminal_sent'] ?? null) !== true) {
                 throw new SwarmException("Parallel stream branch [{$branchId}] returned an invalid process result envelope.");
             }
+        }
+    }
+
+    /**
+     * Convert malformed serialization warnings into a scoped exception, restoring
+     * the caller's handler before returning or propagating an error.
+     *
+     * @throws \UnexpectedValueException
+     */
+    private function unserializeProcessResult(string $serialized): mixed
+    {
+        set_error_handler(static function (): never {
+            throw new \UnexpectedValueException('Invalid serialized process result.');
+        });
+
+        try {
+            return unserialize($serialized, ['allowed_classes' => false]);
+        } finally {
+            restore_error_handler();
         }
     }
 
