@@ -2049,8 +2049,11 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
             // release leaves those fields in place until markRunning starts the
             // next durable step. Decide from the locked row, never a branch read
             // that could come from an application transaction's older snapshot.
+            // A newly leased initial step also has a node and no current step;
+            // its next index is still zero, before any branch join can release.
             if (($run->status ?? null) === 'pending'
                 && $run->current_step_index === null
+                && (int) $run->next_step_index > 0
                 && $run->current_node_id !== null) {
                 throw new SwarmException("Cannot create wait [{$name}] for durable run [{$runId}]: its branch join has already been released.");
             }
@@ -2713,7 +2716,7 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
         /** @var object|null $run */
         $run = ($this->connection->getDriverName() === 'pgsql'
             ? $runQuery->lock('for no key update')
-            : $runQuery->lockForUpdate())->first(['status', 'current_node_id', 'current_step_index', 'wait_generation']);
+            : $runQuery->lockForUpdate())->first(['status', 'current_node_id', 'current_step_index', 'next_step_index', 'wait_generation']);
 
         return $run;
     }

@@ -385,3 +385,11 @@ test('failed wait persistence rolls back its creation generation (#614 review)',
     expect((string) DB::table('swarm_durable_runs')->where('run_id', $runId)->value('wait_generation'))->toBe('0')
         ->and(app(DurableRunStore::class)->waits($runId))->toBe([]);
 });
+
+test('a leased first pending step can still register its wait before running (#614 review)', function (): void {
+    $runId = FakeParallelSwarm::make()->dispatchDurable('first-step')->runId;
+    $store = app(DurableRunStore::class);
+    expect($store->acquireLease($runId, 0, 300))->not->toBeNull();
+    app(DurableSwarmManager::class)->wait($runId, 'first-approval');
+    expect($store->waits($runId)[0]['name'])->toBe('first-approval');
+});
