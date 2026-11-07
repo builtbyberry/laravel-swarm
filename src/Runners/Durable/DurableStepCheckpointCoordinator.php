@@ -172,7 +172,7 @@ class DurableStepCheckpointCoordinator
             if ($isBranchWait) {
                 // Already entered atomically with fan-out. Re-entering here could
                 // select a second wait or duplicate a child from the older context.
-                $this->runBoundaryEffects($boundaryEffects);
+                $this->runBoundaryEffects($runId, $boundaryEffects);
             } else {
                 // Ordinary checkpoints retain the independent boundary transaction:
                 // a later notification failure must leave its intent recoverable.
@@ -186,7 +186,7 @@ class DurableStepCheckpointCoordinator
     /**
      * @param  list<Closure(): void>  $effects
      */
-    protected function runBoundaryEffects(array $effects): void
+    protected function runBoundaryEffects(string $runId, array $effects): void
     {
         $run = static function () use ($effects): void {
             foreach ($effects as $effect) {
@@ -203,11 +203,11 @@ class DurableStepCheckpointCoordinator
         // Attach only to this connection's outermost commit. A callback must not
         // throw through an application's commit and discard its later callbacks.
         // Untracked transactions leave persisted child intents for recovery.
-        $this->runAfterOutermostCommit(function () use ($run): void {
+        $this->runAfterOutermostCommit(function () use ($run, $runId): void {
             try {
                 $run();
             } catch (Throwable $exception) {
-                $this->safeReport(new RuntimeException('Durable boundary notification or child dispatch failed after commit; persisted intents remain recoverable.', previous: $exception));
+                $this->safeReport(new RuntimeException("Durable boundary notification or child dispatch for run [{$runId}] failed after commit; swarm:recover retries persisted intents.", previous: $exception));
             }
         });
     }
