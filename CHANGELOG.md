@@ -172,7 +172,7 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   attempts; application-owned outer transactions must retry as a whole. No new
   schema, configuration or retention data. Deterministic SQLite and real-process
   PostgreSQL/MySQL regressions cover both race orders and declared boundaries.
-  See [durable waits](docs/durable-waits-and-signals.md#creating-a-wait-from-application-code)
+  See [durable waits](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-waits-and-signals.md#creating-a-wait-from-application-code)
   and [upgrade guidance](UPGRADING.md#wait-creation-at-branch-joins).
 
 - **Parallel stream process results on newer Laravel releases (#625).** Live

@@ -9,7 +9,7 @@ now throws `SwarmException`, with no new wait persisted. Register obligations
 before join release. Queued hierarchical continuations retain the released
 `pending` coordination state, so the same rejection applies there. Framework
 declared waits and child intents at durable hierarchical fan-out are persisted
-atomically with that fan-out. See [wait creation and transaction retries](docs/durable-waits-and-signals.md#creating-a-wait-from-application-code).
+atomically with that fan-out. See [wait creation and transaction retries](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-waits-and-signals.md#creating-a-wait-from-application-code).
 
 ### Durable branch fan-out cap (`swarm.durable.parallel.max_concurrent_branches`)
 
