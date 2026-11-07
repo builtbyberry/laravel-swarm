@@ -154,6 +154,16 @@ actual provider-free child bootstrap and authenticated loopback handshake. Once
 the feature flag is enabled, bare `swarm:health` includes the same check and
 exits nonzero when the process transport is unavailable.
 
+The process transport follows the installed Laravel command's result protocol.
+On Laravel versions that sign concurrency results, each child receives its own
+random signing key through its launch environment, and Swarm verifies the
+result frame before reading the serialized terminal marker. A missing key or
+invalid signature fails the stream; it never falls back to unsigned JSON.
+Older supported Laravel versions retain their plain-JSON result format. In both
+paths, child stdout cannot instantiate application classes, and process failures withhold
+raw diagnostics. After updating Laravel, run this health probe and your parallel
+stream smoke tests again.
+
 `max_branches` is a per-stream branch-process admission limit, not a raw
 file-descriptor or application-wide ceiling. Each branch owns process pipes and
 a loopback socket. Budget aggregate capacity as concurrent live streams times
