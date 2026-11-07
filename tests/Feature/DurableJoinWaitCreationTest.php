@@ -341,3 +341,47 @@ test('wait notifications follow the committed fanout and its dispatch records (#
     (new AdvanceDurableSwarm($runId, 1))->handle($manager);
     expect($observed)->toBe([['level' => 0, 'branches' => 2]]);
 })->with([JoinBoundaryWaitSwarm::class, JoinBoundaryChildSwarm::class]);
+
+test('wait generations increment once despite retry and roll back with the wait (#614 review)', function (): void {
+    $runId = FakeSequentialSwarm::make()->dispatchDurable('task')->runId;
+    $store = app(DurableRunStore::class);
+    $notTriggered = joinCreationInjectDeadlock('swarm_durable_waits');
+    $store->createWait($runId, 'committed');
+    expect($notTriggered())->toBeFalse()
+        ->and((string) DB::table('swarm_durable_runs')->where('run_id', $runId)->value('wait_generation'))->toBe('1');
+    expect(fn () => DB::connection()->transaction(function () use ($store, $runId): void {
+        $store->createWait($runId, 'rolled-back');
+        throw new RuntimeException('rollback wait');
+    }))->toThrow(RuntimeException::class, 'rollback wait');
+    expect((string) DB::table('swarm_durable_runs')->where('run_id', $runId)->value('wait_generation'))->toBe('1')
+        ->and($store->waits($runId))->toHaveCount(1);
+});
+
+test('wait generation exhaustion fails closed without floating point promotion (#614 review)', function (): void {
+    $runId = FakeSequentialSwarm::make()->dispatchDurable('task')->runId;
+    DB::table('swarm_durable_runs')->where('run_id', $runId)->update(['wait_generation' => '9223372036854775807']);
+    expect(fn () => app(DurableRunStore::class)->createWait($runId, 'overflow'))->toThrow(SwarmException::class, 'generation');
+    expect((string) DB::table('swarm_durable_runs')->where('run_id', $runId)->value('wait_generation'))->toBe('9223372036854775807')
+        ->and(app(DurableRunStore::class)->waits($runId))->toBe([]);
+});
+
+test('wait generation migration preserves populated legacy runs and waits (#614 review)', function (): void {
+    $runId = FakeSequentialSwarm::make()->dispatchDurable('legacy')->runId;
+    app(DurableRunStore::class)->createWait($runId, 'legacy-wait');
+    $migration = require dirname(__DIR__, 2).'/database/migrations/2026_11_07_000001_add_wait_generation_to_swarm_durable_runs.php';
+    $migration->down();
+    expect(DB::getSchemaBuilder()->hasColumn('swarm_durable_runs', 'wait_generation'))->toBeFalse();
+    expect(fn () => app(DurableRunStore::class)->assertReady())->toThrow(SwarmException::class, 'php artisan migrate');
+    $migration->up();
+    expect((string) DB::table('swarm_durable_runs')->where('run_id', $runId)->value('wait_generation'))->toBe('0')
+        ->and(app(DurableRunStore::class)->waits($runId)[0]['name'])->toBe('legacy-wait');
+    app(DurableRunStore::class)->createWait($runId, 'after-upgrade');
+    expect((string) DB::table('swarm_durable_runs')->where('run_id', $runId)->value('wait_generation'))->toBe('1');
+});
+
+test('failed wait persistence rolls back its creation generation (#614 review)', function (): void {
+    $runId = FakeSequentialSwarm::make()->dispatchDurable('task')->runId;
+    expect(fn () => app(DurableRunStore::class)->createWait($runId, 'invalid-metadata', metadata: ['not-json' => NAN]))->toThrow(JsonException::class);
+    expect((string) DB::table('swarm_durable_runs')->where('run_id', $runId)->value('wait_generation'))->toBe('0')
+        ->and(app(DurableRunStore::class)->waits($runId))->toBe([]);
+});
