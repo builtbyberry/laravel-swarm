@@ -239,8 +239,9 @@ class DurableSignalHandler
 
     /**
      * @param  array<string, mixed>  $metadata
+     * @param  (Closure(Closure(): void): void)|null  $deferEffects  Collect effects for later execution; null invokes them here.
      */
-    public function wait(string $runId, string $name, ?string $reason = null, ?int $timeoutSeconds = null, array $metadata = []): void
+    public function wait(string $runId, string $name, ?string $reason = null, ?int $timeoutSeconds = null, array $metadata = [], ?Closure $deferEffects = null): void
     {
         $run = $this->runs->requireRun($runId);
         $metadata = $this->payloads->payload($metadata);
@@ -249,24 +250,33 @@ class DurableSignalHandler
         $context = $this->runs->loadContext($runId);
         $this->historyStore->syncDurableState($runId, 'waiting', $this->capture->context($context), $context->metadata, $this->runs->ttlSeconds(), false);
 
-        $this->events->dispatch(new SwarmWaiting(
-            runId: $runId,
-            swarmClass: $run['swarm_class'],
-            topology: $run['topology'],
-            waitName: $name,
-            reason: $reason,
-            metadata: $this->payloads->eventMetadata($context),
-            executionMode: $this->runs->publicLifecycleExecutionMode($run),
-        ));
-        $this->audit->emit('wait.created', [
-            'run_id' => $runId,
-            'swarm_class' => $run['swarm_class'],
-            'topology' => $run['topology'],
-            'execution_mode' => $this->runs->publicLifecycleExecutionMode($run),
-            'wait_name' => $name,
-            'reason' => $reason,
-            'timeout_seconds' => $timeoutSeconds,
-            'status' => 'waiting',
-        ]);
+        $eventMetadata = $this->payloads->eventMetadata($context);
+        $notify = function () use ($runId, $run, $name, $reason, $timeoutSeconds, $eventMetadata): void {
+            $this->events->dispatch(new SwarmWaiting(
+                runId: $runId,
+                swarmClass: $run['swarm_class'],
+                topology: $run['topology'],
+                waitName: $name,
+                reason: $reason,
+                metadata: $eventMetadata,
+                executionMode: $this->runs->publicLifecycleExecutionMode($run),
+            ));
+            $this->audit->emit('wait.created', [
+                'run_id' => $runId,
+                'swarm_class' => $run['swarm_class'],
+                'topology' => $run['topology'],
+                'execution_mode' => $this->runs->publicLifecycleExecutionMode($run),
+                'wait_name' => $name,
+                'reason' => $reason,
+                'timeout_seconds' => $timeoutSeconds,
+                'status' => 'waiting',
+            ]);
+        };
+
+        if ($deferEffects !== null) {
+            $deferEffects($notify);
+        } else {
+            $notify();
+        }
     }
 }

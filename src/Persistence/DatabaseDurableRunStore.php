@@ -91,7 +91,7 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
         $failure = $payload['failure'] ?? null;
         $retryPolicy = $payload['retry_policy'] ?? null;
 
-        unset($payload['route_plan'], $payload['node_states'], $payload['failure'], $payload['retry_policy']);
+        unset($payload['route_plan'], $payload['node_states'], $payload['failure'], $payload['retry_policy'], $payload['wait_generation']);
 
         $this->table()->insert(array_merge($payload, [
             'created_at' => $timestamp,
@@ -238,6 +238,7 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
             'wait_reason',
             'waiting_since',
             'wait_timeout_at',
+            'wait_generation',
             'last_progress_at',
             'retry_attempt',
             'next_retry_at',
@@ -250,7 +251,7 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
         ];
 
         if (! $schema->hasColumns($table, $requiredColumns)) {
-            throw new SwarmException("Database-backed durable swarms require runtime columns on [{$table}] for lease ownership and recovery.");
+            throw new SwarmException("Database-backed durable swarms require runtime columns on [{$table}] for lease ownership and recovery. Run php artisan migrate before starting workers.");
         }
 
         $nodeStatesTable = (string) $this->config->get('swarm.tables.durable_node_states', 'swarm_durable_node_states');
@@ -518,6 +519,16 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
     public function releaseWaitingRunForJoin(string $runId, int $nextStepIndex): bool
     {
         return $this->connection->transaction(function () use ($runId, $nextStepIndex): bool {
+            // Observe before the wait scan. An older application snapshot can
+            // only make this conservative; the locked read below is current.
+            $generationQuery = $this->table()->where('run_id', $runId);
+            if ($this->connection->getDriverName() === 'sqlsrv') {
+                // Do not retain a shared run lock before taking the wait locks
+                // when an application uses a stricter SQL Server isolation level.
+                $generationQuery->lock('with (readcommitted)');
+            }
+            $observedGeneration = (string) $generationQuery->value('wait_generation');
+
             // An open wait (a signal wait, or a child swarm's child:<id> wait) holds the run
             // at its join: releasing it would run the join past an unsignalled wait. The wait
             // rows are read before the run row is written — the order every wait release
@@ -534,6 +545,16 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
                 ->all();
 
             if ($openWaitIds !== []) {
+                return false;
+            }
+
+            // A creator takes the run before incrementing and inserting. A changed
+            // epoch means the scan may have missed its uncommitted wait. Refuse
+            // without taking another wait lock: a closer may hold that wait and
+            // already be waiting for this run. A fresh attempt can release after
+            // waits close even when a legacy wait summary is stale.
+            $run = $this->lockRunRow($runId);
+            if ($run === null || (string) $run->wait_generation !== $observedGeneration) {
                 return false;
             }
 
@@ -2022,6 +2043,30 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
         $timeoutAt = $timeoutSeconds !== null ? $timestamp->copy()->addSeconds($timeoutSeconds) : null;
 
         $this->connection->transaction(function () use ($runId, $name, $reason, $timeoutAt, $metadata, $timestamp): void {
+            $run = $this->lockRunRow($runId);
+
+            // waitForBranches clears the step index and pins its parent node. A
+            // release leaves those fields in place until markRunning starts the
+            // next durable step. Decide from the locked row, never a branch read
+            // that could come from an application transaction's older snapshot.
+            // A newly leased initial step also has a node and no current step;
+            // its next index is still zero, before any branch join can release.
+            if (($run->status ?? null) === 'pending'
+                && $run->current_step_index === null
+                && (int) $run->next_step_index > 0
+                && $run->current_node_id !== null) {
+                throw new SwarmException("Cannot create wait [{$name}] for durable run [{$runId}]: its branch join has already been released.");
+            }
+
+            // Advance in SQL, under the run lock, before inserting. Rollback also
+            // rolls back the epoch. Bound it to signed BIGINT on every engine so
+            // SQLite cannot silently promote an overflowing integer to a float.
+            if ($this->table()->where('run_id', $runId)
+                ->where('wait_generation', '<', '9223372036854775807')
+                ->increment('wait_generation') !== 1) {
+                throw new SwarmException("Cannot create wait [{$name}] for durable run [{$runId}]: its wait creation generation could not advance.");
+            }
+
             $this->waitTable()->insert([
                 'run_id' => $runId,
                 'name' => $name,
@@ -2037,7 +2082,7 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
             ]);
 
             $this->syncRunWaitSummary($runId, $timestamp);
-        });
+        }, 3);
     }
 
     public function releaseWaitWithSignal(string $runId, string $name, int $signalId): bool
@@ -2652,7 +2697,7 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
     }
 
     /**
-     * Lock the run row and return its status and current node, or null when it is gone.
+     * Lock the run row and return its status, cursor and wait generation, or null when gone.
      * On Postgres the lock is FOR NO KEY UPDATE, the lock an UPDATE of the row takes
      * anyway, so other transactions' foreign-key checks against the run (a retry's outbox
      * insert, a signal row, a new wait) are not blocked by it; FOR UPDATE elsewhere. No
@@ -2671,15 +2716,15 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
         /** @var object|null $run */
         $run = ($this->connection->getDriverName() === 'pgsql'
             ? $runQuery->lock('for no key update')
-            : $runQuery->lockForUpdate())->first(['status', 'current_node_id']);
+            : $runQuery->lockForUpdate())->first(['status', 'current_node_id', 'current_step_index', 'next_step_index', 'wait_generation']);
 
         return $run;
     }
 
     protected function syncRunWaitSummary(string $runId, Carbon $timestamp): void
     {
-        // The run row is locked before anything else is read. Every caller has already
-        // written its wait row, so the order is wait row, then run row, as everywhere. A fan-out (waitForBranches) takes the run row as its
+        // Closers have written their wait row before locking the run; createWait
+        // already holds the run before inserting. A fan-out (waitForBranches) takes the run row as its
         // first statement and holds it until it commits, so this waits for one in flight.
         // No closer makes an ordinary read in its transaction before it holds the run row:
         // the timeout and child closers reach this point first, and a signal's acceptance
