@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Tests\ProcessConcurrency\Fixtures\ResumeOpenWait;
 
+use Closure;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
 
@@ -24,9 +25,42 @@ final class LockBarrier
         return (int) $row->id;
     }
 
-    public static function signal(string $dir, string $name, string $value = '1'): void
+    /**
+     * Publish a complete marker by renaming a closed file in the same directory.
+     * The optional observer runs before publication for deterministic fixture tests.
+     *
+     * @param  (Closure(string): void)|null  $beforePublish
+     */
+    public static function signal(string $dir, string $name, string $value = '1', ?Closure $beforePublish = null): void
     {
-        file_put_contents($dir.'/'.$name, $value);
+        $path = $dir.'/'.$name;
+        $temporary = $dir.'/.barrier-'.bin2hex(random_bytes(16)).'.tmp';
+        $stream = @fopen($temporary, 'x');
+        if ($stream === false) {
+            throw new RuntimeException("Could not create barrier [{$path}].");
+        }
+
+        try {
+            try {
+                if (@fwrite($stream, $value) !== strlen($value)) {
+                    throw new RuntimeException("Could not write barrier [{$path}].");
+                }
+            } finally {
+                fclose($stream);
+            }
+
+            if ($beforePublish !== null) {
+                $beforePublish($temporary);
+            }
+
+            if (! @rename($temporary, $path)) {
+                throw new RuntimeException("Could not publish barrier [{$path}].");
+            }
+        } finally {
+            if (is_file($temporary)) {
+                @unlink($temporary);
+            }
+        }
     }
 
     public static function await(string $dir, string $name, float $timeoutSeconds = 20.0): string
