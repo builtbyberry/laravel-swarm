@@ -2,6 +2,15 @@
 
 ## Upgrading to realtime-dispatch
 
+### Wait creation at branch joins
+
+An explicit `DurableSwarmManager::wait()` after a branch join has been released
+now throws `SwarmException`, with no new wait persisted. Register obligations
+before join release. Queued hierarchical continuations retain the released
+`pending` coordination state, so the same rejection applies there. Framework
+declared waits and child intents at durable hierarchical fan-out are persisted
+atomically with that fan-out. See [wait creation and transaction retries](docs/durable-waits-and-signals.md#creating-a-wait-from-application-code).
+
 ### Durable branch fan-out cap (`swarm.durable.parallel.max_concurrent_branches`)
 
 Off by default; nothing changes until you set it. If you do:

@@ -537,6 +537,16 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
                 return false;
             }
 
+            // A creator takes this row before inserting. The first wait read may
+            // have missed its uncommitted insert, so read again after serialising
+            // with it. A locking read is current on MySQL, even in an old snapshot.
+            $this->lockRunRow($runId);
+
+            if ($this->waitTable()->where('run_id', $runId)->where('status', 'waiting')
+                ->orderBy('id')->sharedLock()->pluck('id')->all() !== []) {
+                return false;
+            }
+
             return $this->releaseWaitingRun($runId, $nextStepIndex);
         });
     }
@@ -2022,6 +2032,18 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
         $timeoutAt = $timeoutSeconds !== null ? $timestamp->copy()->addSeconds($timeoutSeconds) : null;
 
         $this->connection->transaction(function () use ($runId, $name, $reason, $timeoutAt, $metadata, $timestamp): void {
+            $run = $this->lockRunRow($runId);
+
+            // waitForBranches clears the step index and pins its parent node. A
+            // release leaves those fields in place until markRunning starts the
+            // next durable step. Decide from the locked row, never a branch read
+            // that could come from an application transaction's older snapshot.
+            if (($run->status ?? null) === 'pending'
+                && $run->current_step_index === null
+                && $run->current_node_id !== null) {
+                throw new SwarmException("Cannot create wait [{$name}] for durable run [{$runId}]: its branch join has already been released.");
+            }
+
             $this->waitTable()->insert([
                 'run_id' => $runId,
                 'name' => $name,
@@ -2037,7 +2059,7 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
             ]);
 
             $this->syncRunWaitSummary($runId, $timestamp);
-        });
+        }, 3);
     }
 
     public function releaseWaitWithSignal(string $runId, string $name, int $signalId): bool
@@ -2652,7 +2674,7 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
     }
 
     /**
-     * Lock the run row and return its status and current node, or null when it is gone.
+     * Lock the run row and return its status, step and node, or null when it is gone.
      * On Postgres the lock is FOR NO KEY UPDATE, the lock an UPDATE of the row takes
      * anyway, so other transactions' foreign-key checks against the run (a retry's outbox
      * insert, a signal row, a new wait) are not blocked by it; FOR UPDATE elsewhere. No
@@ -2671,15 +2693,15 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
         /** @var object|null $run */
         $run = ($this->connection->getDriverName() === 'pgsql'
             ? $runQuery->lock('for no key update')
-            : $runQuery->lockForUpdate())->first(['status', 'current_node_id']);
+            : $runQuery->lockForUpdate())->first(['status', 'current_node_id', 'current_step_index']);
 
         return $run;
     }
 
     protected function syncRunWaitSummary(string $runId, Carbon $timestamp): void
     {
-        // The run row is locked before anything else is read. Every caller has already
-        // written its wait row, so the order is wait row, then run row, as everywhere. A fan-out (waitForBranches) takes the run row as its
+        // Closers have written their wait row before locking the run; createWait
+        // already holds the run before inserting. A fan-out (waitForBranches) takes the run row as its
         // first statement and holds it until it commits, so this waits for one in flight.
         // No closer makes an ordinary read in its transaction before it holds the run row:
         // the timeout and child closers reach this point first, and a signal's acceptance

@@ -120,6 +120,31 @@ The wait is stored in the durable runtime tables. A waiting run remains active
 operational state until it is signalled, times out, fails, completes, or is
 cancelled.
 
+Wait creation and branch-join release serialize on the run row. If creation
+wins, the new wait holds the join. If the join has already been released,
+`wait()` throws `SwarmException` before creating a wait or publishing a waiting
+event. Register the obligation before releasing the join; retrying that late
+call cannot retroactively stop a continuation already queued. This also applies
+to a queued hierarchical continuation while its durable coordination row remains
+in the released `pending` state. A running step-durable step can create its own
+wait, and ordinary pending step boundaries remain supported.
+
+The package retries database concurrency failures up to three attempts for wait
+creation, child-intent persistence, hierarchical fan-out and join release. If
+you call these operations inside your own database transaction, retry that
+**whole transaction** on a concurrency exception, for example with Laravel's
+`DB::transaction($work, attempts: 3)`. A nested savepoint cannot retry an
+InnoDB transaction that the engine has aborted. Keep retryable work free of
+external side effects.
+
+At a durable hierarchical fan-out, the framework persists its declared wait or
+child intent with the checkpoint and branch dispatch records, before branches
+can release the join. Notifications and child dispatch run after commit. A
+notification failure leaves committed state available to `swarm:recover` and
+`swarm:relay`. Inside an application transaction, these effects wait for the
+swarm connection's outermost commit; a failure is reported without interrupting
+the application's later commit callbacks. Rollback discards the effects.
+
 ## Declaring Waits On A Swarm
 
 Use `#[DurableWait]` when a swarm always enters the same wait after a checkpoint:

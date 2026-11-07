@@ -26,6 +26,21 @@ final class HookedJoinDurableRunStore extends DatabaseDurableRunStore
 
     public ?Closure $afterJoinCheck = null;
 
+    public ?Closure $afterRunLock = null;
+
+    public int $runLockAttempts = 0;
+
+    protected function lockRunRow(string $runId): ?object
+    {
+        $this->runLockAttempts++;
+        $run = parent::lockRunRow($runId);
+        if ($this->afterRunLock !== null) {
+            ($this->afterRunLock)($runId);
+        }
+
+        return $run;
+    }
+
     protected function syncRunWaitSummary(string $runId, Carbon $timestamp): void
     {
         if ($this->beforeSync !== null) {

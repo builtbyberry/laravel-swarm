@@ -280,6 +280,8 @@ class DurableManagerCollaboratorFactory
             'nodeStream' => $this->application->make(DurableNodeStreamRecorder::class),
         ]);
         $checkpointCoordinator = $this->application->makeWith(DurableStepCheckpointCoordinator::class, [
+            'connection' => $connection,
+            'container' => $this->application,
             'durableRuns' => $durableRuns,
             'recorder' => $recorder,
             'hierarchical' => $hierarchical,

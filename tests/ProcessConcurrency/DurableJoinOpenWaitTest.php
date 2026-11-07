@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostDurableLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
+use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableBranch;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\InvokeSwarm;
@@ -27,6 +28,8 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalFullSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalParallelFailBranchSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\JoinBoundaryChildSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\JoinBoundaryWaitSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\ProcessConcurrency\Fixtures\JoinOpenWait\JoinOpenWaitWorker;
 use BuiltByBerry\LaravelSwarm\Tests\ProcessConcurrency\Fixtures\ResumeOpenWait\LockBarrier;
 use Illuminate\Concurrency\ConcurrencyManager;
@@ -474,6 +477,139 @@ function joinOpenWaitDbSignallerAfter(string $runId, string $wait, string $dir, 
     };
 }
 
+function joinCreateHoldingCreator(string $runId, string $dir): Closure
+{
+    return static function () use ($runId, $dir): array {
+        $store = JoinOpenWaitWorker::bootHooked();
+        $me = LockBarrier::connectionId();
+        $contended = false;
+        $store->beforeSync = static function () use ($store, $dir, $me, &$contended): void {
+            $store->beforeSync = null;
+            LockBarrier::signal($dir, 'creator-ready');
+            $contended = LockBarrier::awaitBlockedBy((int) LockBarrier::await($dir, 'join-id'), $me);
+        };
+        try {
+            app(DurableSwarmManager::class)->wait($runId, 'new-obligation');
+
+            return ['outcome' => 'created', 'contended' => $contended];
+        } catch (Throwable $e) {
+            return ['outcome' => 'aborted', 'failure' => LockBarrier::failure($e)];
+        }
+    };
+}
+
+function joinCreateReleaser(string $runId, string $dir, bool $hold, bool $reportAttempts = false): Closure
+{
+    return static function () use ($runId, $dir, $hold, $reportAttempts): array {
+        $store = JoinOpenWaitWorker::bootHooked();
+        $contended = null;
+        if ($hold) {
+            $store->afterJoinCheck = static function (string $id, bool $released) use ($store, $dir, &$contended): void {
+                $store->afterJoinCheck = null;
+                if ($released) {
+                    LockBarrier::signal($dir, 'join-ready');
+                    $contended = LockBarrier::awaitBlockedBy((int) LockBarrier::await($dir, 'creator-id'), LockBarrier::connectionId());
+                }
+            };
+        } else {
+            LockBarrier::await($dir, 'creator-ready');
+            LockBarrier::signal($dir, 'join-id', (string) LockBarrier::connectionId());
+        }
+        try {
+            $released = app(DurableJoinRelease::class)->releaseIfReady($store->find($runId));
+
+            return array_merge(['outcome' => 'finished', 'released' => $released, 'contended' => $contended], $reportAttempts ? ['run_lock_attempts' => $store->runLockAttempts] : []);
+        } catch (Throwable $e) {
+            return ['outcome' => 'aborted', 'failure' => LockBarrier::failure($e)];
+        }
+    };
+}
+
+function joinCreateBeforeInsert(string $runId, string $dir): Closure
+{
+    return static function () use ($runId, $dir): array {
+        $store = JoinOpenWaitWorker::bootHooked();
+        $contended = false;
+        $store->afterRunLock = static function () use ($store, $dir, &$contended): void {
+            $store->afterRunLock = null;
+            LockBarrier::signal($dir, 'creator-ready');
+            $contended = LockBarrier::awaitBlockedBy((int) LockBarrier::await($dir, 'join-id'), LockBarrier::connectionId());
+        };
+        try {
+            $store->createWait($runId, 'before-insert');
+
+            return ['outcome' => 'created', 'contended' => $contended, 'run_lock_attempts' => $store->runLockAttempts];
+        } catch (SwarmException $e) {
+            return ['outcome' => 'rejected', 'contended' => $contended, 'run_lock_attempts' => $store->runLockAttempts];
+        } catch (Throwable $e) {
+            return ['outcome' => 'aborted', 'failure' => LockBarrier::failure($e)];
+        }
+    };
+}
+
+function joinCreateLateCreator(string $runId, string $dir): Closure
+{
+    return static function () use ($runId, $dir): array {
+        JoinOpenWaitWorker::boot();
+        LockBarrier::await($dir, 'join-ready');
+        LockBarrier::signal($dir, 'creator-id', (string) LockBarrier::connectionId());
+        try {
+            // A prior ordinary read must not make the released-join decision stale
+            // on MySQL's REPEATABLE READ.
+            DB::connection()->transaction(function () use ($runId): void {
+                DB::table('swarm_contexts')->where('run_id', $runId)->first();
+                app(DurableSwarmManager::class)->wait($runId, 'too-late');
+            }, 3);
+
+            return ['outcome' => 'created'];
+        } catch (SwarmException $e) {
+            return ['outcome' => 'rejected', 'join_error' => str_contains($e->getMessage(), 'join')];
+        } catch (Throwable $e) {
+            return ['outcome' => 'aborted', 'failure' => LockBarrier::failure($e)];
+        }
+    };
+}
+
+function joinCreateDeclaredFanout(string $runId, string $dir): Closure
+{
+    return static function () use ($runId, $dir): array {
+        JoinOpenWaitWorker::boot();
+        $manager = app(DurableSwarmManager::class);
+        $manager->afterStepCheckpointForTesting(static function () use ($dir): void {
+            LockBarrier::signal($dir, 'fanout-committed');
+            LockBarrier::await($dir, 'fast-join-done');
+        });
+        try {
+            (new AdvanceDurableSwarm($runId, 1))->handle($manager);
+
+            return ['outcome' => 'checkpointed', 'waits' => count(app(DurableRunStore::class)->waits($runId))];
+        } catch (Throwable $e) {
+            return ['outcome' => 'aborted', 'failure' => LockBarrier::failure($e)];
+        }
+    };
+}
+
+function joinCreateFastDeclaredJoin(string $runId, string $dir): Closure
+{
+    return static function () use ($runId, $dir): array {
+        JoinOpenWaitWorker::boot();
+        LockBarrier::await($dir, 'fanout-committed');
+        try {
+            DB::table('swarm_durable_branches')->where('run_id', $runId)->update([
+                'status' => 'completed', 'output' => 'branch-output', 'finished_at' => now('UTC'),
+                'execution_token' => null, 'leased_until' => null,
+            ]);
+            $released = app(DurableJoinRelease::class)->releaseIfReady(app(DurableRunStore::class)->find($runId));
+
+            return ['outcome' => 'finished', 'released' => $released];
+        } catch (Throwable $e) {
+            return ['outcome' => 'aborted', 'failure' => LockBarrier::failure($e)];
+        } finally {
+            LockBarrier::signal($dir, 'fast-join-done');
+        }
+    };
+}
+
 beforeEach(function (): void {
     if (in_array(DB::connection()->getDriverName(), ['sqlite', 'sqlsrv'], true)) {
         $this->markTestSkipped(
@@ -501,6 +637,75 @@ afterEach(function (): void {
         (new Filesystem)->deleteDirectory($dir);
     }
 });
+
+test('a new wait winning the run lock blocks join creation without a deadlock abort (#614)', function (): void {
+    [$runId] = joinOpenWaitDbParallelAtJoin([], leaveLastBranch: false);
+    $dir = joinOpenWaitDbBarrierDir();
+    $before = joinOpenWaitDbStepRows($runId);
+    [$creator, $join] = app(ConcurrencyManager::class)->driver('process')->run([
+        joinCreateHoldingCreator($runId, $dir),
+        joinCreateReleaser($runId, $dir, false),
+    ]);
+
+    expect($creator)->toBe(['outcome' => 'created', 'contended' => true], json_encode($creator))
+        ->and($join)->toBe(['outcome' => 'finished', 'released' => false, 'contended' => null], json_encode($join))
+        ->and(joinOpenWaitDbRunStatus($runId))->toBe('waiting')
+        ->and(joinOpenWaitDbStepRows($runId))->toBe($before)
+        ->and(DB::table('swarm_durable_waits')->where('run_id', $runId)->where('status', 'waiting')->count())->toBe(1);
+});
+
+test('a join winning the run lock rejects new wait creation even with an older outer snapshot (#614)', function (): void {
+    [$runId] = joinOpenWaitDbParallelAtJoin([], leaveLastBranch: false);
+    $dir = joinOpenWaitDbBarrierDir();
+    $before = joinOpenWaitDbStepRows($runId);
+    [$join, $creator] = app(ConcurrencyManager::class)->driver('process')->run([
+        joinCreateReleaser($runId, $dir, true),
+        joinCreateLateCreator($runId, $dir),
+    ]);
+
+    expect($join)->toBe(['outcome' => 'finished', 'released' => true, 'contended' => true], json_encode($join))
+        ->and($creator)->toBe(['outcome' => 'rejected', 'join_error' => true], json_encode($creator))
+        ->and(joinOpenWaitDbRunStatus($runId))->toBe('pending')
+        ->and(joinOpenWaitDbStepRows($runId))->toBe($before + 1)
+        ->and(DB::table('swarm_durable_waits')->where('run_id', $runId)->count())->toBe(0);
+});
+
+test('a creator holding the run before insert serializes with the empty-wait join read (#614)', function (): void {
+    [$runId] = joinOpenWaitDbParallelAtJoin([], leaveLastBranch: false);
+    app(DurableRunStore::class)->createWait($runId, 'closed-before-race');
+    DB::table('swarm_durable_waits')->where('run_id', $runId)->update(['status' => 'timed_out', 'finished_at' => now('UTC')]);
+    $dir = joinOpenWaitDbBarrierDir();
+    $before = joinOpenWaitDbStepRows($runId);
+    [$creator, $join] = app(ConcurrencyManager::class)->driver('process')->run([
+        joinCreateBeforeInsert($runId, $dir),
+        joinCreateReleaser($runId, $dir, false, true),
+    ]);
+
+    expect($creator['outcome'])->toBeIn(['created', 'rejected'], json_encode($creator))
+        ->and($creator['contended'])->toBeTrue()
+        ->and($join['outcome'])->toBe('finished', json_encode($join));
+    $open = DB::table('swarm_durable_waits')->where('run_id', $runId)->where('status', 'waiting')->count();
+    expect([$open, joinOpenWaitDbStepRows($runId) - $before])->toBeIn([[1, 0], [0, 1]]);
+});
+
+test('fast branches cannot bypass the declared boundary committed with fanout (#614)', function (string $swarm): void {
+    joinOpenWaitDbFakeCoordinator(joinOpenWaitDbPlan());
+    $runId = $swarm::make()->dispatchDurable('declared-boundary')->runId;
+    (new AdvanceDurableSwarm($runId, 0))->handle(app(DurableSwarmManager::class));
+    $before = joinOpenWaitDbStepRows($runId);
+    $dir = joinOpenWaitDbBarrierDir();
+    [$fanout, $join] = app(ConcurrencyManager::class)->driver('process')->run([
+        joinCreateDeclaredFanout($runId, $dir),
+        joinCreateFastDeclaredJoin($runId, $dir),
+    ]);
+    expect($fanout)->toBe(['outcome' => 'checkpointed', 'waits' => 1], json_encode($fanout))
+        ->and($join)->toBe(['outcome' => 'finished', 'released' => false], json_encode($join))
+        ->and(joinOpenWaitDbRunStatus($runId))->toBe('waiting')
+        ->and(joinOpenWaitDbStepRows($runId))->toBe($before);
+})->with([
+    JoinBoundaryWaitSwarm::class,
+    JoinBoundaryChildSwarm::class,
+]);
 
 test('step-durable parallel: branch completion, resume and recover hold the join while a wait is open; the signal releases it', function (): void {
     [$runId, $last] = joinOpenWaitDbParallelAtJoin();
