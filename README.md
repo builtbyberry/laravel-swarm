@@ -8,7 +8,7 @@ Native provider activity is preserved on supported streaming paths; see
 [![Latest Version on Packagist](https://img.shields.io/packagist/v/builtbyberry/laravel-swarm.svg)](https://packagist.org/packages/builtbyberry/laravel-swarm)
 [![Total Downloads](https://img.shields.io/packagist/dt/builtbyberry/laravel-swarm.svg)](https://packagist.org/packages/builtbyberry/laravel-swarm)
 [![Tests](https://github.com/builtbyberry/laravel-swarm/actions/workflows/tests.yml/badge.svg)](https://github.com/builtbyberry/laravel-swarm/actions/workflows/tests.yml)
-[![Nightly (Laravel 13.x-dev / AI 1.x-dev)](https://github.com/builtbyberry/laravel-swarm/actions/workflows/nightly.yml/badge.svg)](https://github.com/builtbyberry/laravel-swarm/actions/workflows/nightly.yml)
+[![Nightly (Laravel 13.x-dev / AI stable)](https://github.com/builtbyberry/laravel-swarm/actions/workflows/nightly.yml/badge.svg)](https://github.com/builtbyberry/laravel-swarm/actions/workflows/nightly.yml)
 [![License](https://img.shields.io/packagist/l/builtbyberry/laravel-swarm.svg)](https://packagist.org/packages/builtbyberry/laravel-swarm)
 [![PHP Version Require](https://img.shields.io/packagist/dependency-v/builtbyberry/laravel-swarm/php.svg)](https://packagist.org/packages/builtbyberry/laravel-swarm)
 [![Documentation](https://img.shields.io/badge/docs-swarm.builtbyberry.com-2563eb.svg)](https://swarm.builtbyberry.com)
@@ -436,9 +436,11 @@ Schedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping(max(1
 Schedule::command('swarm:prune')->daily();         // retention: removes expired persistence rows
 ```
 
-Both operational commands also own a finite atomic lease, so manual and
-supervisor invocations are protected too. The default one-hour lease must exceed
-your worst-case command duration. File-cache locks cover one host only; multi-host
+Both operational commands also own finite atomic leases, so manual and
+supervisor invocations are protected too: `swarm:recover` holds one for its
+sweep, and `swarm:relay` holds one per outbox lane only while that lane drains a
+batch. The default one-hour lease must exceed the worst-case recovery sweep and
+relay drain batch. File-cache locks cover one host only; multi-host
 deployments require a shared atomic default cache store, or must set
 `SWARM_COMMAND_OVERLAP_STORE` when the default is unsuitable. Override the
 duration with `SWARM_COMMAND_OVERLAP_LEASE_SECONDS`. See
@@ -464,7 +466,7 @@ final class ClaimsReview implements Swarm
 }
 ```
 
-It streams on **every durable topology** — sequential, hierarchical, static_hierarchical, and parallel (including fan-out branches) — with each node's attempt voided-and-retried cleanly on crash-resume (the same append-only causal-log fold the live substrate uses). The hierarchical coordinator streams structural events; token-streaming the coordinator is a follow-up. Declaring the attribute on a topology not yet wired for streaming fails loud at dispatch. An operator kill-switch (`SWARM_DURABLE_STREAMING_ENABLED=false`) pauses emission fleet-wide without a redeploy, safely mid-run. See [Durable Execution — per-node streaming](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-execution.md#durable-per-node-streaming).
+It streams on **every durable topology** — sequential, hierarchical, static_hierarchical, and parallel (including fan-out branches) — with each node's attempt voided-and-retried cleanly on crash-resume (the same append-only causal-log fold the live substrate uses). The hierarchical coordinator streams structural events; token-streaming the coordinator is a follow-up. Declaring the attribute on a topology not yet wired for streaming fails loud at dispatch. If the stream table runs hot, turn on [batched writes](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-execution.md#batched-causal-log-writes) (`SWARM_DURABLE_STREAM_BATCHING=true`) first. An operator kill-switch (`SWARM_DURABLE_STREAMING_ENABLED=false`) pauses emission fleet-wide without a redeploy, safely mid-run. See [Durable Execution — per-node streaming](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-execution.md#durable-per-node-streaming).
 
 ### Operator control contract (v0.16.0)
 
@@ -682,8 +684,10 @@ Use [Persistence And History](https://github.com/builtbyberry/laravel-swarm/blob
 - Set `SWARM_CAPTURE_ACTIVE_CONTEXT=true` for queued and durable swarms.
 - Size queue worker timeouts and queue `retry_after` above the longest expected provider call.
 - Schedule `swarm:relay` every minute for durable execution, the audit outbox,
-  and terminal workflow callbacks. One schedule covers all three lanes. Without
-  it, durable runs stall after the first step, queued audit failures accumulate
+  and terminal workflow callbacks. One schedule covers all three lanes; for
+  faster durable steps turn on eager dispatch rather than running it more often.
+  Without it, durable runs stall after the first step (with eager dispatch on,
+  only lost pushes and relay-driven work), queued audit failures accumulate
   without retry, and enabled terminal callbacks remain pending. Use
   `swarm:relay --type=audit` or `swarm:relay --type=callback` to drain one lane
   during focused recovery. See [Durable Execution](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-execution.md),

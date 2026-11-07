@@ -38,10 +38,22 @@ class DatabaseCausalLogStore extends DatabaseStreamEventStore implements CausalL
      */
     public function record(string $runId, SwarmStreamEvent $event, int $ttlSeconds): void
     {
+        $this->table()->insert($this->causalRow($runId, $event, $ttlSeconds));
+    }
+
+    /**
+     * Build the row {@see record()} inserts, without inserting it. Timestamps are
+     * taken now, so a row built at emission and written later still carries its
+     * emission time.
+     *
+     * @return array<string, mixed>
+     */
+    public function causalRow(string $runId, SwarmStreamEvent $event, int $ttlSeconds): array
+    {
         $payload = $event->toArray() + ['attempt_epoch' => $event->attemptEpoch];
         $timestamp = Carbon::now('UTC');
 
-        $this->table()->insert([
+        return [
             'run_id' => $runId,
             'event_uuid' => StreamEventIdentity::forEvent($event),
             // Promoted from the JSON payload (#284) / event object (#298) into
@@ -56,7 +68,23 @@ class DatabaseCausalLogStore extends DatabaseStreamEventStore implements CausalL
             'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
             'created_at' => $timestamp,
             'updated_at' => $timestamp,
-        ]);
+        ];
+    }
+
+    /**
+     * Write rows built by {@see causalRow()} as one multi-row INSERT into `$table`,
+     * in list order. The caller passes the table it resolved when the rows were
+     * built, so a later change to the configured table name cannot redirect them.
+     *
+     * @param  list<array<string, mixed>>  $rows
+     */
+    public function recordRows(string $table, array $rows): void
+    {
+        if ($rows === []) {
+            return;
+        }
+
+        $this->connection->table($table)->insert($rows);
     }
 
     public function appendVoidEdge(
@@ -251,7 +279,7 @@ class DatabaseCausalLogStore extends DatabaseStreamEventStore implements CausalL
     {
         parent::assertReady();
 
-        $table = (string) $this->config->get('swarm.tables.stream_events', 'swarm_stream_events');
+        $table = $this->tableName();
         $schema = $this->connection->getSchemaBuilder();
 
         if (! $schema->hasColumns($table, ['event_uuid', 'void_type', 'void_target_event_uuid', 'void_reason', 'sealed_at', 'node_id', 'attempt_epoch'])) {

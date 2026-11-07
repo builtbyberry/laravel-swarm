@@ -1,5 +1,372 @@
 # Changelog
 
+## realtime-dispatch - unreleased
+
+Durable real-time dispatch and relay cost — a durable step reaches the queue the moment it commits, instead of waiting for the next swarm:relay tick, and the relay costs less when it does run.
+
+### Added
+
+- **Eager durable dispatch on commit.** New `swarm.durable.eager_dispatch` key
+  (`SWARM_DURABLE_EAGER_DISPATCH`, default `false`). With it on, the next durable
+  step or branch job, and each `queue()` `multi_worker` hierarchical branch job,
+  is pushed as soon as the swarm transaction that wrote its outbox row commits,
+  instead of waiting for the next `swarm:relay` run. The job deletes its own
+  outbox row once it holds its lease, so the relay never pushes it a second time;
+  a lost push is recovered by the relay's existing stale-reclaim after
+  `swarm.durable.relay.reservation_timeout_seconds`, and a duplicate push is a
+  no-op. Keep `swarm:relay` scheduled `everyMinute()` as the recovery sweep
+  rather than shortening its interval for latency. When a step enters a declared
+  wait or dispatches a child swarm, the next step is not pushed until the wait or
+  child releases it. The queued hierarchical resume job stays relay-driven, so
+  `queue()` `multi_worker` runs still wait up to one relay interval at the join.
+  Nothing is pushed eagerly on the `sync` queue driver. With the flag off,
+  dispatch is exactly as before for the bundled outbox (a custom `DurableOutbox`
+  must be updated either way; see Changed). Rolling back is safe: jobs queued by
+  the new code that run under the old code simply never delete their row, and
+  the relay reclaims it after the reservation timeout and dispatches a duplicate
+  that does nothing. No data is lost and there is no schema change. See
+  [Durable Eager Dispatch](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/configuration.md#durable-eager-dispatch).
+
+- **Durable branch fan-out cap.** New `swarm.durable.parallel.max_concurrent_branches`
+  key (`SWARM_DURABLE_PARALLEL_MAX_CONCURRENT_BRANCHES`, default `null` =
+  unlimited, so nothing changes until you set it). With it set to `N`, a
+  step-durable hierarchical parallel node dispatches its first `N` branches and
+  holds the rest as outbox rows; each time a branch finishes, one held branch is
+  released into its slot, so at most `N` branches of the fan-out are admitted and
+  unfinished at once. The cap is per fan-out, not global: concurrent runs each get
+  their own `N`, so a limit across all runs still comes from branch-queue workers or
+  queue rate limiting. Every branch is still recorded at the fan-out and the join
+  waits for all of them; failure policies are unchanged; held branches are never
+  released by the clock, and no stray or duplicate job can run one. Works on the
+  relay and eager-dispatch paths. `swarm:recover` also releases held branches a
+  crashed worker left behind, and `swarm:health --durable` gains a **Held
+  branches** line; held rows no longer count as relay backlog. Requires the
+  bundled database run store and outbox on one connection, and rejects any other
+  pairing — or a value that is not a positive integer — when a durable run
+  starts. Set it only after every worker and `swarm:recover` run this version;
+  before rolling back, set it to `null` and run `swarm:recover` until no branches
+  are held. Top-level parallel, `queue()` `multi_worker` and the streaming branch
+  cap are unaffected. No schema change. See
+  [Capping branch fan-out](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-execution.md#capping-branch-fan-out).
+
+- **`swarm:relay --daemon`: one long-lived relay process.** Instead of a
+  framework boot per scheduled tick, the relay can run as one process under a
+  supervisor, in the style of `queue:work`. Each cycle drains every selected
+  lane once, each under its own lane lease taken for that lane's batch and
+  released before any sleep; a lane another relay holds is skipped for that
+  cycle only. Between cycles it sleeps `swarm.durable.relay.daemon.min_sleep_ms`
+  (default 100) after moving durable or callback rows, and otherwise backs off by
+  `backoff_multiplier` (2) up to `max_sleep_ms` (3000), all new config keys.
+  `SIGTERM`/`SIGINT` let the current cycle finish and exit 0; `queue:restart`
+  (read from the default cache store, as `queue:work` does) and the new
+  `--max-time` and `--memory` options also stop it with exit 0, so the
+  supervisor must restart it on any exit (`autorestart=true`). It exits non-zero
+  only on genuine failure: invalid options or configuration, an exception from a
+  drain (audited as `status: error`), or a failure reading the `queue:restart`
+  key (not audited). Requires `pcntl`, and cannot be combined with
+  `--drain-until-empty`. In daemon mode `command.relay` is emitted once per cycle
+  that moved or failed durable or callback rows or found a lane held; idle and
+  audit-only cycles emit nothing, so a failing audit sink cannot keep the daemon
+  replaying its own evidence. Scheduled relays are unchanged. See
+  [Daemon relay](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/maintenance.md#daemon-relay).
+
+- **Batched causal-log writes for durable per-node streaming.** New
+  `swarm.durable.stream_batching` keys: `enabled`
+  (`SWARM_DURABLE_STREAM_BATCHING`, default `false`), `max_events` (50, capped at
+  100), `max_bytes` (256 KiB) and `max_age_ms` (250). With it on, a
+  `#[DurableStreaming]` node writes its text and reasoning deltas to
+  `swarm_stream_events` as one multi-row `INSERT` per batch instead of one per
+  event. This is a way to cut the write load other than turning
+  `swarm.durable.streaming_enabled` off. A node's first event and every event
+  that is not a delta are still written at once, carrying any deltas held before
+  them. Everything a node emitted is written before its seal barrier. The age
+  limit is checked as events arrive, not by a timer, so while a provider is
+  silent mid-text, a reader can trail it by up to one held batch until its next
+  event. A failing attempt drops the deltas it still holds, as a crashed worker
+  would, and what it already wrote is retracted on resume as before. With the
+  flag off, every event is its own `INSERT`, as before. No schema change; seal
+  barriers, compaction and the cold archive are unchanged. See
+  [Batched causal-log writes](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-execution.md#batched-causal-log-writes).
+
+- **`Contracts\AcceptsDurableSignals`, an optional durable store capability
+  (#611).** A store that implements it records a signal in the transaction that
+  accepts it (`acceptSignal()`) and answers a repeated idempotency key without a
+  lock (`signalForIdempotencyKey()`). `DatabaseDurableRunStore` implements it; a
+  custom or decorating store that does not keeps the earlier behaviour. See the
+  fix below and
+  [UPGRADING](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#a-wait-closing-while-its-run-fans-out).
+
+### Changed
+
+- **BREAKING for custom `DurableOutbox` implementations.**
+  `enqueueStep()` and `enqueueBranch()` now take a trailing
+  `bool $directDispatch = false` and return the id of the row they write, and
+  the contract gains `settle(int $entryId, ?string $runId = null): void`. This applies on upgrade
+  whether or not `swarm.durable.eager_dispatch` is on: PHP rejects the old
+  signatures when the class loads. The bundled `DatabaseDurableOutbox` is
+  updated; code that only injects the contract is unaffected. See [UPGRADING.md](UPGRADING.md#custom-durableoutbox-implementations).
+- **Custom `DurableRunStore` implementations, and classes extending
+  `DatabaseDurableRunStore`,** have new rules to follow, or they keep the
+  behaviour #600 fixes: `releaseWaitingRunForJoin()` refuses while the run has an open
+  wait, `recoverableWaitingJoins()` excludes runs with an open wait, and closing
+  a run's last wait leaves it `waiting` when it is at a branch boundary. See
+  [UPGRADING.md](UPGRADING.md#a-branch-join-waits-for-open-waits).
+- `DrainResult::$reclaimed` (and the `command.relay` audit event's
+  `reclaimed_count`) now also counts eager-dispatch rows whose pushed job did not
+  settle them before the reservation went stale, not only rows a relay claimed
+  and abandoned. Those are also reported on their own as the new
+  `DrainResult::$reclaimedDirect` and `direct_reclaimed_count`, so
+  `reclaimed_count` minus `direct_reclaimed_count` stays the relay-health signal.
+- **`swarm:relay` takes one overlap lease per lane instead of one for the whole
+  command.** The durable lane (step, branch, queued_resume), the audit lane and
+  the callback lane each have their own lease, held only while that lane drains
+  a batch. Relays selecting different lanes now run side by side, so
+  `swarm:relay --type=step --type=branch --type=queued_resume` and
+  `swarm:relay --type=audit --type=callback` can be scheduled on separate
+  cadences, and a slow audit or callback drain never holds up another relay's
+  step dispatch. Two relays selecting the same lane still exclude each other.
+  When another invocation holds a selected lane, that lane's remaining batches
+  are skipped for the run, the other lanes still drain, the command warns and
+  exits non-zero, and the `command.relay` audit event lists the lane in its new,
+  always-present `contended_lanes` field; `skipped_overlap` now means every
+  selected lane was held. During a rolling deploy an old relay (single lease)
+  and a new relay (lane leases) may drain the same lane at once; the bundled
+  database outboxes claim with `FOR UPDATE SKIP LOCKED` on MySQL and PostgreSQL,
+  so they take disjoint batches under the existing at-least-once contract. No
+  flag, config key or migration. See
+  [Command overlap leases](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/maintenance.md#command-overlap-leases).
+- **A relay drain reads each run's context once, not once per outbox entry.**
+  To pick the job class for an entry, the drain reads the run's context and,
+  for a run with native input, its native-input row. It now does that once per
+  run in each drain and reuses the result for the run's other entries, so a
+  batch of N entries from M runs costs M context reads instead of N. Nothing is
+  kept between drains: the next drain reads every run fresh, and a read that
+  fails is not reused. This covers the step, branch and queued-resume lanes.
+  No flag, config key, contract change or migration. If your tests bind a
+  `DurableJobDispatcher` double and drain the database outbox (`swarm:relay`),
+  the drain now dispatches through the copy `forDrain()` returns, not through
+  the bound instance. A double that records calls in its own properties (or a
+  Mockery mock of the class) should override or stub `forDrain()` to return
+  itself, so the calls are recorded on the instance your test reads.
+- **Custom `ClaimsQueuedRunExecution` history stores** have a new rule to follow
+  (#610): `acquireQueuedRunContinuationLease()` takes the lease, fresh or as a
+  crash reclaim, only while the run's durable coordination row is `pending`
+  (released to its join), and otherwise returns a non-acquired outcome without
+  touching the history row. The bundled `DatabaseRunHistoryStore` reads the
+  durable row with a lock before the history row. A custom store that does not
+  check keeps letting a stray resume job run the continuation early. The
+  protected `DatabaseRunHistoryStore::isQueueHierarchicalParallelRun()` is removed.
+  See [UPGRADING](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#a-queued-hierarchical-resume-runs-only-once-its-join-is-released).
+
+### Fixed
+
+- **Parallel stream process results on newer Laravel releases (#625).** Live
+  parallel streams and `swarm:health --parallel-streaming` now support Laravel's
+  signed concurrency result envelopes. Each child receives a separate signing
+  key, and framed results require a valid HMAC before the class-free terminal
+  marker is read. Older supported Laravel versions keep their plain-JSON path;
+  signed mode never downgrades to it. Malformed results and child-reported
+  exceptions fail with redacted diagnostics. This preserves the upstream
+  authentication fix rather than pinning Laravel back or trusting unsigned
+  stdout. No migration or configuration change. Re-run the health probe after
+  updating Laravel.
+
+- **A queued-hierarchical join now applies the durable parallel failure policy
+  (#612).** When a `queue()` `multi_worker` hierarchical run reached its join, it
+  carried on with whichever branches completed and ignored the ones that failed,
+  so it completed where a `dispatchDurable()` hierarchical run with the same
+  branch outcomes fails. Under `collect_failures` (the default) a run with any
+  failed branch, and under `partial_success` a run whose every branch failed,
+  now fails once all its branches have finished, as
+  [Hierarchical Routing](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/hierarchical-routing.md)
+  already documented. The failure is the same as the step-durable one: the run's
+  history and durable row are `failed` with "Durable parallel branches failed:"
+  and the failed branch ids, the context carries `durable_parallel_branches`,
+  the `durable.failed` audit event is emitted, and `SwarmFailed` is dispatched
+  once with execution mode `queue`. The resume job returns normally rather than
+  throwing, so the failure is not retried. `fail_run` is unchanged: the failing
+  branch's worker still fails the run at once. `partial_success` with at least
+  one completed branch still continues with the completed branches' outputs.
+  The rule also applies to runs already waiting at a join when you deploy: such
+  a run with a failed branch fails when its resume arrives. If you relied on
+  these runs completing, handle `SwarmFailed`, or use `partial_success` to keep
+  going whenever at least one branch completed. No migration or config change.
+- **A stray or duplicate queued-hierarchical resume job no longer runs the
+  continuation early (#610).** A `ResumeQueuedHierarchicalSwarm` job that
+  arrived while its run was not released to its join, such as a late duplicate
+  from an earlier pass of a parallel node, could take the continuation lease
+  anyway. With an open wait the run completed past the wait; with branches still
+  running, the run failed with "invoked before parallel branches are terminal".
+  The job now runs the continuation only while the run's durable row is
+  `pending`, and is otherwise acknowledged as a no-op: it is not failed, not
+  retried and not logged. A resume that arrives while its own join release is
+  still committing waits for it and then runs. The same rule applies to the
+  crash reclaim of a continuation whose worker died. A resume job now reads the
+  run's durable row and context after it takes the lease, so a delivery that
+  started before a signal or a later join release continues from the current
+  boundary and context instead of an older one. If one of those reads fails, the
+  job throws and may show in `failed_jobs`, but the run is not failed: its retries
+  find the lease held and do nothing, and once the lease and the recovery grace
+  period have passed a scheduled `swarm:recover` reclaims the continuation.
+  `swarm:recover` now also redispatches a crashed continuation only while its run
+  is still released, instead of a resume that would be refused on every sweep.
+  No migration or config change. See
+  [UPGRADING](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#a-queued-hierarchical-resume-runs-only-once-its-join-is-released).
+- **A signal delivered while a durable run is paused is accepted (#601).** With
+  the bundled database store, a signal sent to a paused run that has an open
+  wait of that name now closes that wait, records its payload and outcome, and
+  returns `accepted: true` (HTTP 202 from the signal webhook). The run stays
+  paused; when it is resumed it has nothing left to wait on and its next step is
+  queued. Before, the signal was recorded and never applied, and had to be sent
+  again after resume with a new idempotency key. The acceptance is the same
+  single transaction a waiting run's signal already uses, so the signal is
+  matched to the wait that was open when it arrived, never by timestamp, and a
+  signal sent before the wait opened still does not satisfy it. A timeout that
+  passed during the pause no longer wins over a signal accepted during it. Sending
+  the same delivery again after resume with a new key, the earlier workaround, is
+  recorded and not applied a second time. A paused run's signal is still recorded
+  without being accepted when it is sent inside a database transaction (this
+  includes transaction middleware and Laravel's `RefreshDatabase` /
+  `DatabaseTransactions` test traits), and with a custom store that does not
+  implement `AcceptsDurableSignals`. `swarm:signal` now says what happened: accepted
+  while paused, still waiting, a duplicate, or recorded but not accepted and why.
+  When a paused run's last wait closes, its wait summary (`wait_reason`,
+  `waiting_since`, `wait_timeout_at`) is now cleared, including when a child
+  finishes during the pause. See
+  [Signals While Paused](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-waits-and-signals.md#signals-while-paused)
+  and [UPGRADING](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#resuming-a-run-that-was-paused-while-waiting).
+- **`swarm:recover` releases a waiting join through the outbox (#613).** When
+  recovery released a run waiting at a branch join, it committed the release and
+  then pushed the continuation job itself. A worker crash or a failed queue push
+  between the two left a queued-hierarchical run with durable `pending` and
+  history `waiting`, which no recovery sweep selects, so it never finished. The
+  release and the continuation's outbox row now commit in one transaction, as
+  every other join release already does. If the outbox write fails, that run's
+  release rolls back and the sweep moves on to the next run instead of stopping.
+  The continuation is now pushed by the next `swarm:relay` run, not by
+  `swarm:recover`: a recovered join needs `swarm:relay` scheduled to finish, and
+  can wait up to one relay interval longer.
+  A step-durable join is pushed right after commit when
+  `swarm.durable.eager_dispatch` is on (not on the `sync` driver). Recovery of a
+  queued-hierarchical resume whose history lease expired still pushes directly.
+  Runs already stranded this way are not repaired by this change. No schema or
+  configuration change. See
+  [Maintenance](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/maintenance.md#rolling-deploys).
+
+- **Structured-output agents keep their text when nothing decodes (#589).**
+  With `laravel/ai` 1.3, an agent that declares a schema always returns a
+  structured response, with an empty payload when its output was not valid
+  JSON, and that response reads as `"[]"`. Swarm recorded `"[]"` as the step's
+  output, so the model's text was lost from the step, the next agent's input and
+  history, and a hierarchical coordinator failed with "must define a non-empty
+  [start_at] node id" instead of "Hierarchical coordinator output must be valid
+  JSON". Swarm now records the text whenever the structured payload is empty
+  and the text is not, and output guardrails see that same text, so a guardrail
+  that accepted `"[]"` now checks what the model actually said. This also applies on `laravel/ai` 1.0, where a provider
+  whose structured output failed to decode already produced the empty payload,
+  so that output changes from `"[]"` to the model's text there too. A populated
+  payload is recorded exactly as before. The `laravel/ai` constraint stays
+  `^1.0`.
+- The Laravel 13.16 compatibility lane also ignores advisories
+  `PKSA-b41t-wbzk-9q51` (CVE-2026-114509, fixed upstream in Laravel 13.29.0) and
+  `PKSA-4hy6-m98j-dz9f` (CVE-2026-114508, fixed in 13.27.0) in its temporary lane
+  manifest. Both were published on 2026-10-23 and stopped the lane from installing
+  the exact 13.16.0 release that proves the declared floor. The package's
+  requirements and advisory policy are unchanged, and any other advisory against
+  13.16.0 still fails the lane.
+- CI's moving-development lanes (the PR/nightly lane and the moving-dev rows of
+  the real-database jobs) now run Laravel `13.x-dev` with the latest stable
+  `laravel/ai` 1.x release, instead of `laravel/ai`'s unreleased `1.x` branch.
+  That branch's head (laravel/ai#1191, which returns tool failures to the model
+  instead of rethrowing them) failed four native-capability tests on every pull
+  request. The package's requirements are unchanged (#603).
+- Static analysis passes again on Laravel 13.39.0 and later. That release
+  widened `PendingProcess::start()` to return `InvokedProcess|FakeInvokedProcess`,
+  and the parallel stream session's internal process list was typed as real
+  processes only, so `composer analyse` failed on the stable-latest and 13.x-dev
+  lanes. The type now names both. Older 13.x releases' `FakeInvokedProcess` has
+  no `stop()`, so cancelling a session now skips stopping a faked process that
+  lacks it, where it used to fail with an undefined-method error. Real processes
+  are stopped exactly as before.
+- **Resuming a paused durable run no longer advances past an open signal or
+  child-swarm wait (#592).** `resume()` put a run paused in a signal or child
+  wait back to `pending` and queued its next step, which then ran without the
+  signal or the child's outcome. Resume now returns such a run to `waiting`
+  (`DurableResumeResult::isWaiting()` is `true`), and it continues when the
+  signal arrives, the child finishes, or `swarm:recover` releases a timed-out
+  wait, as if it had never been paused. A child that finished while the parent
+  was paused is still honoured on resume. The decision reads the run's open
+  waits with a shared lock, so a wait released at the same moment, such as a
+  child finishing, cannot leave the run waiting on nothing. A signal delivered
+  while the run is paused is accepted at delivery (#601, above). See
+  [UPGRADING](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#resuming-a-run-that-was-paused-while-waiting).
+- **A branch join no longer runs past an open signal or child-swarm wait
+  (#600).** A durable parent waiting at a parallel join that also had an open
+  wait (an application `wait()`, or a child swarm's wait) was released to its
+  join as soon as its branches finished, or by `resume()` or `swarm:recover`, and
+  the join ran without the signal or the child's outcome. The join now waits
+  until every wait is closed and every branch is done; then it is released
+  through the profile's own continuation (the queued-hierarchical `multi_worker`
+  resume included), or by a later `swarm:recover` sweep if that hand-off cannot
+  run. A wait that is never signalled and has no timeout now keeps such a run
+  `waiting`: give it a timeout, or close it. `swarm:recover` no longer selects a
+  run with an open wait, so it neither releases nor re-sweeps it every pass.
+  Under `fail_run`, a branch that fails still fails the parent at once, open
+  wait or not, as `Bus::batch()` fails on its first failure; a join is never
+  released past that failure, and if the failing worker dies before failing the
+  parent, `swarm:recover` fails it instead of joining it. After a signal is
+  accepted, a child swarm finishes, or a wait times out while another wait is
+  still open or the run is still at its branch boundary, the run's history now
+  stays `waiting` instead of `pending`. No configuration or schema change. See
+  [UPGRADING](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#a-branch-join-waits-for-open-waits).
+- A paused durable run is no longer put back to `waiting` when one of several
+  open waits is released while it is paused, for example by a child finishing
+  (#592). It stays paused, with its wait summary updated, until it is resumed.
+- **A wait closing while its run fans out no longer deadlocks (#611).** A
+  durable step that had called `wait()` could still fan out to parallel branches,
+  and a signal, a wait timeout or a child's outcome closing that wait at the same
+  moment locked the run and context rows in the opposite order to the fan-out
+  (and, for top-level parallel and step-durable hierarchical fan-outs, the history
+  row too). MySQL or Postgres then aborted one side with a deadlock. The fan-out
+  now locks the run row before anything else, so the closer waits for it. A custom
+  `DurableRunStore`, or code that calls `waitForBranches()` inside its own
+  transaction, must follow the same order: see
+  [UPGRADING](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#a-wait-closing-while-its-run-fans-out).
+- **A signal whose acceptance fails can be sent again (#611).** The signal row
+  was recorded before the transaction that accepts it, so when that transaction
+  failed (a deadlock, a lock timeout, a crash) the signal stayed recorded and
+  sending it again with the same idempotency key came back as a duplicate: the
+  signal was lost. The database store now records it inside the acceptance
+  transaction, after the wait and run rows are locked, so a failed acceptance
+  leaves nothing and the same key is accepted once. Inside an application
+  transaction that catches the failure and commits, the acceptance is rolled back
+  to its own savepoint too: Laravel does not roll a nested transaction back on a
+  lock-wait timeout. Every outcome that does not fail returns what it returned
+  before, `$result->signal` included. Atomic acceptance is the new optional store
+  capability `Contracts\AcceptsDurableSignals`; a custom store without it keeps
+  the earlier behaviour. See
+  [UPGRADING](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#a-wait-closing-while-its-run-fans-out).
+- **On MySQL, a write that changes nothing is no longer read as a lost lease
+  (#609).** MySQL counts the rows an `UPDATE` changes, not the rows it matches,
+  and Laravel does not ask it for matched rows. So a lease-guarded write whose
+  values were all already stored came back as 0 and was treated as a lost lease.
+  Two such writes failed in practice. A `queue()` `multi_worker` hierarchical run
+  could not finish its continuation or, under `fail_run`, fail its parent: the
+  lease's node-state write left the current node as it was, and
+  `LostDurableLeaseException` was thrown. A queued or durable step that finished
+  within the same second it started also had its history lease renewal rejected,
+  so the run was left `running` with no worker driving it. Both stores now
+  re-read the lease guard, under a row lock, when a guarded write changes no row.
+  A lease that is still held counts as written; a lease another worker took or
+  that expired is refused as before. Postgres and SQLite already reported matched
+  rows and are unaffected. No schema change. Runs this left stranded before you
+  upgrade are not all recovered on their own. A `multi_worker` continuation left
+  `running` is dispatched again by `swarm:recover` once its lease and grace period
+  expire, and now finishes. A `fail_run` parent left `pending` while its history
+  shows `waiting`, and a queued run without a durable row left `running`, are not
+  picked up by `swarm:recover`: cancel the durable parent with `swarm:cancel` and
+  dispatch those runs again.
+
 ## v0.28.1 - 2026-10-10
 
 Post-ship fixes for v0.28.0 found against a live model: make the

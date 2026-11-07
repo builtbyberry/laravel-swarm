@@ -203,7 +203,9 @@ app-level audit listeners can record deletions before they happen. Use
 into the wider compliance evidence chain.
 
 `swarm:relay` is required — durable runs stall permanently if the relay is
-not running. It also drains the audit outbox and terminal callback deliveries,
+not running. (With [eager dispatch](configuration.md#durable-eager-dispatch) on,
+the relay is the recovery sweep for lost pushes rather than the delivery path,
+and is still required.) It also drains the audit outbox and terminal callback deliveries,
 so a single schedule covers all three lanes. Use
 `swarm:relay --type=audit`, `--type=callback`, or `--type=step` to drain a
 single lane during focused recovery.

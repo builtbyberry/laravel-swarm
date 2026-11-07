@@ -38,6 +38,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\StreamEventMapper;
 use BuiltByBerry\LaravelSwarm\Streaming\StreamStepAccumulator;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
+use BuiltByBerry\LaravelSwarm\Support\AgentResponseOutput;
 use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\NativeAgentInvoker;
@@ -87,9 +88,10 @@ class DurableBranchAdvancer
         protected NativeOutcomeValidator $outcomes,
         protected NativeCitationEvidence $citations,
         protected NativeInputManager $nativeInputs,
+        protected DurableBranchAdmission $admission,
     ) {}
 
-    public function advanceBranch(string $runId, string $branchId): void
+    public function advanceBranch(string $runId, string $branchId, ?int $outboxEntryId = null): void
     {
         $run = $this->runs->requireRun($runId);
         $branch = $this->durableRuns->findBranch($runId, $branchId);
@@ -109,10 +111,16 @@ class DurableBranchAdvancer
         }
 
         $stepLeaseSeconds = $this->runs->validateStepTimeoutSeconds((int) $run['step_timeout_seconds']);
-        $token = $this->durableRuns->acquireBranchLease($runId, $branchId, $stepLeaseSeconds);
+        $token = $this->acquireAdmittedBranchLease($runId, $branchId, $stepLeaseSeconds);
 
         if ($token === null) {
             return;
+        }
+
+        // Settle the directly pushed job's outbox entry as soon as the lease is held,
+        // before any work, so the relay never redispatches it.
+        if ($outboxEntryId !== null) {
+            $this->outbox->settle($outboxEntryId, $runId);
         }
 
         // Per-swarm durable-streaming opt-in, pinned on the run row at start (#310);
@@ -189,6 +197,7 @@ class DurableBranchAdvancer
 
                     $startedAt = MonotonicTime::now();
                     $step = null;
+                    $sink = null;
 
                     try {
                         $this->stepsRecorder->started($state, (int) $branch['step_index'], $branch['agent_class'], $branch['input']);
@@ -217,9 +226,12 @@ class DurableBranchAdvancer
                             // it runs the unchanged blocking prompt(). The void above already ran for
                             // any pinned run regardless of the kill-switch, so a retraction is never
                             // dropped. Both shapes return [output, usage, snapshot].
-                            [$output, $usage, $snapshot, $citationEvidence, $nativeResult] = $this->nodeStream->streamingActive($durableStreaming)
-                                ? $this->streamBranchAgent($state, $agent, $branch, $snapshot, $this->nodeStream->sinkFor($runId, $branchNodeId, $branchEpoch))
-                                : $this->promptBranchAgent($state, $agent, $branch, $snapshot);
+                            if ($this->nodeStream->streamingActive($durableStreaming)) {
+                                $sink = $this->nodeStream->sinkFor($runId, $branchNodeId, $branchEpoch);
+                                [$output, $usage, $snapshot, $citationEvidence, $nativeResult] = $this->streamBranchAgent($state, $agent, $branch, $snapshot, $sink);
+                            } else {
+                                [$output, $usage, $snapshot, $citationEvidence, $nativeResult] = $this->promptBranchAgent($state, $agent, $branch, $snapshot);
+                            }
                         } finally {
                             ActiveRunContext::exit();
                         }
@@ -253,6 +265,10 @@ class DurableBranchAdvancer
                             nativeResult: $nativeResult,
                         );
                         $this->coordinator->commitMemory($replay, $runId);
+                        // Write any batched deltas before the branch is marked completed
+                        // below: completion makes the join eligible, and the join's
+                        // checkpoint seals this branch's rows.
+                        $sink?->flush();
 
                         $this->connection->transaction(function () use ($runId, $branch, $branchId, $token, $output, $usage, $durationMs, $step, $context, $state): void {
                             $evidence = $this->capture->citationEvidence($step->citationEvidence, $context);
@@ -324,6 +340,11 @@ class DurableBranchAdvancer
             );
 
             if ($shouldDispatch) {
+                // The branch's terminal write has been made: free its slot under the
+                // fan-out cap. Runs after the swarm connection's outermost commit, in its
+                // own transaction, and never throws — a lost reconcile is repaired by the
+                // next one or by swarm:recover.
+                $this->admission->reconcileAfterCommit($runId);
                 $run = $this->runs->requireRun($runId);
                 $this->hierarchical->dispatchWaitingBoundary($run, false);
             }
@@ -331,6 +352,35 @@ class DurableBranchAdvancer
         } finally {
             // Never let a failure in fenced persistence or parent/join dispatch restore retries.
             NativeOutcomeValidator::rethrowIfUnsupported($unsupportedOutcome);
+        }
+    }
+
+    /**
+     * Lease the branch unless the fan-out cap is holding it. The held check is made
+     * after the lease UPDATE, in the same transaction, and reads committed state even
+     * when this runs inside a caller's older snapshot (see isHeld()); a held
+     * branch rolls the lease back (fields and attempt count) before anything else
+     * happens — no settle, no agent. Covers stale and duplicate deliveries, including
+     * a job from an earlier loop pass that reuses the branch id.
+     */
+    protected function acquireAdmittedBranchLease(string $runId, string $branchId, int $stepLeaseSeconds): ?string
+    {
+        if (! $this->admission->leaseNeedsHeldCheck($runId)) {
+            return $this->durableRuns->acquireBranchLease($runId, $branchId, $stepLeaseSeconds);
+        }
+
+        try {
+            return $this->connection->transaction(function () use ($runId, $branchId, $stepLeaseSeconds): ?string {
+                $token = $this->durableRuns->acquireBranchLease($runId, $branchId, $stepLeaseSeconds);
+
+                if ($token !== null && $this->admission->isHeld($runId, $branchId)) {
+                    throw new DurableBranchHeldException;
+                }
+
+                return $token;
+            });
+        } catch (DurableBranchHeldException) {
+            return null;
         }
     }
 
@@ -355,7 +405,7 @@ class DurableBranchAdvancer
             $snapshot = $this->snapshots->appendToolCall($snapshot, $toolCall);
         }
 
-        return [(string) $response, $response->usage->toArray(), $snapshot,
+        return [AgentResponseOutput::text($response), $response->usage->toArray(), $snapshot,
             $this->citations->response($response, $state->context->runId, (int) $branch['step_index'], $agent::class,
                 is_string($branch['node_id'] ?? null) ? $branch['node_id'] : (string) $branch['branch_id']),
             $this->stepsRecorder->nativeResult($response)];

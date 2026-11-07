@@ -94,6 +94,10 @@ This is required — not optional. A durable run stalls permanently if the relay
 is not running. See [Timeouts And Database Requirements](#timeouts-and-database-requirements)
 for the full relay reference, including how to recover from a queue outage.
 
+By default each step waits for the next relay run before it is queued, so steps
+start at most once per relay interval. For real-time workflows, turn on
+[eager dispatch](#eager-dispatch) rather than scheduling the relay more often.
+
 ### 4. Schedule recovery
 
 The recovery command finds runs whose queue workers died after checkpointing but
@@ -105,8 +109,9 @@ Schedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping(max(1
 ```
 
 Both commands also own finite atomic leases, covering manual and supervisor
-invocation. Size the lease above the worst-case command duration and use a
-shared store on multiple hosts; see [Command overlap leases](maintenance.md#command-overlap-leases).
+invocation (`swarm:relay` takes one per outbox lane, held only while that lane
+drains a batch). Size the lease above the worst-case recovery sweep and relay
+drain batch and use a shared store on multiple hosts; see [Command overlap leases](maintenance.md#command-overlap-leases).
 
 See [Pause, Resume, Cancel, And Recover](#pause-resume-cancel-and-recover) for
 what recovery covers and how it handles durable parallel branches.
@@ -313,6 +318,58 @@ follows. Applying `#[DurableStreaming]` to a topology that does not yet stream *
 loud at dispatch** — it never silently pins the opt-in and no-ops. Non-durable
 (`run()`/`queue()`) execution is unaffected.
 
+
+### Batched causal-log writes
+
+By default every streamed event is its own `INSERT` into `swarm_stream_events`,
+written the moment it is emitted. A token stream therefore costs one write per
+delta. Set `SWARM_DURABLE_STREAM_BATCHING=true`
+(`swarm.durable.stream_batching.enabled`, default `false`) to write text and
+reasoning deltas in batches instead, one multi-row `INSERT` per batch. Try this
+before reaching for the kill switch when the table is hot.
+
+Batching changes **when** a reader of `swarm_stream_events` (such as
+`SwarmHistory::replay()` or a `CausalLogView`) can see an event. It does not change
+what is written or in what order. With batching on, for each node attempt:
+
+- **The first event is written at once**, so a reader always sees a node start.
+- **Every event that is not a delta is written at once**: a node opening or
+  closing, a tool call or result, a text or reasoning end, a citation, a
+  provider-tool event. It goes out in the same `INSERT` as the deltas held before
+  it, so order is unchanged.
+- **Text and reasoning deltas are held**, then written together when any of these
+  happens first:
+  - `max_events` deltas are held (default 50, at most 100);
+  - a delta arrives while the oldest held delta is `max_age_ms` old (default 250).
+    The arriving delta is written with them;
+  - the node's step succeeds: its stream has finished and its guardrails passed.
+- **No `INSERT` carries more than `max_bytes` of encoded payload** (default
+  256 KiB). When the next event would take it past that, the held deltas are
+  written first. A single event larger than `max_bytes` is written on its own.
+- **Everything a node attempt emitted is written before that node's seal
+  barrier**, and a branch's events before the branch is marked completed.
+
+The age limit is checked **when an event arrives**. There is no timer, so it
+limits how much emission time one batch spans, not how long a reader waits. If a
+provider goes quiet mid-text, the deltas it already sent wait until its next
+event or the end of the node. During that pause a reader can see up to
+`max_age_ms` of emitted text (at most `max_events` deltas) less than the provider
+has sent. Tool calls and other structural events are never held, so long tool
+runs do not hide text emitted before them.
+
+If a node attempt fails, including a guardrail rejecting its output, any deltas
+it was still holding are dropped, exactly as when the worker process dies. What was already written stays retractable: the
+resumed attempt voids it with a `node_reexecuted` edge, as it does without
+batching.
+
+Batching settings are read once per node attempt, so changing them, or the kill
+switch, affects the next attempt and never the one in flight. A worker reads them
+from its booted configuration: after changing the environment, rebuild the config
+cache and restart workers (`php artisan config:cache` then `php artisan
+queue:restart`) for the change to reach them. Turning batching
+off returns to one `INSERT` per event, exactly as before. Batching does not
+change the table, the seal barriers, compaction or the cold archive.
+
 ## Durable Hierarchical Parallel Flow
 
 A hierarchical durable run can contain route-plan `parallel` nodes. Those
@@ -342,6 +399,20 @@ Recovery also understands this boundary. If a branch checkpoints successfully
 but the worker exits before dispatching the parent join, `swarm:recover` can
 release the waiting parent once every branch row is terminal.
 
+A parent at this boundary that also has an open wait (an application `wait()`,
+or a child swarm's wait) is not released to its join until every wait is closed:
+branch completion, resume and `swarm:recover` all leave it `waiting`, and
+recovery does not select it. When the last wait closes, by signal, by timeout or
+by the child finishing, the join is released if the branches are done, or by the
+last branch to finish otherwise; if that hand-off cannot run (for example the
+attempt after the closer's commit fails), `swarm:recover` releases the join on a
+later sweep. A wait that is never signalled and has no timeout keeps the run
+`waiting` at its join; `php artisan swarm:inspect <run-id> --json` shows it. The one exception is `fail_run`: a branch that
+fails still fails the parent at once, open wait or not, and no join is released
+past that failure; if the failing worker dies before failing the parent,
+`swarm:recover` fails it (once any open wait has closed). See
+[Durable Waits And Signals](durable-waits-and-signals.md#edge-cases).
+
 Active route plans and branch outputs can contain worker prompts and
 intermediate outputs. Treat durable runtime tables as sensitive operational
 storage and keep capture settings and retention windows aligned with the data
@@ -350,6 +421,130 @@ being processed.
 See [Durable Hierarchical Approval](../examples/durable-hierarchical-approval/README.md)
 for a copy-paste example with a coordinator, two branch reviewers, and a join
 summarizer.
+
+### Capping branch fan-out
+
+By default every branch of a parallel node is dispatched the moment the parent
+reaches it, so a wide fan-out lands on the queue — and on your provider — as one
+burst. `swarm.durable.parallel.max_concurrent_branches`
+(`SWARM_DURABLE_PARALLEL_MAX_CONCURRENT_BRANCHES`) caps that:
+
+```env
+SWARM_DURABLE_PARALLEL_MAX_CONCURRENT_BRANCHES=4
+```
+
+It is off by default (`null`, unlimited). With it set to `N`:
+
+- the first `N` branches are dispatched at the fan-out, and the rest are written
+  as **held** outbox rows;
+- each time a branch finishes — completes, or fails for good — one held branch is
+  released into its slot, on the relay or by eager dispatch, whichever applies;
+- so at most `N` branches of the fan-out are **in flight**: admitted and not yet
+  finished. A branch waiting for its retry still holds its slot.
+
+Every branch row is still recorded at the fan-out, so the parent waits for all of
+them at the join exactly as before. The cap governs concurrency only: the
+configured failure policy (`collect_failures`, `partial_success`, `fail_run`)
+decides the outcome the same way it does uncapped. Held branches are never
+released by the clock — not at the run's deadline either — only into a free slot.
+No job can run a held branch: a stray or duplicate job for one is refused before
+its agent starts.
+
+**Sizing.** The cap is per fan-out, not global: two capped runs can each have `N`
+branches in flight. What it does is stop one wide fan-out from taking every
+branch-queue worker and from dumping all its branches on the queue at once.
+Choose `N` below the workers serving the branch queue
+(`swarm.durable.parallel.queue.*`) so other runs keep capacity. A limit across all
+runs — a provider's rate limit, for example — comes from the number of branch-queue
+workers or queue rate-limiting middleware, not from this key.
+
+Size the run timeout for the stretched fan-out: a capped fan-out takes roughly
+`ceil(branches / N)` times its slowest branch. The run's deadline (`timeout_at`) is
+fixed when it starts and the cap does not extend it; a run that passes its deadline
+mid-fan-out still runs its remaining branches, then fails as timed out at the join.
+
+**Cost.** With the cap unset, each branch pays two indexed reads of the run's held
+rows and takes no lock. With it set, each lease and each release reads the run's held
+rows (linear in how many are held), and each release takes a short lock on the run
+row — about 10% more queries per branch in the package's own measurements.
+
+**What it does not cap.** Only step-durable hierarchical fan-outs (dynamic and
+static hierarchical). Top-level `parallel` durable runs, `queue()`
+`multi_worker` coordination, and the streaming branch cap
+(`SWARM_PARALLEL_STREAMING_MAX_BRANCHES`) are unaffected.
+
+**Requirements.**
+
+- The bundled database run store and outbox, on the same database connection as
+  the durable runtime. A cap with a custom `DurableRunStore` or `DurableOutbox`
+  binding is rejected when a durable run starts. A value that is not a positive
+  integer is rejected there too.
+- `swarm:recover` scheduled. Releasing happens after a finished branch commits; if
+  a worker dies in between, `swarm:recover` releases the held branches into the
+  free slots (never past the cap — this sweep visits every run holding branches and
+  is not bounded by `--limit`). Without it, a capped run can wait until another of
+  its branches finishes.
+- A real commit. Held branches are released only after the finished branch's
+  transaction commits. Test suites that wrap each test in a transaction that never
+  commits (`RefreshDatabase`, `DatabaseTransactions`) will see capped fan-outs stall:
+  leave the cap unset in those suites (for example
+  `<env name="SWARM_DURABLE_PARALLEL_MAX_CONCURRENT_BRANCHES" value=""/>` in
+  `phpunit.xml`) or use `DatabaseMigrations`. See [Testing](testing.md).
+
+**Operating it.** `swarm:health --durable` shows a **Held branches** line (count,
+runs, oldest). Held rows are not relay work, so they never count toward the
+**Outbox relay** pending or aging warning. `swarm:recover` reports the runs whose
+held branches it released together with the runs it redispatched, in its output and
+in the `command.recover` audit event's `recovered_run_ids`.
+
+**If the configuration changes under running runs.** Two cases behave differently:
+
+- *The value becomes invalid* (say, `0`). Capped runs are not failed. Every release
+  fails and is reported as *Durable branch admission failed to reconcile run […]*,
+  so held branches stay held, and the next fan-out's step job fails with the
+  configuration error and is retried by the queue and `swarm:recover`. Nothing is
+  lost: correct the value or unset it, then run `swarm:recover`, which releases the
+  held branches and lets the stalled fan-outs proceed.
+- *The persistence becomes unsupported* (a custom `DurableRunStore` or
+  `DurableOutbox` binding, or a different connection). Admission switches off
+  without an error: held branches are no longer released, refused or excluded from
+  recovery, so after its grace period `swarm:recover` redispatches them like any
+  other pending branch — without the cap — and new capped fan-outs fail. Unsetting
+  the cap does not undo this; restore the bundled bindings on one connection. Their
+  held outbox rows stay behind in the bundled table until the run is pruned.
+
+**Turning it on, and rolling back.**
+
+- Set the cap only after every worker and the `swarm:recover` scheduler run this
+  version. Older workers neither release held branches nor refuse to run them, and
+  older `swarm:recover` runs them after its grace period, without the cap.
+- Turning the cap off (`null`) is safe at any time on this version: the next
+  release — when a branch finishes, on resume, or from `swarm:recover` — releases
+  everything held.
+- Before rolling back to a version without the cap, drain held branches: set the
+  cap to `null`, resume or cancel any paused capped runs (a paused run releases
+  nothing), run `swarm:recover`, and confirm `swarm:health --durable` shows none
+  held.
+- If you already rolled back without draining, older `swarm:recover` runs the held
+  branches after its grace period, uncapped, but their outbox rows stay behind and
+  older `swarm:health` and `swarm:recover` will report them as aging relay backlog.
+  Release them by hand — use your configured outbox table
+  (`swarm.tables.durable_outbox`) and run the statement in the same session time
+  zone as the application's database connection (UTC by default):
+
+  ```sql
+  -- MySQL
+  UPDATE swarm_durable_outbox
+     SET available_at = UTC_TIMESTAMP()
+   WHERE dispatch_type = 'branch' AND available_at = '2038-01-01 00:00:00';
+
+  -- PostgreSQL
+  UPDATE swarm_durable_outbox
+     SET available_at = (now() AT TIME ZONE 'UTC')
+   WHERE dispatch_type = 'branch' AND available_at = '2038-01-01 00:00:00';
+  ```
+
+  The relay then dispatches them, uncapped.
 
 ## Operational State
 
@@ -616,6 +811,38 @@ parent run back to `pending` and dispatches the join step. Cancelling a waiting
 run marks non-terminal branches cancelled so stale branch workers become inert
 when they try to checkpoint.
 
+A run waiting on a signal or a child swarm keeps that wait open while it is
+paused. Resuming it returns it to `waiting` (`$resume->isWaiting()` is `true`)
+rather than queuing its next step, so it continues only when the signal arrives,
+the child finishes, or `swarm:recover` releases the wait as timed out:
+
+- `swarm:recover` does not select timed-out waits of a paused run. Once the run
+  is resumed they are eligible again, so a timeout that passed during the pause
+  is released by the next recovery pass.
+- A child that finished while its parent was paused is honoured on resume: the
+  parent resumes straight to `pending` with the child's outcome recorded.
+- A paused run stays paused while its waits change; only resume moves it.
+- A signal delivered while the run is paused is accepted when the run has an
+  open wait of that name: the wait closes, the run stays paused, and resume
+  queues its next step. Sent inside a database transaction, or to a store
+  without atomic acceptance, it is recorded instead and must be sent again
+  after resume with a new idempotency key. See
+  [Signals While Paused](durable-waits-and-signals.md#signals-while-paused).
+- Resume decides from a locked read of the run's open waits, so a wait released
+  at the same moment cannot leave the run waiting on nothing. If your application
+  calls `resume()` inside a transaction that already holds the run (for example
+  one that also paused it, or signalled it), a worker releasing one of its waits
+  at that moment, or another process accepting a signal for it, can deadlock
+  with it; the database aborts one side completely, and retrying it is safe.
+  Let Laravel retry the whole transaction:
+
+  ```php
+  DB::transaction(function () use ($operator, $runId) {
+      $operator->signal($runId, 'approval_received', ['approved' => true], 'approval-123');
+      $operator->resume($runId);
+  }, attempts: 3);
+  ```
+
 `swarm:recover` is the safety net for stranded durable runs. Schedule it
 frequently:
 
@@ -831,8 +1058,35 @@ php artisan swarm:relay --drain-until-empty
 php artisan swarm:relay --drain-until-empty --max-attempts=10
 ```
 
+A scheduled relay can take the durable lane between this run's batches; the
+lane is then skipped for the rest of the run, the command exits 1 and lists it
+in `contended_lanes`. Treat that as unfinished: pass `--type=step --type=branch
+--type=queued_resume` (or pause the schedule entry that drains the lane) and
+re-run until the command exits 0.
+
 `--max-attempts` iterations run consecutively with no sleep. Size N for a short
 recovery window rather than a large one-off number during a sustained outage.
+
+### Eager dispatch
+
+With `swarm.durable.eager_dispatch` (`SWARM_DURABLE_EAGER_DISPATCH`, default
+`false`) enabled, the next step or branch job is pushed the moment the checkpoint
+that wrote its outbox row commits, so a run no longer waits for the relay between
+steps. The job deletes its own outbox row once it acquires its lease, and the relay
+only picks up rows whose push was lost. Keep `swarm:relay` scheduled
+`everyMinute()`: it is the recovery path, not the delivery path. A second push of
+the same step (eager plus relay) is a no-op, because a step can be leased only
+once.
+
+When a step ends at a declared wait or a child-swarm dispatch, nothing is pushed
+for the next step: the run is waiting, and the signal, the child's completion, or
+the wait's timeout queues the continuation itself.
+
+See [Durable Eager Dispatch](configuration.md#durable-eager-dispatch) for the
+reservation-timeout trade-off, how lost pushes are recovered, and what
+`swarm:relay` and `swarm:health` report with the flag on.
+
+### Schedule recovery and pruning
 
 Schedule recovery so runs that were checkpointed but whose queue job was never
 dispatched are rediscovered and retried:
@@ -862,7 +1116,8 @@ inspection boundary.
 - use database-backed persistence and run the package migrations
 - put durable swarms on a dedicated queue when the workflow is important or
   provider calls are slow
-- schedule `swarm:relay` every minute (required — dispatches jobs after checkpoint)
+- schedule `swarm:relay` every minute (required — dispatches jobs after checkpoint,
+  or recovers lost pushes when [eager dispatch](#eager-dispatch) is on)
 - schedule `swarm:recover` every few minutes
 - schedule `swarm:prune` daily, or more often if retention windows are short
 - keep the queue worker timeout above the longest expected durable step
@@ -888,7 +1143,11 @@ the default enterprise rollout path.
 
 Durable dispatch depends on the relay. If `swarm:relay` is not scheduled, durable
 runs stall permanently after the first checkpoint — the outbox row is written but
-never drained. Run `php artisan swarm:relay` once to unblock a stalled run, then
+never drained. With [eager dispatch](#eager-dispatch) on, runs keep moving without
+the relay, so a missing schedule is easy to miss: only a lost push, the queued
+hierarchical resume, and work no job settled stall, and `swarm:health --durable`
+reports them only once their reservation is older than twice the reservation
+timeout. Run `php artisan swarm:relay` once to unblock a stalled run, then
 add it to the scheduler for ongoing operation. `swarm:health --durable` warns when
 unclaimed outbox rows are stale, making it easy to detect a missing relay entry.
 

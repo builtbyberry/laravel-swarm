@@ -8,6 +8,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
+use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
 use BuiltByBerry\LaravelSwarm\Enums\DurableParallelFailurePolicy;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
@@ -237,18 +238,70 @@ class DurableSwarmManager
      */
     public function recover(?string $runId = null, ?string $swarmClass = null, int $limit = 50): array
     {
-        // Recovery dispatches directly (not via the outbox) because it is already a
-        // catch-up mechanism: it reads committed DB state and dispatches what is overdue.
-        // A direct dispatch here cannot produce the "state changed but job never queued"
-        // hazard the outbox guards against — the state is already committed before recover()
-        // is called. Double-dispatch is safe because acquireLease() is idempotent.
+        // Ordinary recovery redispatches committed work directly. Waiting-join releases
+        // instead commit their new continuation intent through the shared join release:
+        // see DurableRecoveryCoordinator::recover() and DurableJoinRelease::releaseIfReady().
         return $this->recovery->recover(
             $runId,
             $swarmClass,
             $limit,
             fn (string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null) => $this->jobs->dispatchStep($runId, $stepIndex, $connection, $queue),
             fn (string $runId, string $branchId, ?string $connection = null, ?string $queue = null) => $this->jobs->dispatchBranch($runId, $branchId, $connection, $queue),
+            // A fail_run branch failure whose worker never failed the parent: fail it the
+            // same way that worker would have.
+            fn (array $run, RunContext $context, int $stepLeaseSeconds) => $this->hierarchicalCoordinator->failWaitingParentFromBranches(
+                $run,
+                $context,
+                $stepLeaseSeconds,
+                fn (array $freshRun, string $token, RunContext $context, int $stepLeaseSeconds, ?string $parentNodeId) => $this->advancer->failCurrentRunFromBranchFailures($freshRun, $token, $context, $stepLeaseSeconds, $parentNodeId),
+            ),
         );
+    }
+
+    /**
+     * Apply the durable parallel failure policy at a queued-hierarchical join before
+     * its continuation runs, as DurableHierarchicalCoordinator::runStep() does for the
+     * step-durable join: the same branchJoinShouldFail() decides, and the same
+     * DurableRunTerminalHandler::failCurrentRunFromBranchFailures() writes the failure,
+     * so both profiles leave the same record and events.
+     *
+     * Returns true when the join must fail, whether or not this call failed it: the
+     * caller must then not run the continuation. The run is failed under the durable
+     * row's lease, taken with LeaseManager::acquireCoordinationLease(). When
+     * another holder has that lease nothing is written; the caller's history
+     * continuation lease stays held until it expires, and swarm:recover then
+     * re-dispatches the resume, which decides again. A worker that dies between taking
+     * the durable lease and the failure commit leaves the same shape: nothing written,
+     * both leases left to expire, and the run failed by the resume recovery sends.
+     *
+     * @internal Called by SwarmRunner::resumeQueuedHierarchicalAfterJoin().
+     */
+    public function failQueueHierarchicalJoinIfPolicyFails(string $runId, RunContext $context): bool
+    {
+        $run = $this->durableRuns->find($runId);
+
+        if ($run === null
+            || ($run['coordination_profile'] ?? '') !== CoordinationProfile::QueueHierarchicalParallel->value
+            || ! is_string($run['current_node_id'] ?? null)) {
+            return false;
+        }
+
+        $parentNodeId = $run['current_node_id'];
+
+        if (! $this->hierarchicalCoordinator->branchJoinShouldFail($run, $context, $parentNodeId)) {
+            return false;
+        }
+
+        $lease = LeaseManager::acquireCoordinationLease($this->durableRuns, $run);
+
+        if ($lease === null) {
+            return true;
+        }
+
+        $fresh = $this->durableRuns->find($runId) ?? $run;
+        $this->advancer->failCurrentRunFromBranchFailures($fresh, $lease['token'], $context, $lease['step_timeout'], $parentNodeId);
+
+        return true;
     }
 
     public function updateQueueRouting(string $runId, ?string $connection, ?string $queue): void
@@ -280,18 +333,19 @@ class DurableSwarmManager
         $this->children->afterChildIntentForTesting($hook);
     }
 
-    public function advance(string $runId, int $expectedStepIndex): void
+    public function advance(string $runId, int $expectedStepIndex, ?int $outboxEntryId = null): void
     {
         $this->advancer->advance(
             $runId,
             $expectedStepIndex,
             fn (array $run, Swarm $swarm, RunContext $context, int $nextStepIndex): bool => $this->enterDeclaredDurableBoundary($run, $swarm, $context),
+            $outboxEntryId,
         );
     }
 
-    public function advanceBranch(string $runId, string $branchId): void
+    public function advanceBranch(string $runId, string $branchId, ?int $outboxEntryId = null): void
     {
-        $this->branchAdvancer->advanceBranch($runId, $branchId);
+        $this->branchAdvancer->advanceBranch($runId, $branchId, $outboxEntryId);
     }
 
     /**

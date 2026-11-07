@@ -27,19 +27,32 @@ class AdvanceDurableSwarm implements ShouldQueue
     use Queueable;
     use SerializesModels;
 
+    /**
+     * The outbox entry this job was pushed for directly on commit, deleted once
+     * the job acquires its lease — including the step of a join swarm:recover
+     * released, when eager dispatch pushes it. Null for relay pushes and for
+     * swarm:recover's direct redispatches, which own no entry.
+     * A declared (not promoted) property so a payload queued without
+     * it restores to null: SerializesModels restores declared properties only
+     * and never runs the constructor.
+     */
+    public ?int $outboxEntryId = null;
+
     public function __construct(
         public string $runId,
         public int $stepIndex,
         ?int $enqueuedAtMs = null,
+        ?int $outboxEntryId = null,
     ) {
         $this->enqueuedAtMs = $enqueuedAtMs ?? self::telemetryEpochMilliseconds();
+        $this->outboxEntryId = $outboxEntryId;
         $this->applyDurableAdvanceJobTimeout();
     }
 
     public function handle(DurableSwarmManager $manager): void
     {
         $this->withoutNativeOutcomeRetry(fn () => $this->withSwarmJobTelemetry(function () use ($manager): void {
-            $manager->advance($this->runId, $this->stepIndex);
+            $manager->advance($this->runId, $this->stepIndex, $this->outboxEntryId);
         }));
     }
 

@@ -29,7 +29,7 @@ use Illuminate\Database\Connection;
  * collaborator graph. It instantiates one DurableRunContext and one DurablePayloadCapture
  * and passes them into every collaborator in the following order:
  *
- *   runContext → payloads → signalHandler / retryHandler → inspector → recorder → rest
+ *   runContext → payloads → branches / joinRelease → signalHandler / retryHandler → inspector → recorder → rest
  *
  * Every service that belongs to DurableSwarmManager must receive its DurableRunContext
  * from this factory — never from the container — so that the whole graph shares a single
@@ -61,6 +61,26 @@ class DurableManagerCollaboratorFactory
         Application $application,
     ): DurableManagerCollaborators {
         $outbox = $this->application->make(DurableOutbox::class);
+        $jobs = $this->application->makeWith(DurableJobDispatcher::class, [
+            'config' => $config,
+        ]);
+        // db.transactions is resolved per push, not here: the testing traits rebind
+        // it after the durable graph is built.
+        $eager = $this->application->makeWith(DurableEagerDispatcher::class, [
+            'connection' => $connection,
+            'config' => $config,
+            'jobs' => $jobs,
+            'outbox' => $outbox,
+            'container' => $this->application,
+        ]);
+        $admission = $this->application->makeWith(DurableBranchAdmission::class, [
+            'config' => $config,
+            'durableRuns' => $durableRuns,
+            'outbox' => $outbox,
+            'connection' => $connection,
+            'eager' => $eager,
+            'container' => $this->application,
+        ]);
 
         $runContext = $this->application->makeWith(DurableRunContext::class, [
             'config' => $config,
@@ -71,6 +91,21 @@ class DurableManagerCollaboratorFactory
         $payloads = $this->application->makeWith(DurablePayloadCapture::class, [
             'capture' => $capture,
         ]);
+        $branches = $this->application->makeWith(DurableBranchCoordinator::class, [
+            'config' => $config,
+        ]);
+        // Built before every wait closer and the hierarchical coordinator, so they all
+        // share one instance of what releases a run waiting at a branch boundary to its
+        // join, including the recovery sweep.
+        $joinRelease = $this->application->makeWith(DurableJoinRelease::class, [
+            'durableRuns' => $durableRuns,
+            'runs' => $runContext,
+            'branches' => $branches,
+            'outbox' => $outbox,
+            'eager' => $eager,
+            'connection' => $connection,
+            'container' => $this->application,
+        ]);
         $signalHandler = $this->application->makeWith(DurableSignalHandler::class, [
             'durableRuns' => $durableRuns,
             'historyStore' => $historyStore,
@@ -79,8 +114,9 @@ class DurableManagerCollaboratorFactory
             'capture' => $capture,
             'runs' => $runContext,
             'payloads' => $payloads,
-            'outbox' => $outbox,
             'connection' => $connection,
+            'eager' => $eager,
+            'joinRelease' => $joinRelease,
         ]);
         $retryHandler = $this->application->makeWith(DurableRetryHandler::class, [
             'durableRuns' => $durableRuns,
@@ -88,7 +124,7 @@ class DurableManagerCollaboratorFactory
             'connection' => $connection,
             'capture' => $capture,
             'runs' => $runContext,
-            'outbox' => $outbox,
+            'eager' => $eager,
         ]);
         $inspector = $this->application->makeWith(DurableRunInspector::class, [
             'durableRuns' => $durableRuns,
@@ -106,12 +142,6 @@ class DurableManagerCollaboratorFactory
             'capture' => $capture,
             'runs' => $runContext,
         ]);
-        $jobs = $this->application->makeWith(DurableJobDispatcher::class, [
-            'config' => $config,
-        ]);
-        $branches = $this->application->makeWith(DurableBranchCoordinator::class, [
-            'config' => $config,
-        ]);
         $starter = $this->application->makeWith(DurableSwarmStarter::class, [
             'config' => $config,
             'durableRuns' => $durableRuns,
@@ -122,6 +152,7 @@ class DurableManagerCollaboratorFactory
             'limits' => $limits,
             'runs' => $runContext,
             'jobs' => $jobs,
+            'admission' => $admission,
         ]);
         $children = $this->application->makeWith(DurableChildSwarmCoordinator::class, [
             'durableRuns' => $durableRuns,
@@ -133,7 +164,8 @@ class DurableManagerCollaboratorFactory
             'application' => $application,
             'runs' => $runContext,
             'payloads' => $payloads,
-            'outbox' => $outbox,
+            'eager' => $eager,
+            'joinRelease' => $joinRelease,
         ]);
         $queuedHierarchical = $this->application->makeWith(QueuedHierarchicalDurableCoordinator::class, [
             'config' => $config,
@@ -144,8 +176,8 @@ class DurableManagerCollaboratorFactory
             'runs' => $runContext,
             'branches' => $branches,
             'jobs' => $jobs,
-            'outbox' => $outbox,
             'connection' => $connection,
+            'eager' => $eager,
         ]);
         $boundary = $this->application->makeWith(DurableBoundaryCoordinator::class, [
             'durableRuns' => $durableRuns,
@@ -163,7 +195,7 @@ class DurableManagerCollaboratorFactory
             'payloads' => $payloads,
             'jobs' => $jobs,
             'children' => $children,
-            'outbox' => $outbox,
+            'eager' => $eager,
         ]);
         $recovery = $this->application->makeWith(DurableRecoveryCoordinator::class, [
             'config' => $config,
@@ -175,6 +207,9 @@ class DurableManagerCollaboratorFactory
             'runs' => $runContext,
             'jobs' => $jobs,
             'children' => $children,
+            'admission' => $admission,
+            'connection' => $connection,
+            'joinRelease' => $joinRelease,
         ]);
         $memoryReplayCoordinator = $this->application->make(MemoryReplayCoordinator::class);
         $hierarchical = $this->application->makeWith(DurableHierarchicalCoordinator::class, [
@@ -187,8 +222,10 @@ class DurableManagerCollaboratorFactory
             'runs' => $runContext,
             'branches' => $branches,
             'hierarchical' => $hierarchicalRunner,
-            'outbox' => $outbox,
             'coordinator' => $memoryReplayCoordinator,
+            'eager' => $eager,
+            'admission' => $admission,
+            'joinRelease' => $joinRelease,
         ]);
         $staticHierarchical = $this->application->makeWith(DurableStaticHierarchicalCoordinator::class, [
             'durableRuns' => $durableRuns,
@@ -202,6 +239,7 @@ class DurableManagerCollaboratorFactory
             'hierarchical' => $staticHierarchicalRunner,
             'outbox' => $outbox,
             'coordinator' => $memoryReplayCoordinator,
+            'eager' => $eager,
         ]);
         $terminal = $this->application->makeWith(DurableRunTerminalHandler::class, [
             'durableRuns' => $durableRuns,
@@ -222,7 +260,7 @@ class DurableManagerCollaboratorFactory
             'runs' => $runContext,
             'branches' => $branches,
             'terminal' => $terminal,
-            'outbox' => $outbox,
+            'eager' => $eager,
         ]);
         $executionBuilder = $this->application->makeWith(DurableStepExecutionBuilder::class, [
             'durableRuns' => $durableRuns,
@@ -246,6 +284,8 @@ class DurableManagerCollaboratorFactory
             'recorder' => $recorder,
             'hierarchical' => $hierarchical,
             'outbox' => $outbox,
+            'eager' => $eager,
+            'admission' => $admission,
         ]);
         $advancer = $this->application->makeWith(DurableStepAdvancer::class, [
             'durableRuns' => $durableRuns,
@@ -258,6 +298,7 @@ class DurableManagerCollaboratorFactory
             'executionBuilder' => $executionBuilder,
             'sequential' => $sequentialAdvancer,
             'checkpoints' => $checkpointCoordinator,
+            'outbox' => $outbox,
         ]);
         $branchAdvancer = $this->application->makeWith(DurableBranchAdvancer::class, [
             'durableRuns' => $durableRuns,
@@ -277,6 +318,7 @@ class DurableManagerCollaboratorFactory
             'terminal' => $terminal,
             'coordinator' => $memoryReplayCoordinator,
             'nodeStream' => $this->application->make(DurableNodeStreamRecorder::class),
+            'admission' => $admission,
         ]);
 
         return new DurableManagerCollaborators(

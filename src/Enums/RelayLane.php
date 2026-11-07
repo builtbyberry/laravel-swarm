@@ -21,4 +21,17 @@ enum RelayLane: string
     case Durable = 'durable';
     case Audit = 'audit';
     case Callback = 'callback';
+
+    /**
+     * The command overlap lease key `swarm:relay` takes while it drains this lane.
+     *
+     * Each lane has its own lease, so relays selecting disjoint lanes never
+     * exclude each other; two relays draining the same lane still do.
+     *
+     * @internal The key format is not a public contract.
+     */
+    public function leaseKey(): string
+    {
+        return 'swarm:commands:relay:'.$this->value;
+    }
 }

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Persistence;
 
+use BuiltByBerry\LaravelSwarm\Contracts\AcceptsDurableSignals;
 use BuiltByBerry\LaravelSwarm\Contracts\ChecksCitationStorage;
 use BuiltByBerry\LaravelSwarm\Contracts\ChecksNativeStepResultStorage;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
@@ -12,6 +13,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\StoresDurableNativeStepResults;
 use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostDurableLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Persistence\Concerns\ConfirmsHeldLease;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\InteractsWithJsonColumns;
 use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
 use BuiltByBerry\LaravelSwarm\Responses\CitationEvidenceLimits;
@@ -30,8 +32,9 @@ use Illuminate\Support\Collection;
 /**
  * @internal
  */
-class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStepResultStorage, DurableRunStore, StoresDurableCitationEvidence, StoresDurableNativeStepResults
+class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationStorage, ChecksNativeStepResultStorage, DurableRunStore, StoresDurableCitationEvidence, StoresDurableNativeStepResults
 {
+    use ConfirmsHeldLease;
     use InteractsWithJsonColumns;
 
     protected CitationEvidenceCodec $citations;
@@ -435,6 +438,13 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStep
     public function waitForBranches(string $runId, BranchWaitPayload $payload): void
     {
         $this->connection->transaction(function () use ($runId, $payload): void {
+            // The run row first, before the context, branch and run-state rows: the order a
+            // wait closer takes (wait row, run row, then the context and history it
+            // publishes). Taking the context first here and the run row last deadlocked
+            // with a closer arriving mid-fan-out. The caller must not write the context or
+            // history row before calling this in the same transaction.
+            $this->lockRunRow($runId);
+
             $executionToken = $payload->executionToken;
             $nextStepIndex = $payload->nextStepIndex;
             $parentNodeId = $payload->parentNodeId;
@@ -506,6 +516,43 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStep
     }
 
     public function releaseWaitingRunForJoin(string $runId, int $nextStepIndex): bool
+    {
+        return $this->connection->transaction(function () use ($runId, $nextStepIndex): bool {
+            // An open wait (a signal wait, or a child swarm's child:<id> wait) holds the run
+            // at its join: releasing it would run the join past an unsignalled wait. The wait
+            // rows are read before the run row is written — the order every wait release
+            // takes (wait UPDATE, then syncRunWaitSummary on the run) and the order resume()
+            // takes — with a shared lock, so a release of the same wait in flight is waited
+            // for and then read as closed. Every open row is read and locked, not just the
+            // first.
+            $openWaitIds = $this->waitTable()
+                ->where('run_id', $runId)
+                ->where('status', 'waiting')
+                ->orderBy('id')
+                ->sharedLock()
+                ->pluck('id')
+                ->all();
+
+            if ($openWaitIds !== []) {
+                return false;
+            }
+
+            return $this->releaseWaitingRun($runId, $nextStepIndex);
+        });
+    }
+
+    /**
+     * Move a run waiting at its branch boundary to `pending` so its failure can be
+     * recorded under a fresh lease, whatever waits are still open: a `fail_run` branch
+     * failure fails the parent at once. Concrete-only — the open-wait check of
+     * {@see releaseWaitingRunForJoin()} guards the successful join, not this.
+     */
+    public function releaseWaitingRunForFailure(string $runId, int $nextStepIndex): bool
+    {
+        return $this->releaseWaitingRun($runId, $nextStepIndex);
+    }
+
+    private function releaseWaitingRun(string $runId, int $nextStepIndex): bool
     {
         $timestamp = Carbon::now('UTC');
 
@@ -939,6 +986,99 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStep
 
     public function recoverableBranches(?string $runId = null, ?string $swarmClass = null, int $limit = 50, int $graceSeconds = 300): array
     {
+        $query = $this->recoverableBranchesQuery($runId, $swarmClass, $graceSeconds)
+            ->orderBy('branches.updated_at')
+            ->limit($limit);
+
+        // Cross-run recovery sweep: the coordinator re-dispatches by id and reads
+        // only status/queue fields, never the branch payload. Decrypt non-strictly
+        // so one undecryptable row (a single run's key mismatch) cannot abort the
+        // whole sweep and starve every healthy run in the batch. The branch input is
+        // re-read strictly per-row in findBranch when the redispatched job resumes.
+        return $query->get()
+            ->map(fn (object $record): array => $this->mapBranch($record, strict: false))
+            ->all();
+    }
+
+    /**
+     * recoverableBranches() for runs that may hold branches back under the fan-out
+     * cap: a held branch is pending and unleased, so it would otherwise look
+     * recoverable. Held branches are excluded BEFORE the limit is applied, paging
+     * by (updated_at, id), so a backlog of held rows can never fill the batch and
+     * hide a crashed admitted branch or another run behind it.
+     *
+     * @param  callable(list<string>): array<string, list<string>>  $heldFor  run ids => that run's held branch ids
+     * @return array<int, array<string, mixed>>
+     */
+    public function recoverableBranchesExcluding(callable $heldFor, ?string $runId = null, ?string $swarmClass = null, int $limit = 50, int $graceSeconds = 300): array
+    {
+        if ($limit < 1) {
+            return [];
+        }
+
+        $eligible = [];
+        $after = null;
+        /** @var array<string, list<string>> $held run id => held branch ids, read once per run */
+        $held = [];
+
+        while (count($eligible) < $limit) {
+            $query = $this->recoverableBranchesQuery($runId, $swarmClass, $graceSeconds)
+                ->orderBy('branches.updated_at')
+                ->orderBy('branches.id')
+                ->limit($limit);
+
+            if ($after !== null) {
+                [$afterUpdatedAt, $afterId] = $after;
+                $query->where(function (Builder $query) use ($afterUpdatedAt, $afterId): void {
+                    $query->where('branches.updated_at', '>', $afterUpdatedAt)
+                        ->orWhere(function (Builder $query) use ($afterUpdatedAt, $afterId): void {
+                            $query->where('branches.updated_at', $afterUpdatedAt)
+                                ->where('branches.id', '>', $afterId);
+                        });
+                });
+            }
+
+            $page = $query->get();
+
+            if ($page->isEmpty()) {
+                break;
+            }
+
+            $unseen = array_values(array_diff(
+                array_unique($page->pluck('run_id')->map(static fn (mixed $id): string => (string) $id)->all()),
+                array_keys($held),
+            ));
+
+            if ($unseen !== []) {
+                $held += array_fill_keys($unseen, []);
+                $held = array_replace($held, $heldFor($unseen));
+            }
+
+            foreach ($page as $record) {
+                if (in_array((string) $record->branch_id, $held[(string) $record->run_id] ?? [], true)) {
+                    continue;
+                }
+
+                $eligible[] = $this->mapBranch($record, strict: false);
+
+                if (count($eligible) >= $limit) {
+                    break;
+                }
+            }
+
+            $last = $page->last();
+            $after = [$last->updated_at, $last->id];
+
+            if ($page->count() < $limit) {
+                break;
+            }
+        }
+
+        return $eligible;
+    }
+
+    protected function recoverableBranchesQuery(?string $runId, ?string $swarmClass, int $graceSeconds): Builder
+    {
         $now = Carbon::now('UTC');
         $threshold = $now->copy()->subSeconds($graceSeconds);
         $branchTable = (string) $this->config->get('swarm.tables.durable_branches', 'swarm_durable_branches');
@@ -954,8 +1094,6 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStep
                     ->orWhere('branches.leased_until', '<', $now);
             })
             ->whereNull('runs.finished_at')
-            ->orderBy('branches.updated_at')
-            ->limit($limit)
             ->select('branches.*');
 
         if ($runId !== null) {
@@ -966,14 +1104,76 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStep
             $query->where('runs.swarm_class', $swarmClass);
         }
 
-        // Cross-run recovery sweep: the coordinator re-dispatches by id and reads
-        // only status/queue fields, never the branch payload. Decrypt non-strictly
-        // so one undecryptable row (a single run's key mismatch) cannot abort the
-        // whole sweep and starve every healthy run in the batch. The branch input is
-        // re-read strictly per-row in findBranch when the redispatched job resumes.
-        return $query->get()
-            ->map(fn (object $record): array => $this->mapBranch($record, strict: false))
+        return $query;
+    }
+
+    /**
+     * Lock the run row for the fan-out cap's admission reconcile and return the
+     * fields it decides on, or null when the run is gone. Call as the FIRST
+     * statement of a top-level transaction: the lock serializes reconcilers of one
+     * run, and every later read in that transaction sees state committed before it.
+     *
+     * @return array{status: string, current_node_id: ?string}|null
+     */
+    public function lockRunForAdmission(string $runId): ?array
+    {
+        $query = $this->table()->where('run_id', $runId);
+
+        if ($this->connection->getDriverName() !== 'sqlite') {
+            $query->lockForUpdate();
+        }
+
+        $row = $query->first(['status', 'current_node_id']);
+
+        if ($row === null) {
+            return null;
+        }
+
+        return [
+            'status' => (string) $row->status,
+            'current_node_id' => is_string($row->current_node_id) ? $row->current_node_id : null,
+        ];
+    }
+
+    /**
+     * Branch id => status for one fan-out, without hydrating or decrypting payloads.
+     *
+     * @return array<string, string>
+     */
+    public function branchStatusesFor(string $runId, string $parentNodeId): array
+    {
+        return $this->branchTable()
+            ->where('run_id', $runId)
+            ->where('parent_node_id', $parentNodeId)
+            ->pluck('status', 'branch_id')
+            ->map(static fn (mixed $status): string => (string) $status)
             ->all();
+    }
+
+    /**
+     * Restart the recovery grace period of branches the fan-out cap just released,
+     * so swarm:recover does not mistake them for crashed work before they are leased.
+     *
+     * @param  list<string>  $branchIds
+     */
+    public function touchBranches(string $runId, array $branchIds): void
+    {
+        if ($branchIds === []) {
+            return;
+        }
+
+        $this->branchTable()
+            ->where('run_id', $runId)
+            ->whereIn('branch_id', $branchIds)
+            ->update(['updated_at' => Carbon::now('UTC')]);
+    }
+
+    /**
+     * Whether this store writes through the given connection instance.
+     */
+    public function usesConnection(Connection $connection): bool
+    {
+        return $this->connection === $connection;
     }
 
     public function dueRetryBranches(?string $runId = null, ?string $swarmClass = null, int $limit = 50): array
@@ -1121,23 +1321,45 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStep
 
     public function resume(string $runId): bool
     {
-        $run = $this->find($runId);
-        $nodeId = is_string($run['current_node_id'] ?? null) ? $run['current_node_id'] : null;
-        $hasBranchBoundary = $nodeId !== null && $this->branchTable()
-            ->where('run_id', $runId)
-            ->where('parent_node_id', $nodeId)
-            ->exists();
-        $status = $hasBranchBoundary ? 'waiting' : 'pending';
+        return $this->connection->transaction(function () use ($runId): bool {
+            // An open wait (a signal wait, or a child swarm's child:<id> wait) keeps the run
+            // waiting: resuming to pending would let the next step run without the signal or
+            // the child's outcome. The wait rows are read before the run row is written — the
+            // order every wait release takes (wait UPDATE, then syncRunWaitSummary on the run)
+            // — and with a shared lock, which is a current read even inside an older MySQL
+            // REPEATABLE READ snapshot and waits for a concurrent release of the same wait to
+            // commit instead of reading it as still open. Every open wait row is read and
+            // locked, not just the first: exists() or first() would stop short of a row
+            // another transaction is releasing.
+            $openWaitIds = $this->waitTable()
+                ->where('run_id', $runId)
+                ->where('status', 'waiting')
+                ->orderBy('id')
+                ->sharedLock()
+                ->pluck('id')
+                ->all();
+            $hasOpenWait = $openWaitIds !== [];
 
-        return $this->table()
-            ->where('run_id', $runId)
-            ->where('status', 'paused')
-            ->update([
-                'status' => $status,
-                'pause_requested_at' => null,
-                'resumed_at' => Carbon::now('UTC'),
-                'updated_at' => Carbon::now('UTC'),
-            ]) === 1;
+            // A paused run's cursor and branch rows do not move: no step runs and joins need
+            // a waiting run.
+            $run = $this->find($runId);
+            $nodeId = is_string($run['current_node_id'] ?? null) ? $run['current_node_id'] : null;
+            $hasBranchBoundary = $nodeId !== null && $this->branchTable()
+                ->where('run_id', $runId)
+                ->where('parent_node_id', $nodeId)
+                ->exists();
+            $status = $hasBranchBoundary || $hasOpenWait ? 'waiting' : 'pending';
+
+            return $this->table()
+                ->where('run_id', $runId)
+                ->where('status', 'paused')
+                ->update([
+                    'status' => $status,
+                    'pause_requested_at' => null,
+                    'resumed_at' => Carbon::now('UTC'),
+                    'updated_at' => Carbon::now('UTC'),
+                ]) === 1;
+        });
     }
 
     public function cancel(string $runId): bool
@@ -1241,12 +1463,22 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStep
     public function recoverableWaitingJoins(?string $runId = null, ?string $swarmClass = null, int $limit = 50, int $graceSeconds = 300): array
     {
         $threshold = Carbon::now('UTC')->subSeconds($graceSeconds);
+        $durableTable = (string) $this->config->get('swarm.tables.durable', 'swarm_durable_runs');
+        $waitTable = (string) $this->config->get('swarm.tables.durable_waits', 'swarm_durable_waits');
 
         $query = $this->table()
             ->where('status', 'waiting')
             ->whereNull('finished_at')
             ->whereNotNull('current_node_id')
             ->where('updated_at', '<=', $threshold)
+            // A run with an open wait is held at its join until the wait closes, so it is
+            // not a candidate — excluded here, before the limit, so blocked runs neither
+            // get reselected every sweep nor crowd eligible runs out of it.
+            ->whereNotExists(fn (Builder $waits) => $waits
+                ->select($this->connection->raw('1'))
+                ->from($waitTable)
+                ->whereColumn($waitTable.'.run_id', $durableTable.'.run_id')
+                ->where($waitTable.'.status', 'waiting'))
             ->orderBy('updated_at')
             ->limit($limit);
 
@@ -1312,6 +1544,11 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStep
             ->join($historyTable.' as histories', 'runs.run_id', '=', 'histories.run_id')
             ->where('runs.coordination_profile', CoordinationProfile::QueueHierarchicalParallel->value)
             ->whereNull('runs.finished_at')
+            // Only a run still released to its join: the continuation lease is taken only
+            // while the durable row is 'pending', so redispatching any other run would be a
+            // resume that is refused, sweep after sweep. A run whose durable row moved on
+            // (a wait opened, paused) is continued by its own release or resume().
+            ->where('runs.status', 'pending')
             ->where('histories.status', 'running')
             ->whereNotNull('histories.leased_until')
             ->where('histories.leased_until', '<', $threshold)
@@ -1696,6 +1933,79 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStep
         return array_merge($this->mapSignal($record), ['duplicate' => false]);
     }
 
+    /**
+     * Records the signal inside the acceptance transaction (see AcceptsDurableSignals). It
+     * closes the wait itself, with the same writes releaseWaitWithSignal() makes, and does
+     * not call that method: a subclass that overrides releaseWaitWithSignal() must also
+     * override this to keep its behaviour when a signal is accepted. It does call
+     * recordSignal() and syncRunWaitSummary().
+     *
+     * It closes an open wait whatever the run's status. A paused run stays paused:
+     * syncRunWaitSummary() never moves one. Which runs it is called for is the caller's
+     * decision.
+     */
+    public function acceptSignal(string $runId, string $name, mixed $payload, ?string $idempotencyKey): ?array
+    {
+        try {
+            // A savepoint of its own (this runs inside the acceptance transaction), so a
+            // duplicate key or a missing wait undoes the closure below and writes nothing.
+            return $this->connection->transaction(function () use ($runId, $name, $payload, $idempotencyKey): array {
+                $timestamp = Carbon::now('UTC');
+
+                // The wait is closed by the UPDATE that takes its lock, as in
+                // releaseWaitWithSignal(). Locking it first and moving it out of `waiting`
+                // later deadlocks on MySQL with a closer of another wait of the run: that
+                // closer's lock request waits in the index gap this move must insert into.
+                if ($this->closeWaitAsSignalled($runId, $name, null, $timestamp) !== 1) {
+                    throw new DurableSignalNotAccepted(null);
+                }
+
+                // The run row before the signal: recordSignal()'s idempotency read is then
+                // the first ordinary read, after the run lock (MySQL's REPEATABLE READ
+                // snapshot is taken there), and its insert's foreign-key check against the
+                // run is free. Inserted before the run lock, that check's shared lock on the
+                // run row lets two acceptances on one run deadlock asking for its write lock.
+                $this->lockRunRow($runId);
+
+                $signal = $this->recordSignal($runId, $name, $payload, $idempotencyKey);
+
+                if (($signal['duplicate'] ?? false) === true) {
+                    throw new DurableSignalNotAccepted($signal);
+                }
+
+                $this->consumeSignal((int) $signal['id'], $timestamp);
+                // The wait closed above is the run's only signalled wait of this name with
+                // no signal: every other path closes a wait as signalled with its signal_id
+                // already set (releaseWaitWithSignal()), and this transaction holds its row.
+                $this->waitTable()
+                    ->where('run_id', $runId)
+                    ->where('name', $name)
+                    ->where('status', 'signalled')
+                    ->whereNull('signal_id')
+                    ->update(['signal_id' => $signal['id']]);
+
+                $this->syncRunWaitSummary($runId, $timestamp);
+
+                return array_merge($signal, ['id' => (int) $signal['id'], 'duplicate' => false, 'released' => true]);
+            });
+        } catch (DurableSignalNotAccepted $notAccepted) {
+            return $notAccepted->signal === null
+                ? null
+                : array_merge($notAccepted->signal, ['id' => (int) $notAccepted->signal['id'], 'duplicate' => true, 'released' => false]);
+        }
+    }
+
+    public function signalForIdempotencyKey(string $runId, string $idempotencyKey): ?array
+    {
+        /** @var object|null $record */
+        $record = $this->signalTable()
+            ->where('run_id', $runId)
+            ->where('idempotency_key', $idempotencyKey)
+            ->first();
+
+        return $record !== null ? $this->mapSignal($record) : null;
+    }
+
     public function signals(string $runId): array
     {
         return $this->signalTable()
@@ -1735,32 +2045,44 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStep
         $timestamp = Carbon::now('UTC');
 
         return $this->connection->transaction(function () use ($runId, $name, $signalId, $timestamp): bool {
-            $updated = $this->waitTable()
-                ->where('run_id', $runId)
-                ->where('name', $name)
-                ->where('status', 'waiting')
-                ->update([
-                    'status' => 'signalled',
-                    'signal_id' => $signalId,
-                    'outcome' => $this->encodeJson(['status' => 'signalled', 'timed_out' => false]),
-                    'finished_at' => $timestamp,
-                    'updated_at' => $timestamp,
-                ]);
-
-            if ($updated !== 1) {
+            if ($this->closeWaitAsSignalled($runId, $name, $signalId, $timestamp) !== 1) {
                 return false;
             }
 
-            $this->signalTable()->where('id', $signalId)->update([
-                'status' => 'consumed',
-                'consumed_at' => $timestamp,
-                'updated_at' => $timestamp,
-            ]);
-
+            $this->consumeSignal($signalId, $timestamp);
             $this->syncRunWaitSummary($runId, $timestamp);
 
             return true;
         });
+    }
+
+    /**
+     * Close the run's open wait of this name as signalled, linked to $signalId (or, before
+     * the signal is recorded, to none yet) — the UPDATE that takes the wait row's lock.
+     * Returns the number of waits closed.
+     */
+    protected function closeWaitAsSignalled(string $runId, string $name, ?int $signalId, Carbon $timestamp): int
+    {
+        return $this->waitTable()
+            ->where('run_id', $runId)
+            ->where('name', $name)
+            ->where('status', 'waiting')
+            ->update([
+                'status' => 'signalled',
+                'signal_id' => $signalId,
+                'outcome' => $this->encodeJson(['status' => 'signalled', 'timed_out' => false]),
+                'finished_at' => $timestamp,
+                'updated_at' => $timestamp,
+            ]);
+    }
+
+    protected function consumeSignal(int $signalId, Carbon $timestamp): void
+    {
+        $this->signalTable()->where('id', $signalId)->update([
+            'status' => 'consumed',
+            'consumed_at' => $timestamp,
+            'updated_at' => $timestamp,
+        ]);
     }
 
     public function waits(string $runId): array
@@ -2287,19 +2609,28 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStep
         $now = Carbon::now('UTC');
         $values['updated_at'] = $now;
 
-        $updated = $this->table()
+        $guarded = $this->table()
             ->where('run_id', $runId)
             ->where('execution_token', $executionToken)
             ->whereNotNull('leased_until')
-            ->where('leased_until', '>=', $now)
-            ->update($values);
+            ->where('leased_until', '>=', $now);
 
-        if ($updated === 0) {
+        if ((clone $guarded)->update($values) === 0 && ! $this->stillHoldsLease($guarded)) {
             throw new LostDurableLeaseException("Durable swarm run [{$runId}] no longer owns the execution lease.");
         }
     }
 
     /**
+     * Unlike guardedUpdate(), a 0 here is always read as a lost lease, with no
+     * stillHoldsLease() re-check. Every branch write in this file except
+     * markBranchRunning() clears execution_token, so it always changes the row.
+     * markBranchRunning() changes the row only when status or started_at differs
+     * from what is stored; a second call on the same lease within the same second
+     * would change nothing and be refused here on MySQL. Its once-per-lease use is
+     * the caller's: see DurableBranchAdvancer
+     * (src/Runners/Durable/DurableBranchAdvancer.php). A branch write that can be a
+     * no-op needs the stillHoldsLease() re-check.
+     *
      * @param  array<string, mixed>  $values
      */
     protected function guardedBranchUpdate(string $runId, string $branchId, string $executionToken, array $values): void
@@ -2320,8 +2651,46 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStep
         }
     }
 
+    /**
+     * Lock the run row and return its status and current node, or null when it is gone.
+     * On Postgres the lock is FOR NO KEY UPDATE, the lock an UPDATE of the row takes
+     * anyway, so other transactions' foreign-key checks against the run (a retry's outbox
+     * insert, a signal row, a new wait) are not blocked by it; FOR UPDATE elsewhere. No
+     * branch row is locked with it: a branch worker can hold one while it waits on this
+     * run row.
+     *
+     * On MySQL, FOR UPDATE does block those foreign-key checks, and waitForBranches() takes
+     * it as its first statement, so for the length of one fan-out an insert that refers to
+     * that run waits. It is one run's rows for one short transaction, and it is what keeps
+     * the fan-out and the wait closers in one lock order.
+     */
+    protected function lockRunRow(string $runId): ?object
+    {
+        $runQuery = $this->table()->where('run_id', $runId);
+
+        /** @var object|null $run */
+        $run = ($this->connection->getDriverName() === 'pgsql'
+            ? $runQuery->lock('for no key update')
+            : $runQuery->lockForUpdate())->first(['status', 'current_node_id']);
+
+        return $run;
+    }
+
     protected function syncRunWaitSummary(string $runId, Carbon $timestamp): void
     {
+        // The run row is locked before anything else is read. Every caller has already
+        // written its wait row, so the order is wait row, then run row, as everywhere. A fan-out (waitForBranches) takes the run row as its
+        // first statement and holds it until it commits, so this waits for one in flight.
+        // No closer makes an ordinary read in its transaction before it holds the run row:
+        // the timeout and child closers reach this point first, and a signal's acceptance
+        // (acceptSignal) has already locked the run row before it reads its idempotency
+        // key. So the branch read below sees such a fan-out committed — under Postgres each
+        // statement takes a fresh snapshot, under MySQL's REPEATABLE READ the snapshot is
+        // taken at the first ordinary read, after the lock. (createWait() can be called
+        // after an earlier read — persistChildIntent() reads the context first — but its
+        // new wait is open, so it never reaches the branch read.)
+        $run = $this->lockRunRow($runId);
+
         /** @var object|null $latestOpenWait */
         $latestOpenWait = $this->waitTable()
             ->where('run_id', $runId)
@@ -2330,12 +2699,47 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStep
             ->first();
 
         if ($latestOpenWait === null) {
+            if (($run->status ?? null) === 'paused') {
+                // A paused run stays paused when its last wait closes (a signal accepted
+                // or a child finished during the pause): resume() moves it. The summary of
+                // the closed wait is cleared so the run no longer describes it.
+                $this->table()
+                    ->where('run_id', $runId)
+                    ->where('status', 'paused')
+                    ->whereNull('finished_at')
+                    ->update([
+                        'wait_reason' => null,
+                        'waiting_since' => null,
+                        'wait_timeout_at' => null,
+                        'updated_at' => $timestamp,
+                    ]);
+
+                return;
+            }
+
+            // A run at a branch boundary stays waiting when its last wait closes: it is
+            // still waiting on its branches, and its join is released through
+            // releaseWaitingRunForJoin() — by the last branch to finish, or by the closer
+            // once it has committed — never by the wait closing on its own. This is the
+            // row shape waitForBranches() leaves: it never writes the wait columns. A
+            // fan-out not yet committed is not seen here; the run goes pending and the
+            // fan-out's own commit sets it back to waiting at its new node.
+            if (($run->status ?? null) !== 'waiting') {
+                return;
+            }
+
+            $nodeId = is_string($run->current_node_id ?? null) ? $run->current_node_id : null;
+            $atBranchBoundary = $nodeId !== null && $this->branchTable()
+                ->where('run_id', $runId)
+                ->where('parent_node_id', $nodeId)
+                ->exists();
+
             $this->table()
                 ->where('run_id', $runId)
                 ->where('status', 'waiting')
                 ->whereNull('finished_at')
                 ->update([
-                    'status' => 'pending',
+                    'status' => $atBranchBoundary ? 'waiting' : 'pending',
                     'wait_reason' => null,
                     'waiting_since' => null,
                     'wait_timeout_at' => null,
@@ -2353,11 +2757,13 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStep
             ->orderBy('timeout_at')
             ->first();
 
+        // A paused run stays paused while its waits change (a child finishing releases one of
+        // several waits): resume() is what returns it to waiting.
         $this->table()
             ->where('run_id', $runId)
             ->whereNull('finished_at')
             ->update([
-                'status' => 'waiting',
+                'status' => $this->connection->raw("CASE WHEN status = 'paused' THEN status ELSE 'waiting' END"),
                 'wait_reason' => $latestOpenWait->reason ?? null,
                 'waiting_since' => $latestOpenWait->created_at,
                 'wait_timeout_at' => $nextTimedWait->timeout_at ?? null,

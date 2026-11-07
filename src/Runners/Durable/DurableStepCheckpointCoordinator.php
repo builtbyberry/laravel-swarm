@@ -29,6 +29,8 @@ class DurableStepCheckpointCoordinator
         protected DurableHierarchicalCoordinator $hierarchical,
         protected DurableOutbox $outbox,
         protected NativeInputManager $nativeInputs,
+        protected DurableEagerDispatcher $eager,
+        protected DurableBranchAdmission $admission,
     ) {}
 
     public function afterStepCheckpointForTesting(?callable $hook): void
@@ -82,36 +84,78 @@ class DurableStepCheckpointCoordinator
         // the dispatched job is a safe no-op.
         //
         // Crash edge case: if enterDurableBoundary throws after the checkpoint transaction
-        // commits, the run stays 'pending' with an outbox step pointing at it. The relay
-        // dispatches that job; acquireLease() accepts it and the run advances normally.
-        // The boundary state is not persisted until persistChildIntent() commits its own
-        // independent transaction, so this path is a safe retry with no data loss.
+        // commits, the outbox step pointing at the run is still dispatched — by the relay,
+        // or with eager dispatch on, by the push in the finally block below. What it then
+        // does depends on how far the boundary got before throwing:
+        //   - nothing persisted: the run is still 'pending', acquireLease() accepts the job
+        //     and the run advances normally (a safe retry with no data loss);
+        //   - the wait or child intent already committed (persistChildIntent() commits in
+        //     its own transaction before the hook that threw): the run is 'waiting', the
+        //     job's lease is rejected and it is a no-op, and the wait's own release path
+        //     (signal, child reconciliation, timeout recovery) owns progress.
+        // A process killed outright leaves an eager entry reserved; the relay reclaims it
+        // once its reservation goes stale.
         //
         // NOTE: branchesFor() is called INSIDE the closure (i.e., inside the checkpoint
         // transaction). For the initial branch-wait case, waitForBranches() creates the
         // branch rows in the same transaction — so the closure must read after that write.
         // The step advancer's exclusive lease ensures no concurrent process can modify
         // the branch list between the write and this read.
-        $withTransaction = function () use ($run, $runId, $nextStepIndex, $hierarchicalResult, $context, $nativeSettingsAttempt): void {
+        //
+        // Eager dispatch (swarm.durable.eager_dispatch): the entries are written for
+        // direct dispatch inside the transaction (directFor(), decided per entry), but
+        // NOT pushed from it. They are collected here and pushed only after
+        // enterDurableBoundary() below has run: pushing at commit would let a fast
+        // worker lease the still-pending run and execute the next step before a
+        // declared wait or child dispatch is entered.
+        $stepEntries = [];
+        $branchEntries = [];
+
+        // Fan-out cap (swarm.durable.parallel.max_concurrent_branches): validated here,
+        // before the checkpoint writes anything, so an invalid or unsupported cap
+        // rolls nothing back half-way. Branches past the cap are written HELD; the
+        // join still sees every branch row, so the parent waits for all of them.
+        $cap = $isBranchWait ? $this->admission->capForFanOut() : null;
+
+        $withTransaction = function () use ($run, $runId, $nextStepIndex, $hierarchicalResult, $context, $nativeSettingsAttempt, $cap, &$stepEntries, &$branchEntries): void {
+            // Reset in case the surrounding transaction is retried.
+            $stepEntries = [];
+            $branchEntries = [];
+
             if ($nativeSettingsAttempt !== null) {
                 $this->nativeInputs->commitConsumedMessages($context, $nativeSettingsAttempt);
             }
             if ($hierarchicalResult !== null && $hierarchicalResult->branches !== []) {
                 $branches = $this->durableRuns->branchesFor($runId, $hierarchicalResult->waitingParentNodeId);
 
-                foreach ($branches as $branch) {
-                    $this->outbox->enqueueBranch(
-                        $runId,
-                        (string) $branch['branch_id'],
-                        $branch['queue_connection'] ?? $run['queue_connection'],
-                        $branch['queue_name'] ?? $run['queue_name'],
-                    );
+                foreach (array_values($branches) as $index => $branch) {
+                    $branchId = (string) $branch['branch_id'];
+                    $connection = $branch['queue_connection'] ?? $run['queue_connection'];
+                    $queue = $branch['queue_name'] ?? $run['queue_name'];
+
+                    if ($cap !== null && $index >= $cap) {
+                        $this->admission->hold($runId, $branchId, $connection, $queue);
+
+                        continue;
+                    }
+
+                    $direct = $this->eager->directFor($connection);
+                    $entryId = $this->outbox->enqueueBranch($runId, $branchId, $connection, $queue, $direct);
+
+                    if ($direct) {
+                        $branchEntries[] = [$entryId, $branchId, $connection, $queue];
+                    }
                 }
 
                 return;
             }
 
-            $this->outbox->enqueueStep($runId, $nextStepIndex, $run['queue_connection'], $run['queue_name']);
+            $direct = $this->eager->directFor($run['queue_connection']);
+            $entryId = $this->outbox->enqueueStep($runId, $nextStepIndex, $run['queue_connection'], $run['queue_name'], $direct);
+
+            if ($direct) {
+                $stepEntries[] = $entryId;
+            }
         };
 
         if ($hierarchicalResult !== null) {
@@ -137,6 +181,43 @@ class DurableStepCheckpointCoordinator
         // inside the checkpoint transaction would cause a rollback of the boundary
         // writes if any subsequent code (e.g., afterChildIntentHook) throws, breaking
         // crash-recovery semantics.
-        $enterDurableBoundary($run, $swarm, $context, $nextStepIndex);
+        $enteredBoundary = false;
+
+        try {
+            $enteredBoundary = $enterDurableBoundary($run, $swarm, $context, $nextStepIndex) === true;
+        } finally {
+            // Pushed even when the boundary throws: the entries are born reserved, so
+            // without a push they would wait a full reservation timeout for the relay.
+            // If the boundary persisted before throwing, the pushed step job is a no-op
+            // (see the crash edge case above). Only direct entries are collected.
+            $this->pushCollected($runId, $nextStepIndex, $run, $enteredBoundary, $stepEntries, $branchEntries);
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $run
+     * @param  list<int>  $stepEntries
+     * @param  list<array{0: int, 1: string, 2: ?string, 3: ?string}>  $branchEntries
+     */
+    protected function pushCollected(string $runId, int $nextStepIndex, array $run, bool $enteredBoundary, array $stepEntries, array $branchEntries): void
+    {
+        foreach ($branchEntries as [$entryId, $branchId, $connection, $queue]) {
+            $this->eager->branch($entryId, $runId, $branchId, $connection, $queue);
+        }
+
+        foreach ($stepEntries as $entryId) {
+            if ($enteredBoundary) {
+                // The run is now waiting: its step entry can only be a no-op, and every
+                // way out of the boundary dispatches the continuation itself (signal
+                // release and child reconciliation enqueue a fresh entry, a wait
+                // timeout dispatches directly). Settle it rather than leave it for the
+                // relay to reclaim and push as a no-op once its reservation goes stale.
+                $this->outbox->settle($entryId, $runId);
+
+                continue;
+            }
+
+            $this->eager->step($entryId, $runId, $nextStepIndex, $run['queue_connection'], $run['queue_name']);
+        }
     }
 }
