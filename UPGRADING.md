@@ -4,12 +4,26 @@
 
 ### Wait creation at branch joins
 
-An explicit `DurableSwarmManager::wait()` after a branch join has been released
-now throws `SwarmException`, with no new wait persisted. Register obligations
-before join release. Queued hierarchical continuations retain the released
+Run `php artisan migrate` before starting the new workers. The additive
+`wait_generation` column starts existing runs at zero; it tracks creations, not
+open-wait counts, so no wait-count backfill is needed. Plan the table alteration
+for your database version and table size; older engines may copy or lock the
+table. Replace all queue and recovery workers before relying on the guarantee.
+Code rollback can leave this column in place; do not drop it while new workers
+still run. The counter is removed with its run by existing retention.
+
+An explicit `DurableSwarmManager::wait()` in the released `pending` window before
+the next durable step starts now throws `SwarmException`, with no new wait
+persisted. Register obligations before join release. Queued hierarchical
+continuations retain the released
 `pending` coordination state, so the same rejection applies there. Framework
 declared waits and child intents at durable hierarchical fan-out are persisted
-atomically with that fan-out. See [wait creation and transaction retries](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-waits-and-signals.md#creating-a-wait-from-application-code).
+atomically with that fan-out. Store extenders overriding `createWait()` must
+advance the generation in SQL under the run lock, atomically with insertion.
+An override of `releaseWaitingRunForJoin()` must observe the generation before
+its open-wait scan and compare it with the current locked run, refusing if it
+changed. It must not take another wait-row lock after locking the run.
+See [wait creation and transaction retries](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-waits-and-signals.md#creating-a-wait-from-application-code).
 
 ### Durable branch fan-out cap (`swarm.durable.parallel.max_concurrent_branches`)
 
@@ -196,8 +210,8 @@ wait); the join runs once every wait is closed and every branch is done.
 
 ### A wait closing while its run fans out
 
-No configuration or schema change. Two rules change for code that implements or
-extends the durable store:
+The wait-generation migration above is required for this release. These two
+lock-order rules also apply to code that implements or extends the durable store:
 
 - **`waitForBranches()` takes the run row first.** A fan-out now locks the run
   row before it writes the context, branch or run-state rows, the order the wait

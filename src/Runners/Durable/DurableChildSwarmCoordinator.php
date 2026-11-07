@@ -60,6 +60,7 @@ class DurableChildSwarmCoordinator
 
     /**
      * @param  string|array<string, mixed>|RunContext  $task
+     * @param  (Closure(Closure(): void): void)|null  $deferEffects  Collect effects for later execution; null invokes them here.
      */
     public function dispatchChildSwarm(string $parentRunId, string $childSwarmClass, string|array|RunContext $task, ?string $dedupeKey = null, ?Closure $deferEffects = null): DurableChildRun
     {
@@ -104,6 +105,7 @@ class DurableChildSwarmCoordinator
 
     /**
      * @param  array<string, mixed>  $parent
+     * @param  (Closure(Closure(): void): void)|null  $deferEffects  Collect effects for later execution; null invokes them here.
      */
     protected function persistChildIntent(array $parent, RunContext $childContext, string $childSwarmClass, string $waitName, ?string $dedupeKey = null, ?Closure $deferEffects = null): void
     {

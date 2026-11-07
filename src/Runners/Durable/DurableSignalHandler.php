@@ -239,6 +239,7 @@ class DurableSignalHandler
 
     /**
      * @param  array<string, mixed>  $metadata
+     * @param  (Closure(Closure(): void): void)|null  $deferEffects  Collect effects for later execution; null invokes them here.
      */
     public function wait(string $runId, string $name, ?string $reason = null, ?int $timeoutSeconds = null, array $metadata = [], ?Closure $deferEffects = null): void
     {

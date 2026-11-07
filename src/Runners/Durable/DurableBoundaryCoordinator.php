@@ -29,6 +29,7 @@ class DurableBoundaryCoordinator
 
     /**
      * @param  array<string, mixed>  $run
+     * @param  (Closure(Closure(): void): void)|null  $deferEffects  Collect effects for later execution; null invokes them here.
      */
     public function enterDeclaredBoundary(array $run, Swarm $swarm, RunContext $context, ?Closure $deferEffects = null): bool
     {

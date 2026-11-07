@@ -9,14 +9,12 @@ use Closure;
 use Illuminate\Support\Carbon;
 
 /**
- * The database store with hooks at the lock points of a join handoff:
+ * Hooks around the owning {@see DatabaseDurableRunStore} methods:
  *
- * - beforeSync: a wait release has UPDATEd its wait row (holds it) and has not yet
- *   asked for the run row;
- * - afterSync: the wait release has also written the run row (holds both) and has
- *   not committed;
- * - afterJoinCheck: releaseWaitingRunForJoin() has taken its shared locks on the
- *   run's open waits (held until the surrounding transaction ends) and decided.
+ * - beforeSync / afterSync: immediately before / after parent::syncRunWaitSummary;
+ * - afterRunLock: after parent::lockRunRow returns;
+ * - afterJoinCheck: after parent::releaseWaitingRunForJoin returns, inside this
+ *   fixture's surrounding transaction.
  */
 final class HookedJoinDurableRunStore extends DatabaseDurableRunStore
 {

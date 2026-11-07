@@ -129,6 +129,15 @@ to a queued hierarchical continuation while its durable coordination row remains
 in the released `pending` state. A running step-durable step can create its own
 wait, and ordinary pending step boundaries remain supported.
 
+The database coordination uses committed reads. Internally, a creation epoch on
+the run detects a wait committed across the join's wait scan; no wait-row lock
+is taken after the run lock. An older application snapshot can conservatively
+hold a join after its waits have closed. A fresh post-commit release or
+`swarm:recover` attempt can release it. Stale display summaries cannot strand the
+join. The epoch is internal, has no configuration, and is retained and pruned
+with its run. Apply the [upgrade steps](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#wait-creation-at-branch-joins)
+before replacing workers.
+
 The package retries database concurrency failures up to three attempts for wait
 creation, child-intent persistence, hierarchical fan-out and join release. If
 you call these operations inside your own database transaction, retry that
