@@ -350,8 +350,9 @@ ran a release without the rule in [A branch join waits for open waits](#a-branch
   `DatabaseDurableRunStore`, gets no repair; the ignored advance job applies to
   every store.
 - **Custom `DurableRunStore` implementations: `parentsWaitingOnTerminalChildren()`.**
-  It now returns a terminal child only while the parent's wait for it (the child's
-  `wait_name`) is still open, applied before the limit. Before, a parent still at its
+  It still returns one waiting parent record per terminal child, but now only for a
+  child whose wait on that parent (the child's `wait_name`) is still open, applied
+  before the limit. Before, a parent still at its
   branch boundary was returned again on every sweep once its child outcome was in,
   taking a place under `--limit` from a parent that needed its outcome. A custom
   store, or a class extending `DatabaseDurableRunStore` that overrides the method,

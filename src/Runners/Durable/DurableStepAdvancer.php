@@ -48,12 +48,12 @@ class DurableStepAdvancer
      */
     protected function ignoreQueueHierarchicalAdvance(array $run, int $expectedStepIndex, ?int $outboxEntryId): void
     {
-        $settled = false;
-
+        // Whether the entry is gone is not known here: the bundled outbox reports a
+        // failed delete itself and returns; the relay reclaims a row left behind, and
+        // its delivery is ignored again.
         if ($outboxEntryId !== null) {
             try {
                 $this->outbox->settle($outboxEntryId, (string) $run['run_id']);
-                $settled = true;
             } catch (Throwable $exception) {
                 $this->safeReport($exception);
             }
@@ -66,7 +66,7 @@ class DurableStepAdvancer
             'current_node_id' => $run['current_node_id'] ?? null,
             'step_index' => $expectedStepIndex,
             'outbox_entry_id' => $outboxEntryId,
-            'outbox_entry_settled' => $settled,
+            'outbox_entry_settle_attempted' => $outboxEntryId !== null,
         ]);
     }
 

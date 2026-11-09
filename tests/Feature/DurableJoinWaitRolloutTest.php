@@ -721,7 +721,7 @@ describe('an ordinary advance job delivered for a queued-hierarchical run is ign
                 'current_node_id' => 'parallel_node',
                 'step_index' => $index,
                 'outbox_entry_id' => $entryId,
-                'outbox_entry_settled' => false,
+                'outbox_entry_settle_attempted' => true,
             ]);
     });
 
