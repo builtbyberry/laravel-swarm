@@ -270,22 +270,24 @@ class DurableRecoveryCoordinator
      */
     protected function repairStrandedQueuedHierarchicalJoins(?string $runId, ?string $swarmClass, int $limit, int $graceSeconds): array
     {
-        if (! $this->durableRuns instanceof DatabaseDurableRunStore) {
+        $store = $this->durableRuns;
+
+        if (! $store instanceof DatabaseDurableRunStore) {
             return [];
         }
 
         $repaired = [];
 
-        foreach ($this->durableRuns->strandedQueuedHierarchicalJoins($runId, $swarmClass, $limit, $graceSeconds) as $candidate) {
+        foreach ($store->strandedQueuedHierarchicalJoins($runId, $swarmClass, $limit, $graceSeconds) as $candidate) {
             $candidateId = $candidate['run_id'];
 
             try {
-                $restored = $this->durableRuns->restoreStrandedQueuedHierarchicalJoin(
+                $restored = $store->restoreStrandedQueuedHierarchicalJoin(
                     $candidateId,
                     $graceSeconds,
                     fn (): bool => $this->historyStore->restoreQueuedHierarchicalBoundaryWait($candidateId),
                 );
-                $run = $restored ? $this->durableRuns->find($candidateId) : null;
+                $run = $restored ? $store->find($candidateId) : null;
             } catch (Throwable $exception) {
                 $this->safeLog($this->logger, 'warning', 'laravel-swarm: skipping a queued-hierarchical run stranded at its parallel boundary during recovery; it is retried on the next sweep.', [
                     'run_id' => $candidateId,
