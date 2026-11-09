@@ -178,6 +178,13 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   See [durable waits](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-waits-and-signals.md#creating-a-wait-from-application-code)
   and [upgrade guidance](UPGRADING.md#wait-creation-at-branch-joins).
 
+- **Atomic concurrency-test markers (#628).** The shared lock-barrier fixture now
+  publishes complete marker values through a same-directory atomic rename, so a
+  reader cannot observe a newly created PID file before its contents are written.
+  Deterministic publication and cleanup tests plus a real two-process exchange
+  cover the helper. Existing database contention assertions remain unchanged.
+  This affects the test harness only; package runtime behavior is unchanged.
+
 - **Parallel stream process results on newer Laravel releases (#625).** Live
   parallel streams and `swarm:health --parallel-streaming` now support Laravel's
   signed concurrency result envelopes. Each child receives a separate signing
