@@ -116,6 +116,12 @@ class DurableRecoveryCoordinator
             $this->durableRuns->markBranchRetryRecoveryDispatched($branch['run_id'], $branch['branch_id']);
         }
 
+        // Queued-hierarchical runs a pre-upgrade wait closer left `pending` at their
+        // parallel boundary (#615) are put back at it first, then handled exactly as the
+        // waiting joins below: released, failed for a `fail_run` branch, or left for
+        // their last branch.
+        $strandedJoins = $this->repairStrandedQueuedHierarchicalJoins($runId, $swarmClass, $limit, $graceSeconds);
+
         $waitingJoins = $this->durableRuns->recoverableWaitingJoins(
             runId: $runId,
             swarmClass: $swarmClass,
@@ -127,73 +133,9 @@ class DurableRecoveryCoordinator
         // kept out of the redispatched set.
         $failedJoinRunIds = [];
 
-        foreach ($waitingJoins as $run) {
-            $released = false;
-
-            // One run whose context cannot be read (missing, or undecryptable after an
-            // APP_KEY rotation), whose failure write throws, or whose release rolls back
-            // must not stop the sweep: it is reported and skipped, and every other run
-            // and phase still recovers.
-            try {
-                $owesFailure = $this->joinRelease->owesFailure($run);
-
-                if ($owesFailure) {
-                    $failParentFromBranches(
-                        $run,
-                        $this->runs->loadContext($run['run_id']),
-                        $this->runs->validateStepTimeoutSeconds((int) $run['step_timeout_seconds']),
-                    );
-                    $this->durableRuns->markRecoveryDispatched($run['run_id']);
-                    // Never released to its join, whether or not this pass failed it (the
-                    // fail path returns without failing a run another worker moved first).
-                    $failedJoinRunIds[] = (string) $run['run_id'];
-
-                    if (($this->durableRuns->find($run['run_id'])['status'] ?? null) === 'failed') {
-                        $this->safeLog($this->logger, 'warning', 'laravel-swarm: recovery failed a durable parent whose fail_run branch failure was never settled; it was not released to its join.', [
-                            'run_id' => $run['run_id'],
-                            'swarm_class' => $run['swarm_class'] ?? null,
-                            'current_node_id' => $run['current_node_id'] ?? null,
-                        ]);
-                    }
-
-                    continue;
-                }
-
-                // Release and continuation intent commit together. Read this boundary's
-                // branches again through the shared release, not the earlier branch sweep.
-                $released = $this->joinRelease->releaseIfReady($run);
-
-                if ($released) {
-                    $this->durableRuns->markRecoveryDispatched($run['run_id']);
-                }
-            } catch (Throwable $exception) {
-                if ($released) {
-                    // The release and its continuation's outbox row already committed, so
-                    // the run was recovered: swarm:relay (or an eager push) delivers it.
-                    // Only its recovery bookkeeping was lost.
-                    $this->safeLog($this->logger, 'warning', 'laravel-swarm: recovery released a durable waiting join but could not record the recovery; swarm:relay delivers its continuation.', [
-                        'run_id' => $run['run_id'],
-                        'swarm_class' => $run['swarm_class'] ?? null,
-                        'current_node_id' => $run['current_node_id'] ?? null,
-                        'exception' => $exception::class,
-                        'message' => $exception->getMessage(),
-                    ]);
-
-                    continue;
-                }
-
-                // Nothing was released (a failed release rolls back), so the run is still
-                // waiting at its join and the next sweep selects it again.
-                $this->safeLog($this->logger, 'warning', 'laravel-swarm: skipping a durable waiting join during recovery; it is retried on the next sweep.', [
-                    'run_id' => $run['run_id'],
-                    'swarm_class' => $run['swarm_class'] ?? null,
-                    'current_node_id' => $run['current_node_id'] ?? null,
-                    'exception' => $exception::class,
-                    'message' => $exception->getMessage(),
-                ]);
+        foreach ([...$strandedJoins, ...$waitingJoins] as $run) {
+            if (! $this->settleWaitingJoin($run, $failParentFromBranches)) {
                 $failedJoinRunIds[] = (string) $run['run_id'];
-
-                continue;
             }
         }
 
@@ -310,12 +252,141 @@ class DurableRecoveryCoordinator
             array_map(static fn (array $branch): string => $branch['run_id'], $branches),
             array_map(static fn (array $run): string => $run['run_id'], $dueRetryRuns),
             array_map(static fn (array $branch): string => $branch['run_id'], $dueRetryBranches),
-            array_values(array_diff(array_map(static fn (array $run): string => $run['run_id'], $waitingJoins), $failedJoinRunIds)),
+            array_values(array_diff(array_map(static fn (array $run): string => $run['run_id'], [...$strandedJoins, ...$waitingJoins]), $failedJoinRunIds)),
             array_map(static fn (array $run): string => $run['run_id'], $queuedResumes),
             array_map(static fn (array $run): string => $run['run_id'], $timedOutWaits),
             array_map(static fn (array $run): string => $run['run_id'], $childParents),
             array_map(static fn (array $child): string => $child['parent_run_id'], $undispatchedChildren),
         )));
+    }
+
+    /**
+     * Put back at their parallel boundary the queued-hierarchical runs a pre-upgrade
+     * wait closer stranded `pending` there (#615), and return them as they now are.
+     * Only the bundled persistence can: it alone can select and lock that shape. One
+     * run that cannot be repaired is reported and skipped; the sweep goes on.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    protected function repairStrandedQueuedHierarchicalJoins(?string $runId, ?string $swarmClass, int $limit, int $graceSeconds): array
+    {
+        if (! $this->durableRuns instanceof DatabaseDurableRunStore) {
+            return [];
+        }
+
+        $repaired = [];
+
+        foreach ($this->durableRuns->strandedQueuedHierarchicalJoins($runId, $swarmClass, $limit, $graceSeconds) as $candidate) {
+            $candidateId = $candidate['run_id'];
+
+            try {
+                $restored = $this->durableRuns->restoreStrandedQueuedHierarchicalJoin(
+                    $candidateId,
+                    $graceSeconds,
+                    fn (): bool => $this->historyStore->restoreQueuedHierarchicalBoundaryWait($candidateId),
+                );
+                $run = $restored ? $this->durableRuns->find($candidateId) : null;
+            } catch (Throwable $exception) {
+                $this->safeLog($this->logger, 'warning', 'laravel-swarm: skipping a queued-hierarchical run stranded at its parallel boundary during recovery; it is retried on the next sweep.', [
+                    'run_id' => $candidateId,
+                    'exception' => $exception::class,
+                    'message' => $exception->getMessage(),
+                ]);
+
+                continue;
+            }
+
+            if ($run === null) {
+                continue;
+            }
+
+            $this->safeLog($this->logger, 'warning', 'laravel-swarm: recovery put a queued-hierarchical run stranded by a pre-upgrade wait closer back at its parallel boundary.', [
+                'run_id' => $candidateId,
+                'swarm_class' => $run['swarm_class'] ?? null,
+                'current_node_id' => $run['current_node_id'] ?? null,
+            ]);
+            $repaired[] = $run;
+        }
+
+        return $repaired;
+    }
+
+    /**
+     * Release a run waiting at its join, or fail it for an unsettled `fail_run` branch
+     * failure. Returns false when the run was failed, was tried to be failed, or was
+     * skipped — never released to its join — so it is kept out of the redispatched set.
+     *
+     * @param  array<string, mixed>  $run
+     * @param  callable(array<string, mixed>, RunContext, int): void  $failParentFromBranches
+     */
+    protected function settleWaitingJoin(array $run, callable $failParentFromBranches): bool
+    {
+        $released = false;
+
+        // One run whose context cannot be read (missing, or undecryptable after an
+        // APP_KEY rotation), whose failure write throws, or whose release rolls back
+        // must not stop the sweep: it is reported and skipped, and every other run
+        // and phase still recovers.
+        try {
+            $owesFailure = $this->joinRelease->owesFailure($run);
+
+            if ($owesFailure) {
+                $failParentFromBranches(
+                    $run,
+                    $this->runs->loadContext($run['run_id']),
+                    $this->runs->validateStepTimeoutSeconds((int) $run['step_timeout_seconds']),
+                );
+                $this->durableRuns->markRecoveryDispatched($run['run_id']);
+                // Never released to its join, whether or not this pass failed it (the
+                // fail path returns without failing a run another worker moved first).
+                if (($this->durableRuns->find($run['run_id'])['status'] ?? null) === 'failed') {
+                    $this->safeLog($this->logger, 'warning', 'laravel-swarm: recovery failed a durable parent whose fail_run branch failure was never settled; it was not released to its join.', [
+                        'run_id' => $run['run_id'],
+                        'swarm_class' => $run['swarm_class'] ?? null,
+                        'current_node_id' => $run['current_node_id'] ?? null,
+                    ]);
+                }
+
+                return false;
+            }
+
+            // Release and continuation intent commit together. Read this boundary's
+            // branches again through the shared release, not the earlier branch sweep.
+            $released = $this->joinRelease->releaseIfReady($run);
+
+            if ($released) {
+                $this->durableRuns->markRecoveryDispatched($run['run_id']);
+            }
+        } catch (Throwable $exception) {
+            if ($released) {
+                // The release and its continuation's outbox row already committed, so
+                // the run was recovered: swarm:relay (or an eager push) delivers it.
+                // Only its recovery bookkeeping was lost.
+                $this->safeLog($this->logger, 'warning', 'laravel-swarm: recovery released a durable waiting join but could not record the recovery; swarm:relay delivers its continuation.', [
+                    'run_id' => $run['run_id'],
+                    'swarm_class' => $run['swarm_class'] ?? null,
+                    'current_node_id' => $run['current_node_id'] ?? null,
+                    'exception' => $exception::class,
+                    'message' => $exception->getMessage(),
+                ]);
+
+                return true;
+            }
+
+            // Nothing was released (a failed release rolls back), so the run is still
+            // waiting at its join and the next sweep selects it again.
+            $this->safeLog($this->logger, 'warning', 'laravel-swarm: skipping a durable waiting join during recovery; it is retried on the next sweep.', [
+                'run_id' => $run['run_id'],
+                'swarm_class' => $run['swarm_class'] ?? null,
+                'current_node_id' => $run['current_node_id'] ?? null,
+                'exception' => $exception::class,
+                'message' => $exception->getMessage(),
+            ]);
+
+            return false;
+        }
+
+        return true;
     }
 
     /**

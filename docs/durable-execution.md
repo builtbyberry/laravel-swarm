@@ -413,6 +413,14 @@ past that failure; if the failing worker dies before failing the parent,
 `swarm:recover` fails it (once any open wait has closed). See
 [Durable Waits And Signals](durable-waits-and-signals.md#edge-cases).
 
+A `queue()` `multi_worker` hierarchical run is continued only by its own resume
+job: an ordinary advance job delivered for one is ignored and logged. Before this
+rule, closing such a run's last wait at its boundary left it `pending` with an
+ordinary step job, and the run was stranded once that job was lost.
+`swarm:recover` puts a run in that shape back at its boundary once it has been
+quiet past `swarm.durable.recovery.grace_seconds`, then releases or fails its join
+as above. See [Upgrading](../UPGRADING.md#rolling-out-the-open-wait-join-rule).
+
 Active route plans and branch outputs can contain worker prompts and
 intermediate outputs. Treat durable runtime tables as sensitive operational
 storage and keep capture settings and retention windows aligned with the data
@@ -615,7 +623,7 @@ These entry points are part of the contract: they resolve durable state through
 
 | Surface | Query / data path | Primary tables / columns |
 | --- | --- | --- |
-| `swarm:recover` | `DurableRecoveryCoordinator` → `recoverable`, `recoverableBranches`, `dueRetries`, `dueRetryBranches`, `recoverableWaitingJoins`, `recoverableTimedOutWaits`, `parentsWaitingOnTerminalChildren`, `undispatchedChildRuns` | Typed columns on `swarm_durable_runs`, `swarm_durable_branches`, joins to `swarm_durable_waits` |
+| `swarm:recover` | `DurableRecoveryCoordinator` → `recoverable`, `recoverableBranches`, `dueRetries`, `dueRetryBranches`, `strandedQueuedHierarchicalJoins` (bundled store only), `recoverableWaitingJoins`, `recoverableTimedOutWaits`, `parentsWaitingOnTerminalChildren`, `undispatchedChildRuns` | Typed columns on `swarm_durable_runs`, `swarm_durable_branches`, joins to `swarm_durable_waits` |
 | `swarm:inspect`, `swarm:progress` | `DurableSwarmManager::inspect` → `find`, `labels`, `details`, `waits`, `signals`, `progress`, `childRuns`, `branchesFor` | Main row + satellite tables keyed by `run_id` |
 | `swarm:pause` / `resume` / `cancel` | lifecycle controllers → `DurableRunStore` mutations | Typed status / lease / pause columns |
 | `swarm:health --durable` | store readiness probe | Connection to configured durable tables |

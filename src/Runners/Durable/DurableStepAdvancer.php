@@ -12,7 +12,9 @@ use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
 use BuiltByBerry\LaravelSwarm\Runners\DurableHierarchicalStepResult;
 use BuiltByBerry\LaravelSwarm\Runners\NativeOutcomeValidator;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use BuiltByBerry\LaravelSwarm\Support\SafeReporting;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
+use Psr\Log\LoggerInterface;
 use Throwable;
 
 /**
@@ -20,6 +22,8 @@ use Throwable;
  */
 class DurableStepAdvancer
 {
+    use SafeReporting;
+
     public function __construct(
         protected DurableRunContext $runs,
         protected DurableRunStore $durableRuns,
@@ -32,6 +36,7 @@ class DurableStepAdvancer
         protected DurableSequentialStepAdvancer $sequential,
         protected DurableStepCheckpointCoordinator $checkpoints,
         protected DurableOutbox $outbox,
+        protected LoggerInterface $logger,
     ) {}
 
     public function afterStepCheckpointForTesting(?callable $hook): void
@@ -47,6 +52,27 @@ class DurableStepAdvancer
     public function advance(string $runId, int $expectedStepIndex, callable $enterDurableBoundary, ?int $outboxEntryId = null): void
     {
         $run = $this->runs->requireRun($runId);
+
+        // A queued-hierarchical run is continued by its own resume job, never by an
+        // ordinary advance job. One delivered anyway — pushed by a worker from before
+        // the open-wait join rule (#600), or delayed since — is ignored before it takes
+        // the lease: the durable lease is that run's coordination lease, and taking it
+        // would run the continuation on the wrong path beside its own. The entry it was
+        // pushed for directly is settled so the relay does not deliver it again; a relay
+        // push carries none, its row already gone.
+        if ($this->runs->isQueueHierarchicalParallel($run)) {
+            if ($outboxEntryId !== null) {
+                $this->outbox->settle($outboxEntryId, $runId);
+            }
+
+            $this->safeLog($this->logger, 'warning', 'laravel-swarm: ignored an ordinary advance job delivered for a queued-hierarchical run; its own resume continues it.', [
+                'run_id' => $runId,
+                'step_index' => $expectedStepIndex,
+            ]);
+
+            return;
+        }
+
         $stepLeaseSeconds = $this->runs->validateStepTimeoutSeconds((int) $run['step_timeout_seconds']);
         $token = $this->durableRuns->acquireLease($runId, $expectedStepIndex, $stepLeaseSeconds);
 

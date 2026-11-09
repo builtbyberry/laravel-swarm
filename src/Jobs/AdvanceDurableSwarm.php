@@ -30,7 +30,9 @@ class AdvanceDurableSwarm implements ShouldQueue
     /**
      * The outbox entry this job was pushed for directly on commit, deleted once
      * the job acquires its lease — including the step of a join swarm:recover
-     * released, when eager dispatch pushes it. Null for relay pushes and for
+     * released, when eager dispatch pushes it — or, for a queued-hierarchical run,
+     * which an ordinary advance job never runs, at once without a lease when the
+     * job is ignored. Null for relay pushes and for
      * swarm:recover's direct redispatches, which own no entry.
      * A declared (not promoted) property so a payload queued without
      * it restores to null: SerializesModels restores declared properties only

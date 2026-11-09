@@ -1613,6 +1613,151 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
     }
 
     /**
+     * Queued-hierarchical runs stranded at their parallel boundary by a pre-upgrade
+     * wait closer (#615). Before the open-wait join rule (#600), closing a run's last
+     * wait moved it to durable `pending` even at a branch boundary, wrote history
+     * `pending`, and pushed an ordinary advance job. Nothing current selects that shape:
+     * {@see recoverable()} skips this profile, {@see recoverableWaitingJoins()} needs
+     * durable `waiting`, {@see recoverableQueuedResumes()} needs history `running`, and
+     * the continuation lease needs history `waiting`.
+     *
+     * The shape: queued-hierarchical, durable `pending` and unfinished, no retry due, no
+     * live lease, quiet past the grace period, a current node with branch rows under it
+     * and no open wait, and history `pending`. Every condition is in SQL, so the limit
+     * counts only candidates. Concrete-only: not on the {@see DurableRunStore} contract.
+     *
+     * @return array<int, array{run_id: string}>
+     */
+    public function strandedQueuedHierarchicalJoins(?string $runId = null, ?string $swarmClass = null, int $limit = 50, int $graceSeconds = 300): array
+    {
+        $now = Carbon::now('UTC');
+        $durableTable = (string) $this->config->get('swarm.tables.durable', 'swarm_durable_runs');
+        $historyTable = (string) $this->config->get('swarm.tables.history', 'swarm_run_histories');
+
+        $query = $this->strandedQueuedHierarchicalJoinShape(
+            $this->connection->table($durableTable.' as runs')
+                ->join($historyTable.' as histories', 'runs.run_id', '=', 'histories.run_id')
+                ->where('histories.status', 'pending'),
+            'runs',
+            $now,
+            $now->copy()->subSeconds($graceSeconds),
+        )
+            ->orderBy('runs.updated_at')
+            ->limit($limit)
+            ->select(['runs.run_id']);
+
+        if ($runId !== null) {
+            $query->where('runs.run_id', $runId);
+        }
+
+        if ($swarmClass !== null) {
+            $query->where('runs.swarm_class', $swarmClass);
+        }
+
+        return $query->get()
+            ->map(fn (object $record): array => ['run_id' => (string) $record->run_id])
+            ->all();
+    }
+
+    /**
+     * Put a run {@see strandedQueuedHierarchicalJoins()} selected back at its parallel
+     * boundary: durable `waiting`, the row a fan-out leaves — no lease, no current step,
+     * no wait columns — keeping its route, branches, attempts and next step index. Its
+     * join is then released by the ordinary rules (the last branch, or swarm:recover).
+     *
+     * One transaction, locked in the order every writer of both rows takes: the durable
+     * row first, re-checked under the lock (a stray step that holds or took the run is
+     * rejected here, before the history row is touched), then $restoreHistory, which
+     * locks and restores the history row and returns whether it did. The durable row is
+     * written only if it did. The branch and wait checks after the lock are plain reads:
+     * a wait closer takes the wait row before the run row, and a branch worker can hold
+     * its branch row while it reaches the run, so locking either here could deadlock.
+     *
+     * @param  callable(): bool  $restoreHistory
+     */
+    public function restoreStrandedQueuedHierarchicalJoin(string $runId, int $graceSeconds, callable $restoreHistory): bool
+    {
+        return $this->connection->transaction(function () use ($runId, $graceSeconds, $restoreHistory): bool {
+            $now = Carbon::now('UTC');
+            $durableTable = (string) $this->config->get('swarm.tables.durable', 'swarm_durable_runs');
+
+            $locked = $this->connection->table($durableTable)
+                ->where('run_id', $runId)
+                ->lockForUpdate()
+                ->first(['run_id']);
+
+            if ($locked === null) {
+                return false;
+            }
+
+            $stillStranded = $this->strandedQueuedHierarchicalJoinShape(
+                $this->connection->table($durableTable)->where($durableTable.'.run_id', $runId),
+                $durableTable,
+                $now,
+                $now->copy()->subSeconds($graceSeconds),
+            )->exists();
+
+            if (! $stillStranded || ! $restoreHistory()) {
+                return false;
+            }
+
+            $updated = $this->table()
+                ->where('run_id', $runId)
+                ->where('status', 'pending')
+                ->update([
+                    'status' => 'waiting',
+                    'current_step_index' => null,
+                    'execution_token' => null,
+                    'leased_until' => null,
+                    'wait_reason' => null,
+                    'waiting_since' => null,
+                    'wait_timeout_at' => null,
+                    'updated_at' => $now,
+                ]);
+
+            if ($updated !== 1) {
+                // Unreachable while the row is locked and re-checked; never leave the
+                // history row restored without its durable row.
+                throw new SwarmException("Durable run [{$runId}] could not be put back at its parallel boundary.");
+            }
+
+            return true;
+        });
+    }
+
+    /**
+     * The durable half of the stranded shape, on a query over the durable table aliased
+     * (or named) $runs.
+     */
+    private function strandedQueuedHierarchicalJoinShape(Builder $query, string $runs, Carbon $now, Carbon $threshold): Builder
+    {
+        $branchTable = (string) $this->config->get('swarm.tables.durable_branches', 'swarm_durable_branches');
+        $waitTable = (string) $this->config->get('swarm.tables.durable_waits', 'swarm_durable_waits');
+
+        return $query
+            ->where($runs.'.coordination_profile', CoordinationProfile::QueueHierarchicalParallel->value)
+            ->where($runs.'.status', 'pending')
+            ->whereNull($runs.'.finished_at')
+            ->whereNull($runs.'.next_retry_at')
+            ->whereNotNull($runs.'.current_node_id')
+            ->where($runs.'.updated_at', '<=', $threshold)
+            ->where(function (Builder $lease) use ($runs, $now): void {
+                $lease->whereNull($runs.'.leased_until')
+                    ->orWhere($runs.'.leased_until', '<', $now);
+            })
+            ->whereExists(fn (Builder $branches) => $branches
+                ->select($this->connection->raw('1'))
+                ->from($branchTable)
+                ->whereColumn($branchTable.'.run_id', $runs.'.run_id')
+                ->whereColumn($branchTable.'.parent_node_id', $runs.'.current_node_id'))
+            ->whereNotExists(fn (Builder $waits) => $waits
+                ->select($this->connection->raw('1'))
+                ->from($waitTable)
+                ->whereColumn($waitTable.'.run_id', $runs.'.run_id')
+                ->where($waitTable.'.status', 'waiting'));
+    }
+
+    /**
      * Hydrate a recovery-sweep candidate collection in O(1) side-table queries.
      *
      * Returns early with no side-table round-trip when there are no candidates,
@@ -2451,12 +2596,24 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
     {
         $childTable = (string) $this->config->get('swarm.tables.durable_child_runs', 'swarm_durable_child_runs');
         $durableTable = (string) $this->config->get('swarm.tables.durable', 'swarm_durable_runs');
+        $waitTable = (string) $this->config->get('swarm.tables.durable_waits', 'swarm_durable_waits');
 
         $query = $this->connection->table($childTable.' as children')
             ->join($durableTable.' as parents', 'children.parent_run_id', '=', 'parents.run_id')
             ->where('parents.status', 'waiting')
             ->whereIn('children.status', ['completed', 'failed', 'cancelled'])
             ->whereNull('parents.finished_at')
+            // Only a child whose wait is still open: reconciling releases that wait (and a
+            // timeout may have closed it first), after which there is nothing left to
+            // deliver. A parent still at its branch boundary stays waiting once its child
+            // outcome is in, so without this it would be selected — and skipped — every
+            // sweep, taking a place under the limit from a parent that needs its outcome.
+            ->whereExists(fn (Builder $waits) => $waits
+                ->select($this->connection->raw('1'))
+                ->from($waitTable)
+                ->whereColumn($waitTable.'.run_id', 'children.parent_run_id')
+                ->whereColumn($waitTable.'.name', 'children.wait_name')
+                ->where($waitTable.'.status', 'waiting'))
             ->orderBy('children.updated_at')
             ->limit($limit)
             ->select('parents.*');
