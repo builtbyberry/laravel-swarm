@@ -160,6 +160,24 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
 
 ### Fixed
 
+- **Wait creation cannot slip past a branch join release (#614).** Creators and
+  join releases serialize on the run row. An internal `wait_generation` epoch
+  detects creation across the wait scan without taking another wait-row lock
+  after locking the run. Creation that loses to an already released join
+  throws `SwarmException` without persisting a new wait. Accepting it was rejected
+  because an open obligation could coexist with a queued continuation. Framework
+  declared waits and child intents at durable hierarchical fan-out now commit
+  with the checkpoint and branch outbox records; notifications and child dispatch
+  remain after commit, including recovery after a notification failure. Whole
+  package-owned transactions retry database concurrency errors up to three
+  attempts; application-owned outer transactions must retry as a whole. The
+  additive run-row counter defaults to zero without a logical backfill and is
+  pruned with the run. Migrate before replacing workers; no new configuration.
+  Deterministic SQLite and real-process
+  PostgreSQL/MySQL regressions cover both race orders and declared boundaries.
+  See [durable waits](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-waits-and-signals.md#creating-a-wait-from-application-code)
+  and [upgrade guidance](UPGRADING.md#wait-creation-at-branch-joins).
+
 - **Parallel stream process results on newer Laravel releases (#625).** Live
   parallel streams and `swarm:health --parallel-streaming` now support Laravel's
   signed concurrency result envelopes. Each child receives a separate signing

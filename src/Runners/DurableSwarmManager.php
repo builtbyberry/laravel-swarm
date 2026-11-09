@@ -37,6 +37,7 @@ use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use BuiltByBerry\LaravelSwarm\Support\SwarmPayloadLimits;
+use Closure;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Foundation\Application;
@@ -338,7 +339,7 @@ class DurableSwarmManager
         $this->advancer->advance(
             $runId,
             $expectedStepIndex,
-            fn (array $run, Swarm $swarm, RunContext $context, int $nextStepIndex): bool => $this->enterDeclaredDurableBoundary($run, $swarm, $context),
+            fn (array $run, Swarm $swarm, RunContext $context, int $nextStepIndex, ?Closure $deferEffects = null): bool => $this->enterDeclaredDurableBoundary($run, $swarm, $context, $deferEffects),
             $outboxEntryId,
         );
     }
@@ -359,8 +360,8 @@ class DurableSwarmManager
     /**
      * @param  array<string, mixed>  $run
      */
-    protected function enterDeclaredDurableBoundary(array $run, Swarm $swarm, RunContext $context): bool
+    protected function enterDeclaredDurableBoundary(array $run, Swarm $swarm, RunContext $context, ?Closure $deferEffects = null): bool
     {
-        return $this->boundary->enterDeclaredBoundary($run, $swarm, $context);
+        return $this->boundary->enterDeclaredBoundary($run, $swarm, $context, $deferEffects);
     }
 }

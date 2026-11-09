@@ -11,6 +11,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\RoutesDurableWaits;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Responses\DurableChildRun;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use Closure;
 use ReflectionClass;
 
 /**
@@ -28,8 +29,9 @@ class DurableBoundaryCoordinator
 
     /**
      * @param  array<string, mixed>  $run
+     * @param  (Closure(Closure(): void): void)|null  $deferEffects  Collect effects for later execution; null invokes them here.
      */
-    public function enterDeclaredBoundary(array $run, Swarm $swarm, RunContext $context): bool
+    public function enterDeclaredBoundary(array $run, Swarm $swarm, RunContext $context, ?Closure $deferEffects = null): bool
     {
         foreach ($this->declaredWaits($swarm, $context) as $wait) {
             $name = $wait['name'];
@@ -38,7 +40,7 @@ class DurableBoundaryCoordinator
                 continue;
             }
 
-            $this->signals->wait($run['run_id'], $name, $wait['reason'] ?? null, $wait['timeout'] ?? null, $wait['metadata'] ?? []);
+            $this->signals->wait($run['run_id'], $name, $wait['reason'] ?? null, $wait['timeout'] ?? null, $wait['metadata'] ?? [], $deferEffects);
 
             return true;
         }
@@ -54,7 +56,7 @@ class DurableBoundaryCoordinator
                 continue;
             }
 
-            $this->dispatchChildSwarm($run['run_id'], $definition['swarm'], $definition['task'], (string) $index);
+            $this->dispatchChildSwarm($run['run_id'], $definition['swarm'], $definition['task'], (string) $index, $deferEffects);
 
             return true;
         }
@@ -96,8 +98,8 @@ class DurableBoundaryCoordinator
     /**
      * @param  string|array<string, mixed>|RunContext  $task
      */
-    protected function dispatchChildSwarm(string $parentRunId, string $childSwarmClass, string|array|RunContext $task, ?string $dedupeKey): DurableChildRun
+    protected function dispatchChildSwarm(string $parentRunId, string $childSwarmClass, string|array|RunContext $task, ?string $dedupeKey, ?Closure $deferEffects = null): DurableChildRun
     {
-        return $this->children->dispatchChildSwarm($parentRunId, $childSwarmClass, $task, $dedupeKey);
+        return $this->children->dispatchChildSwarm($parentRunId, $childSwarmClass, $task, $dedupeKey, $deferEffects);
     }
 }
