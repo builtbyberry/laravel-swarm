@@ -1626,7 +1626,7 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
      * and no open wait, and history `pending`. Every condition is in SQL, so the limit
      * counts only candidates. Concrete-only: not on the {@see DurableRunStore} contract.
      *
-     * @return array<int, array{run_id: string}>
+     * @return array<int, array{run_id: string, swarm_class: string, current_node_id: string}>
      */
     public function strandedQueuedHierarchicalJoins(?string $runId = null, ?string $swarmClass = null, int $limit = 50, int $graceSeconds = 300): array
     {
@@ -1644,7 +1644,7 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
         )
             ->orderBy('runs.updated_at')
             ->limit($limit)
-            ->select(['runs.run_id']);
+            ->select(['runs.run_id', 'runs.swarm_class', 'runs.current_node_id']);
 
         if ($runId !== null) {
             $query->where('runs.run_id', $runId);
@@ -1655,7 +1655,11 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
         }
 
         return $query->get()
-            ->map(fn (object $record): array => ['run_id' => (string) $record->run_id])
+            ->map(fn (object $record): array => [
+                'run_id' => (string) $record->run_id,
+                'swarm_class' => (string) $record->swarm_class,
+                'current_node_id' => (string) $record->current_node_id,
+            ])
             ->all();
     }
 

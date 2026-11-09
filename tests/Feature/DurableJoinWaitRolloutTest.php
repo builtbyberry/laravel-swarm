@@ -13,6 +13,7 @@ use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableBranch;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\InvokeSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\ResumeQueuedHierarchicalSwarm;
+use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableOutbox;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
@@ -28,8 +29,10 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalFullSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalParallelFailBranchSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Support\StrandedJoinShapeBreakers;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
+use Psr\Log\LoggerInterface;
 
 /**
  * Rollout of the open-wait join rule (#615). Before #600, closing the last wait of a
@@ -58,6 +61,30 @@ class RolloutThrowingHistoryStore extends DatabaseRunHistoryStore
         }
 
         return parent::restoreQueuedHierarchicalBoundaryWait($runId);
+    }
+}
+
+/** A bundled store whose stranded-join selector fails, to prove the sweep goes on. */
+class RolloutThrowingSelectorStore extends DatabaseDurableRunStore
+{
+    public function strandedQueuedHierarchicalJoins(?string $runId = null, ?string $swarmClass = null, int $limit = 50, int $graceSeconds = 300): array
+    {
+        throw new RuntimeException('selector failed');
+    }
+}
+
+/** An outbox whose settle() throws, to prove an ignored advance job tolerates it. */
+class RolloutThrowingSettleOutbox extends DatabaseDurableOutbox
+{
+    public static bool $throws = false;
+
+    public function settle(int $entryId, ?string $runId = null): void
+    {
+        if (self::$throws) {
+            throw new RuntimeException('settle failed');
+        }
+
+        parent::settle($entryId, $runId);
     }
 }
 
@@ -244,6 +271,23 @@ function rolloutResume(string $runId): void
     (new ResumeQueuedHierarchicalSwarm($runId))->handle(app(QueuedHierarchicalCoordinator::class));
 }
 
+/**
+ * Undo acquireQueuedRunContinuationLease() as a continuation that never ran would
+ * leave it: history back to waiting at the boundary, no lease, flag set again.
+ */
+function rolloutHandBackContinuationLease(string $runId): void
+{
+    $metadata = json_decode((string) rolloutHistory($runId)['metadata'], true);
+    $metadata['queue_hierarchical_waiting_parallel'] = true;
+
+    DB::table('swarm_run_histories')->where('run_id', $runId)->update([
+        'status' => 'waiting',
+        'execution_token' => null,
+        'leased_until' => null,
+        'metadata' => json_encode($metadata),
+    ]);
+}
+
 /** The stranded run's own rows, for "untouched" assertions. */
 function rolloutSnapshot(string $runId): array
 {
@@ -258,10 +302,18 @@ function rolloutSnapshot(string $runId): array
     ];
 }
 
+beforeEach(function () {
+    rolloutRuntime();
+    Artisan::call('migrate:fresh', ['--database' => 'testing']);
+});
+
+afterEach(function () {
+    RolloutThrowingHistoryStore::$throwFor = null;
+    RolloutThrowingSettleOutbox::$throws = false;
+});
+
 describe('swarm:recover repairs a queued-hierarchical run stranded by a pre-upgrade closer', function () {
     beforeEach(function () {
-        rolloutRuntime();
-        Artisan::call('migrate:fresh', ['--database' => 'testing']);
         FakeHierarchicalCoordinator::fake([rolloutPlan()]);
         FakeResearcher::fake(['research-out', 'child-research']);
         FakeWriter::fake(['writer-out', 'child-writer']);
@@ -482,12 +534,22 @@ describe('swarm:recover repairs a queued-hierarchical run stranded by a pre-upgr
         expect(rolloutDurable('rollout-scope-a')['status'])->toBe('pending')
             ->and(rolloutDurable('rollout-scope-b')['status'])->toBe('waiting');
     });
+
+    test('scoped by swarm class, the repair takes only runs of that swarm', function () {
+        rolloutQueuedRun('rollout-swarm-scope');
+        rolloutStrand('rollout-swarm-scope', 'signal');
+        rolloutAge('rollout-swarm-scope');
+
+        Artisan::call('swarm:recover', ['--swarm' => FakeSequentialSwarm::class]);
+        expect(rolloutDurable('rollout-swarm-scope')['status'])->toBe('pending');
+
+        Artisan::call('swarm:recover', ['--swarm' => FakeHierarchicalFullSwarm::class]);
+        expect(rolloutDurable('rollout-swarm-scope')['status'])->toBe('waiting');
+    });
 });
 
 describe('the repair never touches a healthy run', function () {
     beforeEach(function () {
-        rolloutRuntime();
-        Artisan::call('migrate:fresh', ['--database' => 'testing']);
         FakeHierarchicalCoordinator::fake([rolloutPlan()]);
         FakeWriter::fake(['writer-out']);
         FakeEditor::fake(['editor-out']);
@@ -588,10 +650,6 @@ describe('the repair never touches a healthy run', function () {
 });
 
 describe('an ordinary advance job delivered for a queued-hierarchical run is ignored', function () {
-    beforeEach(function () {
-        rolloutRuntime();
-        Artisan::call('migrate:fresh', ['--database' => 'testing']);
-    });
 
     test('it never takes the durable lease and settles the outbox entry it carries', function () {
         FakeHierarchicalCoordinator::fake([rolloutPlan()]);
@@ -627,6 +685,44 @@ describe('an ordinary advance job delivered for a queued-hierarchical run is ign
         (new AdvanceDurableSwarm($runId, $index))->handle(rolloutManager());
 
         expect(rolloutSnapshot($runId))->toBe($before);
+    });
+
+    test('it says so in one warning naming the run, and a settle that throws changes nothing', function () {
+        FakeHierarchicalCoordinator::fake([rolloutPlan()]);
+        FakeWriter::fake(['writer-out']);
+        FakeEditor::fake(['editor-out']);
+        $runId = 'stray-logged';
+        rolloutQueuedRun($runId);
+        rolloutStrand($runId, 'signal');
+        $index = (int) rolloutDurable($runId)['next_step_index'];
+        $entryId = app(DurableOutbox::class)->enqueueStep($runId, $index, 'durable-test', 'swarm-durable', true);
+        $before = rolloutSnapshot($runId);
+
+        $warnings = [];
+        $logger = Mockery::mock(LoggerInterface::class)->shouldIgnoreMissing();
+        $logger->shouldReceive('warning')->andReturnUsing(function (string $message, array $context = []) use (&$warnings): void {
+            $warnings[] = [$message, $context];
+        });
+        app()->instance(LoggerInterface::class, $logger);
+        RolloutThrowingSettleOutbox::$throws = true;
+        app()->bind(DurableOutbox::class, RolloutThrowingSettleOutbox::class);
+        app()->forgetInstance(DurableSwarmManager::class);
+
+        (new AdvanceDurableSwarm($runId, $index, outboxEntryId: $entryId))->handle(rolloutManager());
+
+        $ignored = array_values(array_filter($warnings, fn (array $warning): bool => str_contains($warning[0], 'ignored an ordinary advance job')));
+        expect(rolloutSnapshot($runId))->toBe($before)
+            ->and(DB::table('swarm_durable_outbox')->where('id', $entryId)->exists())->toBeTrue()
+            ->and($ignored)->toHaveCount(1)
+            ->and($ignored[0][1])->toMatchArray([
+                'run_id' => $runId,
+                'swarm_class' => FakeHierarchicalFullSwarm::class,
+                'status' => 'pending',
+                'current_node_id' => 'parallel_node',
+                'step_index' => $index,
+                'outbox_entry_id' => $entryId,
+                'outbox_entry_settled' => false,
+            ]);
     });
 
     test('a delayed stray job stays harmless across a later boundary and while the continuation holds its lease', function () {
@@ -674,7 +770,7 @@ describe('an ordinary advance job delivered for a queued-hierarchical run is ign
         $before = rolloutSnapshot($runId);
         $stray();
         expect(rolloutSnapshot($runId))->toBe($before);
-        DB::table('swarm_run_histories')->where('run_id', $runId)->update(['status' => 'waiting', 'execution_token' => null, 'leased_until' => null, 'metadata' => json_encode(array_merge(json_decode((string) rolloutHistory($runId)['metadata'], true), ['queue_hierarchical_waiting_parallel' => true]))]);
+        rolloutHandBackContinuationLease($runId);
 
         rolloutResume($runId);
         expect(rolloutHistory($runId)['status'])->toBe('completed')
@@ -684,8 +780,6 @@ describe('an ordinary advance job delivered for a queued-hierarchical run is ign
 
 describe('parentsWaitingOnTerminalChildren and an already reconciled parent', function () {
     beforeEach(function () {
-        rolloutRuntime();
-        Artisan::call('migrate:fresh', ['--database' => 'testing']);
         FakeHierarchicalCoordinator::fake([rolloutPlan(), rolloutPlan()]);
         FakeResearcher::fake(['r1', 'r2', 'r3', 'r4', 'r5', 'r6']);
         FakeWriter::fake(['writer-out', 'writer-out', 'w1', 'w2', 'w3', 'w4']);
@@ -731,81 +825,97 @@ describe('parentsWaitingOnTerminalChildren and an already reconciled parent', fu
     });
 });
 
-/**
- * One condition of the stranded shape broken on an otherwise stranded, aged run.
- *
- * @return array<string, Closure(string): void>
- */
-function rolloutShapeBreakers(): array
-{
-    $durable = fn (array $values): Closure => fn (string $runId) => DB::table('swarm_durable_runs')->where('run_id', $runId)->update($values);
-
-    return [
-        'another profile' => $durable(['coordination_profile' => 'step_durable']),
-        'durable waiting' => $durable(['status' => 'waiting']),
-        'durable running' => $durable(['status' => 'running']),
-        'finished' => $durable(['finished_at' => now('UTC')]),
-        'retry scheduled' => $durable(['next_retry_at' => now('UTC')->subMinute()]),
-        'no current node' => $durable(['current_node_id' => null]),
-        'current node without branches' => $durable(['current_node_id' => 'finish_node']),
-        'live durable lease' => $durable(['leased_until' => now('UTC')->addMinutes(5), 'execution_token' => 'live']),
-        'moved within the grace period' => $durable(['updated_at' => now('UTC')]),
-        'open wait' => fn (string $runId) => DB::table('swarm_durable_waits')->insert([
-            'run_id' => $runId, 'name' => 'still-open', 'status' => 'waiting',
-            'created_at' => now('UTC'), 'updated_at' => now('UTC'),
-        ]),
-        'history waiting' => fn (string $runId) => DB::table('swarm_run_histories')->where('run_id', $runId)->update(['status' => 'waiting']),
-        'history running' => fn (string $runId) => DB::table('swarm_run_histories')->where('run_id', $runId)->update(['status' => 'running']),
-    ];
-}
+dataset('durable shape breakers', fn () => array_map(fn (string $key) => [$key], array_combine(array_keys(StrandedJoinShapeBreakers::durable()), array_keys(StrandedJoinShapeBreakers::durable()))));
+dataset('history shape breakers', fn () => array_map(fn (string $key) => [$key], array_combine(array_keys(StrandedJoinShapeBreakers::history()), array_keys(StrandedJoinShapeBreakers::history()))));
+dataset('all shape breakers', fn () => array_map(fn (string $key) => [$key], array_combine(array_keys(StrandedJoinShapeBreakers::all()), array_keys(StrandedJoinShapeBreakers::all()))));
 
 describe('the stranded shape, condition by condition', function () {
     beforeEach(function () {
-        rolloutRuntime();
-        Artisan::call('migrate:fresh', ['--database' => 'testing']);
         FakeHierarchicalCoordinator::fake([rolloutPlan()]);
         FakeWriter::fake(['writer-out']);
         FakeEditor::fake(['editor-out']);
     });
 
-    test('the selector takes a stranded run and nothing that breaks one condition of it', function (?string $breaker) {
+    test('the selector takes a stranded run, also one a dead stray step left with an expired lease', function (bool $deadLease) {
         $runId = 'shape-select';
         rolloutQueuedRun($runId);
         rolloutStrand($runId, 'signal');
         rolloutAge($runId);
 
-        if ($breaker !== null) {
-            rolloutShapeBreakers()[$breaker]($runId);
+        if ($deadLease) {
+            StrandedJoinShapeBreakers::expireDeadLease($runId);
         }
 
-        $selected = collect(app(DatabaseDurableRunStore::class)->strandedQueuedHierarchicalJoins(graceSeconds: 300))->pluck('run_id')->all();
+        expect(app(DatabaseDurableRunStore::class)->strandedQueuedHierarchicalJoins(graceSeconds: 300))
+            ->toBe([['run_id' => $runId, 'swarm_class' => FakeHierarchicalFullSwarm::class, 'current_node_id' => 'parallel_node']]);
+    })->with(['no lease' => false, 'expired dead lease' => true]);
 
-        expect($selected)->toBe($breaker === null ? [$runId] : []);
-    })->with(array_merge(['the stranded shape' => [null]], array_combine(array_keys(rolloutShapeBreakers()), array_map(fn ($key) => [$key], array_keys(rolloutShapeBreakers())))));
-
-    test('the restore re-checks the shape under its lock and writes nothing when one condition broke', function (string $breaker) {
-        $runId = 'shape-restore';
+    test('the selector takes nothing that breaks one condition of the shape', function (string $breaker) {
+        $runId = 'shape-select-broken';
         rolloutQueuedRun($runId);
         rolloutStrand($runId, 'signal');
         rolloutAge($runId);
-        rolloutShapeBreakers()[$breaker]($runId);
+        StrandedJoinShapeBreakers::all()[$breaker]($runId);
+
+        expect(app(DatabaseDurableRunStore::class)->strandedQueuedHierarchicalJoins(graceSeconds: 300))->toBe([]);
+    })->with('all shape breakers');
+
+    test('the restore rejects a broken durable condition under its lock before it touches the history row', function (string $breaker) {
+        $runId = 'shape-restore-durable';
+        rolloutQueuedRun($runId);
+        rolloutStrand($runId, 'signal');
+        rolloutAge($runId);
+        StrandedJoinShapeBreakers::durable()[$breaker]($runId);
         $before = rolloutSnapshot($runId);
         $historyCalled = false;
 
-        $restored = app(DatabaseDurableRunStore::class)->restoreStrandedQueuedHierarchicalJoin($runId, 300, function () use (&$historyCalled, $runId): bool {
+        $restored = app(DatabaseDurableRunStore::class)->restoreStrandedQueuedHierarchicalJoin($runId, 300, function () use (&$historyCalled): bool {
             $historyCalled = true;
 
-            return app(DatabaseRunHistoryStore::class)->restoreQueuedHierarchicalBoundaryWait($runId);
+            return true;
         });
 
         expect($restored)->toBeFalse()
+            ->and($historyCalled)->toBeFalse()
             ->and(rolloutSnapshot($runId))->toBe($before);
+    })->with('durable shape breakers');
 
-        // A durable condition is rejected before the history row is touched.
-        if (! str_starts_with($breaker, 'history')) {
-            expect($historyCalled)->toBeFalse();
-        }
-    })->with(array_keys(rolloutShapeBreakers()));
+    test('the restore rejects a broken history condition and writes nothing', function (string $breaker) {
+        $runId = 'shape-restore-history';
+        rolloutQueuedRun($runId);
+        rolloutStrand($runId, 'signal');
+        rolloutAge($runId);
+        StrandedJoinShapeBreakers::history()[$breaker]($runId);
+        $before = rolloutSnapshot($runId);
+
+        $restored = app(DatabaseDurableRunStore::class)->restoreStrandedQueuedHierarchicalJoin(
+            $runId,
+            300,
+            fn (): bool => app(DatabaseRunHistoryStore::class)->restoreQueuedHierarchicalBoundaryWait($runId),
+        );
+
+        expect($restored)->toBeFalse()
+            ->and(rolloutSnapshot($runId))->toBe($before);
+    })->with('history shape breakers');
+
+    test('the repair clears a dead stray step\'s lease and token and the run completes', function () {
+        $runId = 'shape-dead-lease';
+        rolloutQueuedRun($runId);
+        rolloutStrand($runId, 'signal');
+        rolloutCompleteBranches($runId, 'parallel_node');
+        rolloutAge($runId);
+        StrandedJoinShapeBreakers::expireDeadLease($runId);
+
+        Artisan::call('swarm:recover');
+
+        expect(rolloutDurable($runId)['execution_token'])->toBeNull()
+            ->and(rolloutDurable($runId)['leased_until'])->toBeNull()
+            ->and(rolloutHistory($runId)['status'])->toBe('waiting');
+
+        rolloutResume($runId);
+
+        expect(rolloutHistory($runId)['status'])->toBe('completed');
+    });
 
     test('a history row the restore refuses leaves the durable row as it was', function () {
         $runId = 'shape-history-refused';
@@ -818,6 +928,22 @@ describe('the stranded shape, condition by condition', function () {
 
         expect($restored)->toBeFalse()
             ->and(rolloutSnapshot($runId))->toBe($before);
+    });
+
+    test('a stranded-join selector that fails loses only the repair; the waiting-join release in the same sweep still runs', function () {
+        $runId = 'shape-selector-fails';
+        rolloutQueuedRun($runId);
+        // A healthy run at its boundary whose branches finished but whose join was never
+        // released (its worker stopped first): the waiting-join phase releases it.
+        DB::table('swarm_durable_branches')->where('run_id', $runId)->update(['status' => 'completed', 'output' => 'branch-out', 'finished_at' => now('UTC')]);
+        rolloutAge($runId);
+
+        app()->singleton(DurableRunStore::class, RolloutThrowingSelectorStore::class);
+        app()->forgetInstance(DurableSwarmManager::class);
+
+        expect(Artisan::call('swarm:recover'))->toBe(0)
+            ->and(rolloutDurable($runId)['status'])->toBe('pending')
+            ->and(rolloutOutbox($runId, DurableDispatchType::QueuedResume))->toHaveCount(1);
     });
 
     test('a repair that throws rolls back and the sweep goes on to the next stranded run', function () {

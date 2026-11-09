@@ -180,7 +180,9 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   beside its continuation. The terminal-children sweep also no longer selects a
   parent whose child outcome was already delivered, so a parent still waiting on
   its branches cannot take the place, under `--limit`, of a parent that needs its
-  outcome. No migration or configuration. Replace every worker before the new
+  outcome; a custom `DurableRunStore` keeps the old selection until its
+  `parentsWaitingOnTerminalChildren()` applies the same open-wait filter before
+  its limit. No migration or configuration. Replace every worker before the new
   `swarm:recover` runs; see
   [upgrade guidance](UPGRADING.md#rolling-out-the-open-wait-join-rule).
 

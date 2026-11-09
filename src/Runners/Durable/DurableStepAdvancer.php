@@ -39,6 +39,37 @@ class DurableStepAdvancer
         protected LoggerInterface $logger,
     ) {}
 
+    /**
+     * Settle the entry an ignored advance job was pushed for and say so. A settle that
+     * throws is reported, never thrown: the job did nothing to the run, and failing it
+     * would only deliver it again to be ignored again.
+     *
+     * @param  array<string, mixed>  $run
+     */
+    protected function ignoreQueueHierarchicalAdvance(array $run, int $expectedStepIndex, ?int $outboxEntryId): void
+    {
+        $settled = false;
+
+        if ($outboxEntryId !== null) {
+            try {
+                $this->outbox->settle($outboxEntryId, (string) $run['run_id']);
+                $settled = true;
+            } catch (Throwable $exception) {
+                $this->safeReport($exception);
+            }
+        }
+
+        $this->safeLog($this->logger, 'warning', 'laravel-swarm: ignored an ordinary advance job delivered for a queued-hierarchical run; its own resume continues it.', [
+            'run_id' => $run['run_id'],
+            'swarm_class' => $run['swarm_class'] ?? null,
+            'status' => $run['status'] ?? null,
+            'current_node_id' => $run['current_node_id'] ?? null,
+            'step_index' => $expectedStepIndex,
+            'outbox_entry_id' => $outboxEntryId,
+            'outbox_entry_settled' => $settled,
+        ]);
+    }
+
     public function afterStepCheckpointForTesting(?callable $hook): void
     {
         $this->checkpoints->afterStepCheckpointForTesting($hook);
@@ -61,14 +92,7 @@ class DurableStepAdvancer
         // pushed for directly is settled so the relay does not deliver it again; a relay
         // push carries none, its row already gone.
         if ($this->runs->isQueueHierarchicalParallel($run)) {
-            if ($outboxEntryId !== null) {
-                $this->outbox->settle($outboxEntryId, $runId);
-            }
-
-            $this->safeLog($this->logger, 'warning', 'laravel-swarm: ignored an ordinary advance job delivered for a queued-hierarchical run; its own resume continues it.', [
-                'run_id' => $runId,
-                'step_index' => $expectedStepIndex,
-            ]);
+            $this->ignoreQueueHierarchicalAdvance($run, $expectedStepIndex, $outboxEntryId);
 
             return;
         }

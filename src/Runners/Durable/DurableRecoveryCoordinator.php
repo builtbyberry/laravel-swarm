@@ -120,6 +120,10 @@ class DurableRecoveryCoordinator
         // parallel boundary (#615) are put back at it first, then handled exactly as the
         // waiting joins below: released, failed for a `fail_run` branch, or left for
         // their last branch.
+        // A repaired run is not selected again below in this sweep: the repair stamps its
+        // updated_at, inside the waiting-join grace window. With no grace it can be, and
+        // settling it twice is harmless — a second release finds nothing to release, and
+        // run ids are de-duplicated on return.
         $strandedJoins = $this->repairStrandedQueuedHierarchicalJoins($runId, $swarmClass, $limit, $graceSeconds);
 
         $waitingJoins = $this->durableRuns->recoverableWaitingJoins(
@@ -276,9 +280,22 @@ class DurableRecoveryCoordinator
             return [];
         }
 
+        // A selector that fails (a lock timeout, an engine error) loses only this phase
+        // for this sweep; every other phase still recovers.
+        try {
+            $candidates = $store->strandedQueuedHierarchicalJoins($runId, $swarmClass, $limit, $graceSeconds);
+        } catch (Throwable $exception) {
+            $this->safeLog($this->logger, 'warning', 'laravel-swarm: could not select queued-hierarchical runs stranded at their parallel boundary during recovery; they are retried on the next sweep.', [
+                'exception' => $exception::class,
+                'message' => $exception->getMessage(),
+            ]);
+
+            return [];
+        }
+
         $repaired = [];
 
-        foreach ($store->strandedQueuedHierarchicalJoins($runId, $swarmClass, $limit, $graceSeconds) as $candidate) {
+        foreach ($candidates as $candidate) {
             $candidateId = $candidate['run_id'];
 
             try {
@@ -291,6 +308,8 @@ class DurableRecoveryCoordinator
             } catch (Throwable $exception) {
                 $this->safeLog($this->logger, 'warning', 'laravel-swarm: skipping a queued-hierarchical run stranded at its parallel boundary during recovery; it is retried on the next sweep.', [
                     'run_id' => $candidateId,
+                    'swarm_class' => $candidate['swarm_class'],
+                    'current_node_id' => $candidate['current_node_id'],
                     'exception' => $exception::class,
                     'message' => $exception->getMessage(),
                 ]);

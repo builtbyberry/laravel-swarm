@@ -25,6 +25,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalFullSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\ProcessConcurrency\Fixtures\JoinOpenWait\JoinOpenWaitWorker;
 use BuiltByBerry\LaravelSwarm\Tests\ProcessConcurrency\Fixtures\ResumeOpenWait\LockBarrier;
+use BuiltByBerry\LaravelSwarm\Tests\Support\StrandedJoinShapeBreakers;
 use Illuminate\Concurrency\ConcurrencyManager;
 use Illuminate\Filesystem\Filesystem;
 use Illuminate\Support\Facades\Artisan;
@@ -337,7 +338,7 @@ test('a stranded run, polled and its chain lost, is repaired by swarm:recover an
     rolloutDbCompleteBranches($runId, 'parallel_node');
     rolloutDbAge($runId);
 
-    expect(app(DatabaseDurableRunStore::class)->strandedQueuedHierarchicalJoins(runId: $runId))->toBe([['run_id' => $runId]]);
+    expect(collect(app(DatabaseDurableRunStore::class)->strandedQueuedHierarchicalJoins(runId: $runId))->pluck('run_id')->all())->toBe([$runId]);
 
     Artisan::call('swarm:recover');
 
@@ -350,6 +351,67 @@ test('a stranded run, polled and its chain lost, is repaired by swarm:recover an
 
     expect(rolloutDbHistory($runId)['status'])->toBe('completed')
         ->and(rolloutDbHistory($runId)['output'])->toBe('editor-a-out');
+});
+
+test('on the real engine the selector takes the stranded shape, with or without a dead lease, and nothing that breaks one condition of it', function (): void {
+    $store = app(DatabaseDurableRunStore::class);
+    $stranded = 'rollout-db-shape-'.bin2hex(random_bytes(4));
+    rolloutDbStranded($stranded);
+    rolloutDbAge($stranded);
+    StrandedJoinShapeBreakers::expireDeadLease($stranded);
+    $broken = [];
+
+    foreach (StrandedJoinShapeBreakers::all() as $label => $break) {
+        rolloutDbFakes(rolloutDbPlan());
+        $runId = 'rollout-db-broken-'.bin2hex(random_bytes(4));
+        rolloutDbStranded($runId);
+        rolloutDbAge($runId);
+        $break($runId);
+        $broken[$label] = $runId;
+    }
+
+    // Scoped per run: the shared database keeps other tests' rows.
+    expect(collect($store->strandedQueuedHierarchicalJoins(runId: $stranded))->pluck('run_id')->all())->toBe([$stranded]);
+
+    foreach ($broken as $label => $runId) {
+        expect($store->strandedQueuedHierarchicalJoins(runId: $runId))->toBe([], $label);
+    }
+
+    // The restore re-checks every condition under its lock and writes nothing.
+    foreach ($broken as $label => $runId) {
+        $before = rolloutDbSnapshot($runId);
+        $restored = $store->restoreStrandedQueuedHierarchicalJoin($runId, 300, fn (): bool => app(DatabaseRunHistoryStore::class)->restoreQueuedHierarchicalBoundaryWait($runId));
+        expect($restored)->toBeFalse($label)
+            ->and(rolloutDbSnapshot($runId))->toBe($before, $label);
+    }
+});
+
+test('on the real engine swarm:recover leaves healthy queued-hierarchical runs as they are', function (): void {
+    $released = 'rollout-db-released-'.bin2hex(random_bytes(4));
+    (new InvokeSwarm(FakeHierarchicalFullSwarm::class, RunContext::from('queued-hierarchical-task', $released)->toQueuePayload()))->handle(app(SwarmRunner::class));
+    rolloutDbCompleteBranches($released, 'parallel_node');
+    expect(rolloutDbDurable($released)['status'])->toBe('pending')
+        ->and(rolloutDbHistory($released)['status'])->toBe('waiting');
+
+    rolloutDbFakes(rolloutDbPlan());
+    $continuing = 'rollout-db-continuing-'.bin2hex(random_bytes(4));
+    (new InvokeSwarm(FakeHierarchicalFullSwarm::class, RunContext::from('queued-hierarchical-task', $continuing)->toQueuePayload()))->handle(app(SwarmRunner::class));
+    rolloutDbCompleteBranches($continuing, 'parallel_node');
+    DB::table('swarm_run_histories')->where('run_id', $continuing)->update(['status' => 'running', 'execution_token' => 'continuation', 'leased_until' => now('UTC')->addMinutes(5)]);
+
+    foreach ([$released, $continuing] as $runId) {
+        rolloutDbAge($runId);
+    }
+
+    $before = [$released => rolloutDbSnapshot($released), $continuing => rolloutDbSnapshot($continuing)];
+
+    foreach ($before as $runId => $snapshot) {
+        expect(app(DatabaseDurableRunStore::class)->strandedQueuedHierarchicalJoins(runId: $runId))->toBe([]);
+        Artisan::call('swarm:recover', ['--run-id' => $runId]);
+
+        expect(rolloutDbDurable($runId)['status'])->toBe($snapshot['durable']['status'])
+            ->and(rolloutDbHistory($runId))->toBe($snapshot['history']);
+    }
 });
 
 test('a delayed stray advance job is ignored at the repaired join, at a later boundary that reuses its index, and under the continuation lease', function (): void {

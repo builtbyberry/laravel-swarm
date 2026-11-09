@@ -308,9 +308,12 @@ ran a release without the rule in [A branch join waits for open waits](#a-branch
   re-queuing itself therefore stops at that job's next delivery and is repaired by
   `swarm:recover` after the grace period. Before, it finished on the step-durable
   path.
-- **Finding candidates.** This lists runs in the stranded shape. A listed run whose
-  old job is still being delivered is not lost yet; the repair takes it once it has
-  been quiet past the grace period.
+- **Finding candidates.** This lists the runs the repair takes: the stranded shape
+  with no retry due, no live lease and no open wait. A run in this list is repaired
+  once it has been quiet past the grace period; one whose old job is still being
+  delivered keeps moving `updated_at` and is taken when it stops. A run that matches
+  everything but a retry, a lease or an open wait is outside the automatic repair
+  (see below).
 
   ```sql
   select r.run_id, r.current_node_id, r.updated_at
@@ -319,15 +322,22 @@ ran a release without the rule in [A branch join waits for open waits](#a-branch
   where r.coordination_profile = 'queue_hierarchical_parallel'
     and r.status = 'pending'
     and r.finished_at is null
+    and r.next_retry_at is null
+    and (r.leased_until is null or r.leased_until < current_timestamp)
     and h.status = 'pending'
     and exists (
       select 1 from swarm_durable_branches b
       where b.run_id = r.run_id and b.parent_node_id = r.current_node_id
+    )
+    and not exists (
+      select 1 from swarm_durable_waits w
+      where w.run_id = r.run_id and w.status = 'waiting'
     );
   ```
 
   Use your configured table names (`swarm.tables.durable`, `swarm.tables.history`,
-  `swarm.tables.durable_branches`) if you changed them. For one run,
+  `swarm.tables.durable_branches`, `swarm.tables.durable_waits`) if you changed
+  them. The timestamps are stored in UTC. For one run,
   `php artisan swarm:inspect <run-id> --json` shows the durable `run` status,
   the `history` status and metadata (`queue_hierarchical_waiting_parallel`), the
   `branches` under its current node, and its `waits`.
@@ -339,6 +349,13 @@ ran a release without the rule in [A branch join waits for open waits](#a-branch
   that cannot finish. A custom `DurableRunStore`, or a store that decorates
   `DatabaseDurableRunStore`, gets no repair; the ignored advance job applies to
   every store.
+- **Custom `DurableRunStore` implementations: `parentsWaitingOnTerminalChildren()`.**
+  It now returns a terminal child only while the parent's wait for it (the child's
+  `wait_name`) is still open, applied before the limit. Before, a parent still at its
+  branch boundary was returned again on every sweep once its child outcome was in,
+  taking a place under `--limit` from a parent that needed its outcome. A custom
+  store, or a class extending `DatabaseDurableRunStore` that overrides the method,
+  keeps that behaviour until it applies the same filter.
 - **Transactions your application opens.** The lock order the open-wait rule relies
   on covers only the transactions the package opens. An application transaction
   that already holds a run's row (pausing and resuming a run in one transaction, or
