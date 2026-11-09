@@ -102,7 +102,7 @@ class DurableHierarchicalCoordinator
             if ($withTransaction !== null) {
                 ($withTransaction)();
             }
-        });
+        }, 3);
     }
 
     /**

@@ -80,7 +80,7 @@ class DurableJoinRelease
             }
 
             return true;
-        });
+        }, 3);
     }
 
     /**
