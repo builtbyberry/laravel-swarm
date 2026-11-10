@@ -9,10 +9,9 @@ namespace BuiltByBerry\LaravelSwarm\Contracts;
  *
  * A store with this capability lets a `fail_run` branch failure fail its parent at once,
  * even while the parent has an open wait. A store without it keeps the open-wait-checked
- * {@see DurableRunStore::releaseWaitingRunForJoin()} path, described in
- * {@see \BuiltByBerry\LaravelSwarm\Runners\Durable\DurableHierarchicalCoordinator::failWaitingParentFromBranches()}
- * and the upgrade guide. A decorating store keeps the capability only if it implements
- * this interface and forwards the call.
+ * {@see DurableRunStore::releaseWaitingRunForJoin()} path; the upgrade guide describes it.
+ * A decorating store keeps the capability only if it implements this interface and
+ * forwards the call.
  */
 interface ReleasesWaitingRunForFailure
 {
