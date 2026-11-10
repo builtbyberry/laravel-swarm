@@ -8,6 +8,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\AcceptsDurableSignals;
 use BuiltByBerry\LaravelSwarm\Contracts\ChecksCitationStorage;
 use BuiltByBerry\LaravelSwarm\Contracts\ChecksNativeStepResultStorage;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
+use BuiltByBerry\LaravelSwarm\Contracts\ReleasesWaitingRunForFailure;
 use BuiltByBerry\LaravelSwarm\Contracts\StoresDurableCitationEvidence;
 use BuiltByBerry\LaravelSwarm\Contracts\StoresDurableNativeStepResults;
 use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
@@ -32,7 +33,7 @@ use Illuminate\Support\Collection;
 /**
  * @internal
  */
-class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationStorage, ChecksNativeStepResultStorage, DurableRunStore, StoresDurableCitationEvidence, StoresDurableNativeStepResults
+class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationStorage, ChecksNativeStepResultStorage, DurableRunStore, ReleasesWaitingRunForFailure, StoresDurableCitationEvidence, StoresDurableNativeStepResults
 {
     use ConfirmsHeldLease;
     use InteractsWithJsonColumns;
@@ -565,7 +566,7 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
     /**
      * Move a run waiting at its branch boundary to `pending` so its failure can be
      * recorded under a fresh lease, whatever waits are still open: a `fail_run` branch
-     * failure fails the parent at once. Concrete-only — the open-wait check of
+     * failure fails the parent at once. The open-wait check of
      * {@see releaseWaitingRunForJoin()} guards the successful join, not this.
      */
     public function releaseWaitingRunForFailure(string $runId, int $nextStepIndex): bool

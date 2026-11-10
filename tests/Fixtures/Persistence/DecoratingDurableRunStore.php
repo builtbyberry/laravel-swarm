@@ -11,9 +11,10 @@ use BuiltByBerry\LaravelSwarm\Support\RunContext;
 /**
  * A DurableRunStore that is not a DatabaseDurableRunStore: it delegates every
  * contract method to an inner store, so code that only takes a concrete-store
- * path behind an instanceof check sees a replacement store.
+ * path behind an instanceof check sees a replacement store. It implements no
+ * optional store capability; a subclass adds one by implementing and forwarding it.
  */
-final class DecoratingDurableRunStore implements DurableRunStore
+class DecoratingDurableRunStore implements DurableRunStore
 {
     public function __construct(private readonly DurableRunStore $inner) {}
 
