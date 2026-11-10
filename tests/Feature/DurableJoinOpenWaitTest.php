@@ -7,6 +7,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\ClaimsQueuedRunExecution;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
+use BuiltByBerry\LaravelSwarm\Contracts\ReleasesWaitingRunForFailure;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Enums\DurableDispatchType;
 use BuiltByBerry\LaravelSwarm\Events\SwarmChildCompleted;
@@ -1113,7 +1114,7 @@ describe('recovery and dispatch boundaries', function () {
             ->and(joinWaitDispatches($runId)['step'])->toBe($before['step'] + 1);
     })->with(['bare' => false, 'inside an application transaction' => true]);
 
-    test('the fail_run release falls back to the open-wait-checked join release for a store that is not the bundled one', function (bool $replacementStore) {
+    test('the fail_run release fails the parent at once with an open wait only for a store with the ReleasesWaitingRunForFailure capability', function (string $store) {
         config()->set('swarm.durable.parallel.failure_policy', 'fail_run');
         $manager = app(DurableSwarmManager::class);
         $runId = FakeParallelFailingSwarm::make()->dispatchDurable('parallel-durable-task')->runId;
@@ -1123,15 +1124,17 @@ describe('recovery and dispatch boundaries', function () {
         DB::table('swarm_durable_branches')->where('run_id', $runId)->where('branch_id', 'parallel:1')->update(['status' => 'failed', 'failure' => json_encode(['message' => 'boom'])]);
 
         // The durable manager itself requires the bundled store (DurableRunInspector), so
-        // the fallback is reached only by a coordinator built over another store.
-        $store = $replacementStore
-            ? new DecoratingDurableRunStore(app(DurableRunStore::class))
-            : app(DurableRunStore::class);
-        $coordinator = app()->makeWith(DurableHierarchicalCoordinator::class, ['durableRuns' => $store]);
+        // a store other than the bundled one is reached only by a coordinator built over it.
+        $durableRuns = match ($store) {
+            'bundled' => app(DurableRunStore::class),
+            'decorating with the capability' => new JoinWaitFailureReleasingDurableRunStore(app(DurableRunStore::class)),
+            'decorating without the capability' => new DecoratingDurableRunStore(app(DurableRunStore::class)),
+        };
+        $coordinator = app()->makeWith(DurableHierarchicalCoordinator::class, ['durableRuns' => $durableRuns]);
         $failed = false;
 
         $coordinator->failWaitingParentFromBranches(
-            $store->find($runId),
+            $durableRuns->find($runId),
             app(DurableRunContext::class)->loadContext($runId),
             300,
             function () use (&$failed): void {
@@ -1139,12 +1142,32 @@ describe('recovery and dispatch boundaries', function () {
             },
         );
 
-        // The bundled store fails the parent at once despite the open wait; another store
-        // goes through releaseWaitingRunForJoin(), which refuses while the wait is open.
-        expect($failed)->toBe(! $replacementStore)
-            ->and($store->find($runId)['status'])->toBe($replacementStore ? 'waiting' : 'pending');
-    })->with(['bundled store' => false, 'replacement store' => true]);
+        // A store with the capability fails the parent at once despite the open wait; one
+        // without it goes through releaseWaitingRunForJoin(), which refuses while the wait
+        // is open.
+        $capable = $store !== 'decorating without the capability';
+        expect($durableRuns instanceof ReleasesWaitingRunForFailure)->toBe($capable)
+            ->and($failed)->toBe($capable)
+            ->and($durableRuns->find($runId)['status'])->toBe($capable ? 'pending' : 'waiting');
+    })->with(['bundled', 'decorating with the capability', 'decorating without the capability']);
 });
+
+/**
+ * A decorating store that keeps the ReleasesWaitingRunForFailure capability by
+ * implementing it and forwarding the call to the store it wraps.
+ */
+final class JoinWaitFailureReleasingDurableRunStore extends DecoratingDurableRunStore implements ReleasesWaitingRunForFailure
+{
+    public function __construct(private readonly DurableRunStore&ReleasesWaitingRunForFailure $capable)
+    {
+        parent::__construct($capable);
+    }
+
+    public function releaseWaitingRunForFailure(string $runId, int $nextStepIndex): bool
+    {
+        return $this->capable->releaseWaitingRunForFailure($runId, $nextStepIndex);
+    }
+}
 
 final class JoinRecoveryQueue extends NullQueue
 {
