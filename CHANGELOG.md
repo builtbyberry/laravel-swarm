@@ -96,6 +96,18 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   fix below and
   [UPGRADING](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#a-wait-closing-while-its-run-fans-out).
 
+- **`Contracts\ReleasesWaitingRunForFailure`, an optional durable store
+  capability (#616).** Whether a `fail_run` branch failure fails its parent at
+  once while the parent has an open wait now depends on this contract, not on
+  the store being `DatabaseDurableRunStore`. A store that implements it moves
+  the waiting parent to `pending` whatever waits are open
+  (`releaseWaitingRunForFailure()`), so the failure is recorded at once.
+  `DatabaseDurableRunStore` implements it, so nothing changes for the bundled
+  store. A custom or decorating store without it keeps the fallback: the parent
+  is not failed while a wait is open, and a later `swarm:recover` sweep fails
+  it once its waits have closed. See
+  [UPGRADING](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#a-branch-join-waits-for-open-waits).
+
 ### Changed
 
 - **BREAKING for custom `DurableOutbox` implementations.**
@@ -109,7 +121,9 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   `DatabaseDurableRunStore`,** have new rules to follow, or they keep the
   behaviour #600 fixes: `releaseWaitingRunForJoin()` refuses while the run has an open
   wait, `recoverableWaitingJoins()` excludes runs with an open wait, and closing
-  a run's last wait leaves it `waiting` when it is at a branch boundary. See
+  a run's last wait leaves it `waiting` when it is at a branch boundary. A
+  `fail_run` failure fails such a parent at once, open wait or not, only when
+  the store implements `Contracts\ReleasesWaitingRunForFailure` (#616). See
   [UPGRADING.md](UPGRADING.md#a-branch-join-waits-for-open-waits).
 - `DrainResult::$reclaimed` (and the `command.relay` audit event's
   `reclaimed_count`) now also counts eager-dispatch rows whose pushed job did not

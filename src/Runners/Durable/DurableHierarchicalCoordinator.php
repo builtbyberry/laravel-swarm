@@ -6,13 +6,13 @@ namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
+use BuiltByBerry\LaravelSwarm\Contracts\ReleasesWaitingRunForFailure;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\DurableParallelFailurePolicy;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryReplayCoordinator;
 use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
 use BuiltByBerry\LaravelSwarm\Memory\ReplaySwarmMemory;
-use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Runners\DurableHierarchicalStepResult;
 use BuiltByBerry\LaravelSwarm\Runners\HierarchicalRunner;
@@ -172,7 +172,10 @@ class DurableHierarchicalCoordinator
 
         // fail_run fails the parent at once, even while it has an open wait: failing is
         // terminal, not a move past the wait. Only the successful join waits for waits.
-        $released = $this->durableRuns instanceof DatabaseDurableRunStore
+        // A store without the ReleasesWaitingRunForFailure capability falls back to the
+        // join release, which refuses while a wait is open; a later swarm:recover sweep
+        // can fail the parent once its waits have closed.
+        $released = $this->durableRuns instanceof ReleasesWaitingRunForFailure
             ? $this->durableRuns->releaseWaitingRunForFailure($run['run_id'], (int) $run['next_step_index'])
             : $this->durableRuns->releaseWaitingRunForJoin($run['run_id'], (int) $run['next_step_index']);
 

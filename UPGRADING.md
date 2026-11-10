@@ -186,10 +186,12 @@ wait); the join runs once every wait is closed and every branch is done.
   `swarm.tables.durable`, `swarm.tables.durable_branches`) if you changed them.
   For one run, `php artisan swarm:inspect <run-id> --json` lists its waits and
   their status.
-- **`fail_run` is unchanged:** a branch failure fails the parent at once even
-  while a wait is open. If the worker that failed the branch dies before failing
-  the parent, `swarm:recover` now fails the parent instead of releasing it to its
-  join. With an open wait, that happens once the wait closes.
+- **`fail_run` is unchanged on the bundled store:** a branch failure fails the
+  parent at once even while a wait is open, because `DatabaseDurableRunStore`
+  implements `Contracts\ReleasesWaitingRunForFailure`. If the worker that failed
+  the branch dies before failing the parent, `swarm:recover` now fails the
+  parent instead of releasing it to its join. With an open wait, that happens
+  once the wait closes.
 - **History status.** After a signal is accepted, a child swarm finishes, or a
   wait times out while another wait is still open, or while the run is still at
   its branch boundary, the run's history status stays `waiting` instead of
@@ -203,8 +205,19 @@ wait); the join runs once every wait is closed and every branch is done.
   waits taken before the run row is written; `recoverableWaitingJoins()` excludes
   runs with an open wait before its limit; closing a run's last wait leaves it
   `waiting` when it has branch rows under its current node. The durable manager
-  is built on `DatabaseDurableRunStore`, so wherever it runs a `fail_run` branch
-  failure fails the parent at once even with an open wait.
+  is still built on `DatabaseDurableRunStore`, so wherever it runs a `fail_run`
+  branch failure fails the parent at once even with an open wait.
+- **Failing a `fail_run` parent at once is an optional store capability (#616).**
+  A store gets it by implementing `Contracts\ReleasesWaitingRunForFailure`:
+  `releaseWaitingRunForFailure()` moves a run from `waiting` at the given step
+  index, unfinished, to `pending` in one conditional write whatever waits are
+  open, returns true only when that call moved it, and takes no wait-row lock
+  after writing the run row. A store without it falls back to
+  `releaseWaitingRunForJoin()`, which refuses while a wait is open: the parent is
+  not failed then, and a later `swarm:recover` sweep fails it once its waits have
+  closed. A decorating store keeps the capability only if it implements the
+  interface and forwards `releaseWaitingRunForFailure()`. Subclasses of
+  `DatabaseDurableRunStore` inherit it.
 - During a rolling deploy, workers still on the old code keep the old behaviour
   until they are replaced. See
   [Rolling out the open-wait join rule](#rolling-out-the-open-wait-join-rule) for
