@@ -160,6 +160,32 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
 
 ### Fixed
 
+- **`swarm:recover` repairs queued-hierarchical runs stranded by a pre-upgrade
+  wait closer (#615).** Before the open-wait join rule (#600), a signal, wait
+  timeout or child outcome that closed the last wait of a `queue()`
+  `multi_worker` hierarchical run still at its parallel boundary moved it to
+  durable and history `pending` and pushed an ordinary advance job. That job ran
+  the run on the step-durable path, re-queuing itself until the branches
+  finished; once it was lost (dropped, failed past its tries, flushed in a
+  deploy) nothing selected the run again and it never finished. `swarm:recover`
+  now puts such a run back at its boundary (durable and history `waiting`, with
+  the continuation flag the history needs) once it has been quiet past
+  `swarm.durable.recovery.grace_seconds`, then releases its join through its own
+  queued-hierarchical continuation, fails it for a `fail_run` branch failure, or
+  leaves it for its last branch. A run with a live lease, an open wait, or
+  recent activity is not touched, nor is any other profile. An ordinary advance
+  job delivered for a queued-hierarchical run is now ignored before it takes the
+  lease (it settles its own outbox entry and logs a warning): such a run is only
+  ever continued by its resume job, so a delayed stray job can no longer run it
+  beside its continuation. The terminal-children sweep also no longer selects a
+  parent whose child outcome was already delivered, so a parent still waiting on
+  its branches cannot take the place, under `--limit`, of a parent that needs its
+  outcome; a custom `DurableRunStore` keeps the old selection until its
+  `parentsWaitingOnTerminalChildren()` applies the same open-wait filter before
+  its limit. No migration or configuration. Replace every worker before the new
+  `swarm:recover` runs; see
+  [upgrade guidance](UPGRADING.md#rolling-out-the-open-wait-join-rule).
+
 - **Wait creation cannot slip past a branch join release (#614).** Creators and
   join releases serialize on the run row. An internal `wait_generation` epoch
   detects creation across the wait scan without taking another wait-row lock

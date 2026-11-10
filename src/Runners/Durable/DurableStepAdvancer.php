@@ -12,7 +12,9 @@ use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
 use BuiltByBerry\LaravelSwarm\Runners\DurableHierarchicalStepResult;
 use BuiltByBerry\LaravelSwarm\Runners\NativeOutcomeValidator;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use BuiltByBerry\LaravelSwarm\Support\SafeReporting;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
+use Psr\Log\LoggerInterface;
 use Throwable;
 
 /**
@@ -20,6 +22,8 @@ use Throwable;
  */
 class DurableStepAdvancer
 {
+    use SafeReporting;
+
     public function __construct(
         protected DurableRunContext $runs,
         protected DurableRunStore $durableRuns,
@@ -32,7 +36,39 @@ class DurableStepAdvancer
         protected DurableSequentialStepAdvancer $sequential,
         protected DurableStepCheckpointCoordinator $checkpoints,
         protected DurableOutbox $outbox,
+        protected LoggerInterface $logger,
     ) {}
+
+    /**
+     * Settle the entry an ignored advance job was pushed for and say so. A settle that
+     * throws is reported, never thrown: the job did nothing to the run, and failing it
+     * would only deliver it again to be ignored again.
+     *
+     * @param  array<string, mixed>  $run
+     */
+    protected function ignoreQueueHierarchicalAdvance(array $run, int $expectedStepIndex, ?int $outboxEntryId): void
+    {
+        // Whether the entry is gone is not known here: the bundled outbox reports a
+        // failed delete itself and returns; the relay reclaims a row left behind, and
+        // its delivery is ignored again.
+        if ($outboxEntryId !== null) {
+            try {
+                $this->outbox->settle($outboxEntryId, (string) $run['run_id']);
+            } catch (Throwable $exception) {
+                $this->safeReport($exception);
+            }
+        }
+
+        $this->safeLog($this->logger, 'warning', 'laravel-swarm: ignored an ordinary advance job delivered for a queued-hierarchical run; its own resume continues it.', [
+            'run_id' => $run['run_id'],
+            'swarm_class' => $run['swarm_class'] ?? null,
+            'status' => $run['status'] ?? null,
+            'current_node_id' => $run['current_node_id'] ?? null,
+            'step_index' => $expectedStepIndex,
+            'outbox_entry_id' => $outboxEntryId,
+            'outbox_entry_settle_attempted' => $outboxEntryId !== null,
+        ]);
+    }
 
     public function afterStepCheckpointForTesting(?callable $hook): void
     {
@@ -47,6 +83,20 @@ class DurableStepAdvancer
     public function advance(string $runId, int $expectedStepIndex, callable $enterDurableBoundary, ?int $outboxEntryId = null): void
     {
         $run = $this->runs->requireRun($runId);
+
+        // A queued-hierarchical run is continued by its own resume job, never by an
+        // ordinary advance job. One delivered anyway — pushed by a worker from before
+        // the open-wait join rule (#600), or delayed since — is ignored before it takes
+        // the lease: the durable lease is that run's coordination lease, and taking it
+        // would run the continuation on the wrong path beside its own. The entry it was
+        // pushed for directly is settled so the relay does not deliver it again; a relay
+        // push carries none, its row already gone.
+        if ($this->runs->isQueueHierarchicalParallel($run)) {
+            $this->ignoreQueueHierarchicalAdvance($run, $expectedStepIndex, $outboxEntryId);
+
+            return;
+        }
+
         $stepLeaseSeconds = $this->runs->validateStepTimeoutSeconds((int) $run['step_timeout_seconds']);
         $token = $this->durableRuns->acquireLease($runId, $expectedStepIndex, $stepLeaseSeconds);
 

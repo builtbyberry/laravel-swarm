@@ -215,6 +215,41 @@ class DatabaseRunHistoryStore implements ChecksCitationStorage, ChecksNativeStep
         });
     }
 
+    /**
+     * Put a stranded queued-hierarchical run's history back at its parallel boundary
+     * (#615): `pending` -> `waiting`, with the waiting-parallel flag the continuation
+     * lease needs set and any lease a stray ordinary step left cleared. Every other
+     * metadata key is kept. Returns false, writing nothing, unless the row is `pending`.
+     *
+     * Call it only inside {@see DatabaseDurableRunStore::restoreStrandedQueuedHierarchicalJoin()},
+     * after the durable row is locked: durable row before history row is the order every
+     * transaction that writes both takes.
+     */
+    public function restoreQueuedHierarchicalBoundaryWait(string $runId): bool
+    {
+        /** @var object|null $record */
+        $record = $this->table()->where('run_id', $runId)->lockForUpdate()->first(['status', 'metadata']);
+
+        if ($record === null || ($record->status ?? null) !== 'pending') {
+            return false;
+        }
+
+        $metadata = $this->decodeJson($record->metadata ?? null, []);
+        $metadata = is_array($metadata) ? $metadata : [];
+        $metadata['queue_hierarchical_waiting_parallel'] = true;
+
+        return $this->table()
+            ->where('run_id', $runId)
+            ->where('status', 'pending')
+            ->update([
+                'status' => 'waiting',
+                'execution_token' => null,
+                'leased_until' => null,
+                'metadata' => $this->encodeJson($metadata),
+                'updated_at' => Carbon::now('UTC'),
+            ]) === 1;
+    }
+
     public function recordStep(string $runId, SwarmStep $step, int $ttlSeconds, ?string $executionToken = null, ?int $leaseSeconds = null): void
     {
         $this->persistStep($runId, $step, $ttlSeconds, $executionToken, $leaseSeconds);

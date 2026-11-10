@@ -353,6 +353,12 @@ interface DurableRunStore
     public function undispatchedChildRuns(?string $runId = null, ?string $swarmClass = null, int $limit = 50): array;
 
     /**
+     * Waiting parents with a terminal child whose outcome is still owed: one row per
+     * such child, selected only while the parent's wait for that child (the child's
+     * `wait_name`) is still open. A child whose wait was already released — its outcome
+     * delivered, or the wait timed out — is not selected, so a parent still at its
+     * branch boundary is not returned again on every sweep. Apply this before the limit.
+     *
      * @return array<int, array<string, mixed>>
      */
     public function parentsWaitingOnTerminalChildren(?string $runId = null, ?string $swarmClass = null, int $limit = 50): array;

@@ -206,7 +206,9 @@ wait); the join runs once every wait is closed and every branch is done.
   is built on `DatabaseDurableRunStore`, so wherever it runs a `fail_run` branch
   failure fails the parent at once even with an open wait.
 - During a rolling deploy, workers still on the old code keep the old behaviour
-  until they are replaced.
+  until they are replaced. See
+  [Rolling out the open-wait join rule](#rolling-out-the-open-wait-join-rule) for
+  the order to replace them in and for runs the old code left stranded.
 
 ### A wait closing while its run fans out
 
@@ -267,6 +269,100 @@ nothing (#610).
   it must move that logic; an override of the old method is no longer called.
 - **During a rolling deploy** a resume handled by a worker still on the old code
   can still run early. Replace all workers together.
+
+### Rolling out the open-wait join rule
+
+No configuration or schema change (#615). Read this before replacing workers that
+ran a release without the rule in [A branch join waits for open waits](#a-branch-join-waits-for-open-waits).
+
+- **Replace every participant together.** That means queue workers, `swarm:relay`,
+  the `swarm:recover` scheduler, and every process that accepts signals: web nodes,
+  `swarm:signal`, and application code that calls the signal API. Until a process
+  runs the new code it keeps the old behaviour: it releases joins past open waits,
+  and it closes a run's last wait the old way (below).
+- **Do not run the new `swarm:recover` while an old worker can still take durable
+  jobs.** The repair below, and the rule that an ordinary advance job never runs a
+  `queue()` `multi_worker` hierarchical run, hold only once no old worker remains:
+  an old worker given a delayed advance job for a repaired run still takes its
+  durable lease, and can run it beside its own continuation. Stop the old workers
+  and let their in-flight jobs finish, deploy every participant, then start the
+  workers, `swarm:relay` and the `swarm:recover` schedule.
+- **Runs the old code stranded are repaired by `swarm:recover`.** When the old code
+  closed the last wait (a signal, a wait timeout, a child finishing) of a
+  `queue()` `multi_worker` hierarchical run still at its parallel boundary, it moved
+  the run to durable and history `pending` and pushed an ordinary advance job. That
+  job ran the run on the step-durable path, pushing itself again until the
+  branches finished; if it was lost (dropped, failed past its tries, flushed during
+  the deploy) the run never finished. `swarm:recover` now puts a run in that shape
+  back at its boundary once it has been quiet past
+  `swarm.durable.recovery.grace_seconds`, then releases its join through its own
+  continuation, fails it for a `fail_run` branch failure, or leaves it for its last
+  branch, logging `recovery put a queued-hierarchical run stranded by a pre-upgrade
+  wait closer back at its parallel boundary`. Each sweep repairs at most `--limit`
+  runs, so let the schedule run for a few sweeps after the deploy, and keep
+  `swarm:relay` running: the released join's continuation is delivered by the
+  relay.
+- **An ordinary advance job for such a run is ignored.** On the new code it settles
+  its own outbox entry, logs `ignored an ordinary advance job delivered for a
+  queued-hierarchical run`, and does nothing else. A run whose old job was still
+  re-queuing itself therefore stops at that job's next delivery and is repaired by
+  `swarm:recover` after the grace period. Before, it finished on the step-durable
+  path.
+- **Finding candidates.** This lists the runs the repair takes: the stranded shape
+  with no retry due, no live lease and no open wait. A run in this list is repaired
+  once it has been quiet past the grace period; one whose old job is still being
+  delivered keeps moving `updated_at` and is taken when it stops. A run that matches
+  everything but a retry, a lease or an open wait is outside the automatic repair
+  (see below).
+
+  ```sql
+  select r.run_id, r.current_node_id, r.updated_at
+  from swarm_durable_runs r
+  join swarm_run_histories h on h.run_id = r.run_id
+  where r.coordination_profile = 'queue_hierarchical_parallel'
+    and r.status = 'pending'
+    and r.finished_at is null
+    and r.next_retry_at is null
+    and (r.leased_until is null or r.leased_until < current_timestamp)
+    and h.status = 'pending'
+    and exists (
+      select 1 from swarm_durable_branches b
+      where b.run_id = r.run_id and b.parent_node_id = r.current_node_id
+    )
+    and not exists (
+      select 1 from swarm_durable_waits w
+      where w.run_id = r.run_id and w.status = 'waiting'
+    );
+  ```
+
+  Use your configured table names (`swarm.tables.durable`, `swarm.tables.history`,
+  `swarm.tables.durable_branches`, `swarm.tables.durable_waits`) if you changed
+  them. The timestamps are stored in UTC. For one run,
+  `php artisan swarm:inspect <run-id> --json` shows the durable `run` status,
+  the `history` status and metadata (`queue_hierarchical_waiting_parallel`), the
+  `branches` under its current node, and its `waits`.
+- **What is not repaired automatically.** Only that shape is. An old advance job
+  that got past the join and was then lost (its current node is no longer the
+  boundary), one that scheduled a retry, one whose worker died mid-step (durable
+  and history `running`), or one that hit the run's timeout leave other shapes:
+  inspect them with `swarm:inspect`, and cancel (`swarm:cancel`) and start again any
+  that cannot finish. A custom `DurableRunStore`, or a store that decorates
+  `DatabaseDurableRunStore`, gets no repair; the ignored advance job applies to
+  every store.
+- **Custom `DurableRunStore` implementations: `parentsWaitingOnTerminalChildren()`.**
+  It still returns one waiting parent record per terminal child, but now only for a
+  child whose wait on that parent (the child's `wait_name`) is still open, applied
+  before the limit. Before, a parent still at its
+  branch boundary was returned again on every sweep once its child outcome was in,
+  taking a place under `--limit` from a parent that needed its outcome. A custom
+  store, or a class extending `DatabaseDurableRunStore` that overrides the method,
+  keeps that behaviour until it applies the same filter.
+- **Transactions your application opens.** The lock order the open-wait rule relies
+  on covers only the transactions the package opens. An application transaction
+  that already holds a run's row (pausing and resuming a run in one transaction, or
+  a job transaction left open around branch completion) keeps its old locking and
+  can still deadlock with a wait closer. Retry the whole aborted transaction, and
+  avoid holding a run's row across branch completion or resume.
 
 ## Upgrading to v0.28.1
 
