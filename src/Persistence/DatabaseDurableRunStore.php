@@ -447,8 +447,7 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
             // history row before calling this in the same transaction.
             //
             // The run row this leaves (no step index, the parent node, a next index past
-            // zero) is read as "fanned out" by createWait(), lockedRunRowIsAtFanOut()
-            // and strandedQueuedHierarchicalJoinShape().
+            // zero) is read as "fanned out" by createWait() and lockedRunRowIsAtFanOut().
             $this->lockRunRow($runId);
 
             $executionToken = $payload->executionToken;
@@ -3003,8 +3002,9 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
      * a change to what those writers leave on the row must be made here too.
      *
      * createWait() reads the same columns for a different question (has the join been
-     * released), as does strandedQueuedHierarchicalJoinShape(); neither is shared
-     * with this.
+     * released) and is deliberately not shared with this.
+     * restoreStrandedQueuedHierarchicalJoin() also writes this row shape, for a run
+     * whose branch rows at its node it has just checked.
      */
     private function lockedRunRowIsAtFanOut(object $run): bool
     {
