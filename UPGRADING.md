@@ -204,7 +204,14 @@ wait); the join runs once every wait is closed and every branch is done.
   while the run has an open wait, deciding from a shared-lock read of its open
   waits taken before the run row is written; `recoverableWaitingJoins()` excludes
   runs with an open wait before its limit; closing a run's last wait leaves it
-  `waiting` when it has branch rows under its current node. The durable manager
+  `waiting` when it has branch rows under its current node. That last decision
+  must not rest on an ordinary read of the branch rows alone (#617): inside an
+  application transaction that already read on MySQL, that read can miss a
+  fan-out committed since. `DatabaseDurableRunStore` also decides from the run
+  row it has just locked — a row a fan-out wrote, with no step run since. An
+  override of `syncRunWaitSummary()` that keeps its own branch read keeps the
+  old MySQL behaviour, and an override of `lockRunRow()` must also return
+  `route_cursor`. The durable manager
   is still built on `DatabaseDurableRunStore`, so wherever it runs a `fail_run`
   branch failure fails the parent at once even with an open wait.
 - **Failing a `fail_run` parent at once is an optional store capability (#616).**

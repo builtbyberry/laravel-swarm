@@ -218,6 +218,30 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   See [durable waits](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-waits-and-signals.md#creating-a-wait-from-application-code)
   and [upgrade guidance](UPGRADING.md#wait-creation-at-branch-joins).
 
+- **A wait closed inside an older MySQL application transaction no longer moves
+  a run that just fanned out to `pending` (#617).** When a run's last wait
+  closes, the run stays `waiting` if it is at a branch boundary and goes
+  `pending` otherwise. That was decided by reading the run's branch rows. Inside
+  an application transaction that had already read on MySQL (`REPEATABLE READ`),
+  that read used the transaction's older snapshot and missed a fan-out that
+  committed after it, so the run went `pending` and a step was queued while its
+  branches were still running. The closer now also decides from the run row it
+  has just locked, which is current on every engine: a row a fan-out wrote, with
+  no step run since, keeps the run `waiting`, and the join is released once the
+  branches finish, as before. A top-level parallel `fail_run` parent that was
+  leased to be failed is not taken for a fan-out and still goes `pending`; a
+  hierarchical one stays `waiting` at its boundary, as it did before. Postgres
+  was not affected. No lock is added, and there is no migration, configuration
+  or public API change. The decision is made by whichever process closes the
+  wait — your web requests, commands and jobs as well as the queue workers — so
+  a process still on the old code keeps the old decision until it is replaced.
+  A custom `DurableRunStore`, or a subclass overriding `syncRunWaitSummary()`,
+  keeps the old decision until it applies the same rule; see
+  [upgrade guidance](UPGRADING.md#a-branch-join-waits-for-open-waits).
+  Deterministic SQLite regressions cover each fan-out path, and a real-process
+  MySQL/PostgreSQL regression covers the stale snapshot itself and the join's
+  release once the branches finish.
+
 - **Atomic concurrency-test markers (#628).** The shared lock-barrier fixture now
   publishes complete marker values through a same-directory atomic rename, so a
   reader cannot observe a newly created PID file before its contents are written.
