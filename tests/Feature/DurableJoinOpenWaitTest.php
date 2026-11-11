@@ -1779,6 +1779,79 @@ function joinWaitStepNamedPlan(): array
     return $plan;
 }
 
+/**
+ * A run fanned out by the real fan-out of its profile, with an open `approval` wait and
+ * its branches still to run. The hierarchical profiles use joinWaitStepNamedPlan().
+ */
+function joinWaitFannedOutRun(string $profile): string
+{
+    joinWaitRuntime(queuedHierarchical: $profile === 'queued-hierarchical');
+    $manager = app(DurableSwarmManager::class);
+
+    return match ($profile) {
+        'top-level parallel' => joinWaitParallelRun(completeBranches: false),
+        'step-durable hierarchical' => (function () use ($manager): string {
+            FakeHierarchicalCoordinator::fake([joinWaitStepNamedPlan()]);
+            $runId = FakeHierarchicalFullSwarm::make()->dispatchDurable('durable-hierarchical-task')->runId;
+            (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+            (new AdvanceDurableSwarm($runId, 1))->handle($manager);
+            $manager->wait($runId, 'approval');
+
+            return $runId;
+        })(),
+        'queued-hierarchical' => (function () use ($manager): string {
+            FakeHierarchicalCoordinator::fake([joinWaitStepNamedPlan()]);
+            $runId = 'join-wait-617-qh';
+            $context = RunContext::from('queued-hierarchical-task', $runId);
+            (new InvokeSwarm(FakeHierarchicalFullSwarm::class, $context->toQueuePayload()))->handle(app(SwarmRunner::class));
+            $manager->wait($runId, 'approval');
+
+            return $runId;
+        })(),
+    };
+}
+
+/**
+ * A run that has not fanned out, in the named row shape.
+ */
+function joinWaitNotFannedOutRun(string $shape): string
+{
+    joinWaitRuntime();
+    $manager = app(DurableSwarmManager::class);
+
+    return match ($shape) {
+        'never run' => FakeParallelSwarm::make()->dispatchDurable('parallel-durable-task')->runId,
+        // A hierarchical run's first step is leased at the `coordinator` node, with no
+        // current step yet and its next index still zero.
+        'first step leased' => (function (): string {
+            FakeHierarchicalCoordinator::fake([joinWaitHierarchicalPlan()]);
+            $runId = FakeHierarchicalFullSwarm::make()->dispatchDurable('durable-hierarchical-task')->runId;
+            expect(app(DurableRunStore::class)->acquireLease($runId, 0, 300))->not->toBeNull();
+            $row = joinWaitRunRow($runId);
+            expect($row->current_node_id)->toBe('coordinator')
+                ->and($row->current_step_index)->toBeNull()
+                ->and((int) $row->next_step_index)->toBe(0);
+
+            return $runId;
+        })(),
+        // The coordinator's checkpoint points the cursor at the parallel node, with a
+        // next index past zero — but the step that ran left its step index set, and
+        // the fan-out has not happened.
+        'coordinator step done' => (function () use ($manager): string {
+            FakeHierarchicalCoordinator::fake([joinWaitHierarchicalPlan()]);
+            $runId = FakeHierarchicalFullSwarm::make()->dispatchDurable('durable-hierarchical-task')->runId;
+            (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+            $row = joinWaitRunRow($runId);
+            expect($row->current_node_id)->toBe('parallel_node')
+                ->and($row->current_step_index)->not->toBeNull()
+                ->and((int) $row->next_step_index)->toBe(1)
+                ->and(DB::table('swarm_durable_branches')->where('run_id', $runId)->count())->toBe(0);
+
+            return $runId;
+        })(),
+    };
+}
+
 /*
  * #617. Inside an application transaction that read before it closed a wait, MySQL's
  * REPEATABLE READ snapshot can be older than the run's fan-out, so the closer cannot
@@ -1788,8 +1861,8 @@ function joinWaitStepNamedPlan(): array
  * fan-out wrote to stand in for a closer that cannot see them. That pins the decision
  * to the row each fan-out path really leaves, and to the rows that only look like one.
  * It proves nothing about concurrency, nor about the join's later release (the rows it
- * would read are gone): the real-engine test for that is in
- * tests/ProcessConcurrency/DurableJoinOpenWaitTest.php.
+ * would read are gone): the real-engine test in
+ * tests/ProcessConcurrency/DurableJoinOpenWaitTest.php covers both.
  */
 describe('a closer that cannot see the branch rows (#617)', function () {
     beforeEach(function () {
@@ -1800,24 +1873,8 @@ describe('a closer that cannot see the branch rows (#617)', function () {
     });
 
     test('the last wait closing on a fanned-out run leaves it waiting, whichever path fanned it out', function (string $profile) {
-        joinWaitRuntime(queuedHierarchical: $profile === 'queued-hierarchical');
+        $runId = joinWaitFannedOutRun($profile);
         $manager = app(DurableSwarmManager::class);
-
-        if ($profile === 'top-level parallel') {
-            $runId = joinWaitParallelRun(completeBranches: false);
-        } elseif ($profile === 'queued-hierarchical') {
-            FakeHierarchicalCoordinator::fake([joinWaitStepNamedPlan()]);
-            $runId = 'join-wait-617-qh';
-            $context = RunContext::from('queued-hierarchical-task', $runId);
-            (new InvokeSwarm(FakeHierarchicalFullSwarm::class, $context->toQueuePayload()))->handle(app(SwarmRunner::class));
-            $manager->wait($runId, 'approval');
-        } else {
-            FakeHierarchicalCoordinator::fake([joinWaitStepNamedPlan()]);
-            $runId = FakeHierarchicalFullSwarm::make()->dispatchDurable('durable-hierarchical-task')->runId;
-            (new AdvanceDurableSwarm($runId, 0))->handle($manager);
-            (new AdvanceDurableSwarm($runId, 1))->handle($manager);
-            $manager->wait($runId, 'approval');
-        }
 
         $row = joinWaitRunRow($runId);
         expect($row->status)->toBe('waiting')
@@ -1877,35 +1934,8 @@ describe('a closer that cannot see the branch rows (#617)', function () {
     })->with(['the lease still held' => false, 'paused and resumed in between' => true]);
 
     test('a run that has not fanned out goes to pending when its last wait closes', function (string $shape) {
-        joinWaitRuntime();
+        $runId = joinWaitNotFannedOutRun($shape);
         $manager = app(DurableSwarmManager::class);
-        $store = app(DurableRunStore::class);
-
-        if ($shape === 'never run') {
-            $runId = FakeParallelSwarm::make()->dispatchDurable('parallel-durable-task')->runId;
-        } elseif ($shape === 'coordinator step done') {
-            // The coordinator's checkpoint points the cursor at the parallel node, with
-            // a next index past zero — but the step that ran left its step index set,
-            // and the fan-out has not happened.
-            FakeHierarchicalCoordinator::fake([joinWaitHierarchicalPlan()]);
-            $runId = FakeHierarchicalFullSwarm::make()->dispatchDurable('durable-hierarchical-task')->runId;
-            (new AdvanceDurableSwarm($runId, 0))->handle($manager);
-            $row = joinWaitRunRow($runId);
-            expect($row->current_node_id)->toBe('parallel_node')
-                ->and($row->current_step_index)->not->toBeNull()
-                ->and((int) $row->next_step_index)->toBe(1)
-                ->and(DB::table('swarm_durable_branches')->where('run_id', $runId)->count())->toBe(0);
-        } else {
-            // A hierarchical run's first step is leased at the `coordinator` node, with
-            // no current step yet and its next index still zero.
-            FakeHierarchicalCoordinator::fake([joinWaitHierarchicalPlan()]);
-            $runId = FakeHierarchicalFullSwarm::make()->dispatchDurable('durable-hierarchical-task')->runId;
-            expect($store->acquireLease($runId, 0, 300))->not->toBeNull();
-            $row = joinWaitRunRow($runId);
-            expect($row->current_node_id)->toBe('coordinator')
-                ->and($row->current_step_index)->toBeNull()
-                ->and((int) $row->next_step_index)->toBe(0);
-        }
 
         $manager->wait($runId, 'approval');
         $before = joinWaitDispatches($runId);

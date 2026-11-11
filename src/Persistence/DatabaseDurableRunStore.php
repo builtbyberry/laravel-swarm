@@ -445,6 +445,10 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
             // publishes). Taking the context first here and the run row last deadlocked
             // with a closer arriving mid-fan-out. The caller must not write the context or
             // history row before calling this in the same transaction.
+            //
+            // The run row this leaves (no step index, the parent node, a next index past
+            // zero) is read as "fanned out" by createWait(), lockedRunRowIsAtFanOut()
+            // and strandedQueuedHierarchicalJoinShape().
             $this->lockRunRow($runId);
 
             $executionToken = $payload->executionToken;
@@ -2987,15 +2991,20 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
      *
      * waitForBranches() clears the step index and pins its parent node, with a next
      * index past zero; markRunning() sets the step index again when the next step
-     * starts. In between, only a lease taken without markRunning() — the one a
-     * `fail_run` failure takes to fail the parent — rewrites the node, to the node of
-     * the next step. On a run with a route cursor that node is the cursor's, which is
-     * still the boundary's own (the cursor moves only in a step markRunning() started).
-     * On a run without one it is `step:<next>`, where no branch rows are: that row is
-     * not a fan-out's, and such a run goes on to `pending` as it always has.
+     * starts. In between, a lease taken without markRunning() rewrites the node
+     * (acquireLease() records the node of the next step, from nodeIdForRun()). Those
+     * are the lease a `fail_run` failure takes to fail the parent, and the
+     * queued-hierarchical coordination leases. On a run with a route cursor that node
+     * is the cursor's, which is still the boundary's own (the cursor moves only in a
+     * step markRunning() started, or in the next fan-out), so nothing changes. On a
+     * run without one it is nodeIdForRun()'s `step:<next>`, where no branch rows are:
+     * that row is not a fan-out's, and such a run goes on to `pending` as it always
+     * has. A wrong yes here would leave a run waiting with nothing to release it, so
+     * a change to what those writers leave on the row must be made here too.
      *
      * createWait() reads the same columns for a different question (has the join been
-     * released) and is deliberately not shared with this.
+     * released), as does strandedQueuedHierarchicalJoinShape(); neither is shared
+     * with this.
      */
     private function lockedRunRowIsAtFanOut(object $run): bool
     {
@@ -3011,6 +3020,7 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
             return true;
         }
 
+        // nodeIdForRun()'s node for a step of a run with no route cursor.
         return $run->current_node_id !== 'step:'.(int) $run->next_step_index;
     }
 
@@ -3205,6 +3215,9 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
     }
 
     /**
+     * The node a step runs at, and so the node a lease records on the run row.
+     * lockedRunRowIsAtFanOut() tells a lease's node from a fan-out's by this rule.
+     *
      * @param  array<string, mixed>|null  $run
      */
     protected function nodeIdForRun(?array $run, int $stepIndex): string

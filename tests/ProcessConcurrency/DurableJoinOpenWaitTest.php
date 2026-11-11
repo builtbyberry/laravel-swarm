@@ -1050,6 +1050,21 @@ test('a last wait closed inside an application transaction whose snapshot predat
         ->and(app(RunHistoryStore::class)->find($runId)['status'])->toBe('waiting')
         ->and(joinOpenWaitDbStepRows($runId))->toBe($stepRows)
         ->and(DB::table('swarm_durable_branches')->where('run_id', $runId)->where('parent_node_id', 'parallel')->where('status', 'pending')->count())->toBe(3);
+
+    // The run it kept waiting is still released to its join, once: by the last branch.
+    $manager = app(DurableSwarmManager::class);
+
+    foreach (['parallel:0', 'parallel:1'] as $branchId) {
+        (new AdvanceDurableBranch($runId, $branchId))->handle($manager);
+    }
+
+    expect(joinOpenWaitDbRunStatus($runId))->toBe('waiting')
+        ->and(joinOpenWaitDbStepRows($runId))->toBe($stepRows);
+
+    (new AdvanceDurableBranch($runId, 'parallel:2'))->handle($manager);
+
+    expect(joinOpenWaitDbRunStatus($runId))->toBe('pending')
+        ->and(joinOpenWaitDbStepRows($runId))->toBe($stepRows + 1);
 });
 
 test('closing the last wait never waits on branch rows, so it cannot deadlock with a branch retry writing its outbox row', function (): void {
