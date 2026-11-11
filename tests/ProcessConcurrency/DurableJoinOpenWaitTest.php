@@ -19,6 +19,7 @@ use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableJoinRelease;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Runners\QueuedHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
+use BuiltByBerry\LaravelSwarm\Support\BranchWaitPayload;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FailingPromptAgent;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
@@ -377,6 +378,87 @@ function joinOpenWaitDbSnapshotSignaller(string $runId, string $wait, string $di
         DB::commit();
 
         return ['active_in_snapshot' => $activeInSnapshot, 'accepted' => $accepted, 'before_commit' => $beforeCommit];
+    };
+}
+
+/**
+ * Opens an application transaction and takes its snapshot before the run fans out (it
+ * sees no branch rows), waits for the fan-out to commit, counts the branch rows again
+ * inside the transaction — still none under MySQL's REPEATABLE READ, all of them under
+ * Postgres' READ COMMITTED — then signals the wait in that transaction. Reports what
+ * it saw before its commit. The isolation level is set, not left to the server default.
+ */
+function joinOpenWaitDbStaleSnapshotSignaller(string $runId, string $wait, string $dir): Closure
+{
+    return static function () use ($runId, $wait, $dir): array {
+        JoinOpenWaitWorker::boot();
+        $branchRows = fn (): int => DB::table('swarm_durable_branches')->where('run_id', $runId)->count();
+        $stepRows = fn (): int => DB::table('swarm_durable_outbox')->where('run_id', $runId)->where('dispatch_type', 'step')->count();
+        $mysql = DB::connection()->getDriverName() === 'mysql';
+
+        if ($mysql) {
+            DB::statement('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+        }
+
+        DB::beginTransaction();
+
+        if (! $mysql) {
+            DB::statement('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
+        }
+
+        $beforeFanOut = $branchRows();
+        LockBarrier::signal($dir, 'snapshot-taken');
+        LockBarrier::await($dir, 'fanout-done');
+        $afterFanOut = $branchRows();
+
+        try {
+            $accepted = app(DurableSwarmManager::class)->signal($runId, $wait)->accepted;
+            $beforeCommit = ['status' => DB::table('swarm_durable_runs')->where('run_id', $runId)->value('status'), 'step_rows' => $stepRows()];
+            DB::commit();
+        } catch (Throwable $e) {
+            try {
+                DB::rollBack();
+            } catch (Throwable) {
+            }
+
+            return ['outcome' => 'aborted', 'failure' => LockBarrier::failure($e)];
+        }
+
+        return ['branch_rows_before_fan_out' => $beforeFanOut, 'branch_rows_after_fan_out' => $afterFanOut, 'accepted' => $accepted, 'before_commit' => $beforeCommit];
+    };
+}
+
+/**
+ * The fan-out of a leased top-level parallel run, through the store's own
+ * waitForBranches(), once the other worker has taken its snapshot. It commits before
+ * that worker touches the run, so nothing here waits on a lock.
+ */
+function joinOpenWaitDbFanOutAfter(string $runId, string $token, string $dir, string $after): Closure
+{
+    return static function () use ($runId, $token, $dir, $after): array {
+        JoinOpenWaitWorker::boot();
+        LockBarrier::await($dir, $after);
+
+        try {
+            app(DurableRunStore::class)->waitForBranches($runId, new BranchWaitPayload(
+                executionToken: $token,
+                nextStepIndex: 3,
+                parentNodeId: 'parallel',
+                context: RunContext::fromPayload((array) app(ContextStore::class)->find($runId)),
+                ttlSeconds: 3600,
+                branches: [
+                    ['branch_id' => 'parallel:0', 'step_index' => 0, 'node_id' => null, 'agent_class' => FakeResearcher::class, 'parent_node_id' => 'parallel', 'input' => 'parallel-durable-task', 'metadata' => ['parallel_branch_index' => 0]],
+                    ['branch_id' => 'parallel:1', 'step_index' => 1, 'node_id' => null, 'agent_class' => FakeWriter::class, 'parent_node_id' => 'parallel', 'input' => 'parallel-durable-task', 'metadata' => ['parallel_branch_index' => 1]],
+                    ['branch_id' => 'parallel:2', 'step_index' => 2, 'node_id' => null, 'agent_class' => FakeEditor::class, 'parent_node_id' => 'parallel', 'input' => 'parallel-durable-task', 'metadata' => ['parallel_branch_index' => 2]],
+                ],
+            ));
+
+            return ['outcome' => 'committed'];
+        } catch (Throwable $e) {
+            return ['outcome' => 'aborted', 'failure' => LockBarrier::failure($e)];
+        } finally {
+            LockBarrier::signal($dir, 'fanout-done');
+        }
     };
 }
 
@@ -937,6 +1019,37 @@ test('a last wait closing while the run fans out waits for the fan-out and leave
         ->and(joinOpenWaitDbRunStatus($runId))->toBe('waiting')
         ->and(app(RunHistoryStore::class)->find($runId)['status'])->toBe('waiting')
         ->and(joinOpenWaitDbStepRows($runId))->toBe($stepRows);
+});
+
+test('a last wait closed inside an application transaction whose snapshot predates the fan-out leaves the run waiting on its branches (#617)', function (): void {
+    // A step that holds its lease and has an open application wait, about to fan out.
+    $runId = FakeParallelSwarm::make()->dispatchDurable('parallel-durable-task')->runId;
+    $store = app(DurableRunStore::class);
+    $token = (string) $store->acquireLease($runId, 0, 300);
+    $store->markRunning($runId, $token, 0);
+    app(DurableSwarmManager::class)->wait($runId, 'approval');
+    $stepRows = joinOpenWaitDbStepRows($runId);
+    $dir = joinOpenWaitDbBarrierDir();
+
+    [$signaller, $fanOut] = $this->app->make(ConcurrencyManager::class)->driver('process')->run([
+        joinOpenWaitDbStaleSnapshotSignaller($runId, 'approval', $dir),
+        joinOpenWaitDbFanOutAfter($runId, $token, $dir, 'snapshot-taken'),
+    ]);
+
+    // Under MySQL's REPEATABLE READ the closer's transaction cannot see the branch
+    // rows the fan-out committed; the locked run row is what tells it the run fanned
+    // out. Postgres reads them, and the same outcome is required there.
+    expect($fanOut)->toBe(['outcome' => 'committed'], json_encode($fanOut))
+        ->and($signaller)->toBe([
+            'branch_rows_before_fan_out' => 0,
+            'branch_rows_after_fan_out' => DB::connection()->getDriverName() === 'mysql' ? 0 : 3,
+            'accepted' => true,
+            'before_commit' => ['status' => 'waiting', 'step_rows' => $stepRows],
+        ], json_encode($signaller))
+        ->and(joinOpenWaitDbRunStatus($runId))->toBe('waiting')
+        ->and(app(RunHistoryStore::class)->find($runId)['status'])->toBe('waiting')
+        ->and(joinOpenWaitDbStepRows($runId))->toBe($stepRows)
+        ->and(DB::table('swarm_durable_branches')->where('run_id', $runId)->where('parent_node_id', 'parallel')->where('status', 'pending')->count())->toBe(3);
 });
 
 test('closing the last wait never waits on branch rows, so it cannot deadlock with a branch retry writing its outbox row', function (): void {

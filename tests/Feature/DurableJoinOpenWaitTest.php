@@ -1756,3 +1756,162 @@ describe('stray queued-hierarchical resume (#610)', function () {
         Event::assertNotDispatched(SwarmFailed::class);
     });
 });
+
+/**
+ * The run row as the closer's locking read sees it.
+ */
+function joinWaitRunRow(string $runId): object
+{
+    return DB::table('swarm_durable_runs')->where('run_id', $runId)->first(['status', 'current_node_id', 'current_step_index', 'next_step_index']);
+}
+
+/**
+ * A hierarchical plan whose parallel node is named like the node a lease writes for
+ * the step after its join (`step:3`): a plan may use any id.
+ */
+function joinWaitStepNamedPlan(): array
+{
+    $plan = joinWaitHierarchicalPlan();
+    $plan['start_at'] = 'step:3';
+    $plan['nodes']['step:3'] = $plan['nodes']['parallel_node'];
+    unset($plan['nodes']['parallel_node']);
+
+    return $plan;
+}
+
+/*
+ * #617. Inside an application transaction that read before it closed a wait, MySQL's
+ * REPEATABLE READ snapshot can be older than the run's fan-out, so the closer cannot
+ * see the branch rows. It then decides from the locked run row, which is current.
+ *
+ * SQLite has no such snapshot. These tests remove the branch rows of a run the real
+ * fan-out wrote to stand in for a closer that cannot see them. That pins the decision
+ * to the row each fan-out path really leaves, and to the rows that only look like one.
+ * It proves nothing about concurrency, nor about the join's later release (the rows it
+ * would read are gone): the real-engine test for that is in
+ * tests/ProcessConcurrency/DurableJoinOpenWaitTest.php.
+ */
+describe('a closer that cannot see the branch rows (#617)', function () {
+    beforeEach(function () {
+        Artisan::call('migrate:fresh', ['--database' => 'testing']);
+        FakeResearcher::fake(['research-out']);
+        FakeWriter::fake(['writer-out']);
+        FakeEditor::fake(['editor-out']);
+    });
+
+    test('the last wait closing on a fanned-out run leaves it waiting, whichever path fanned it out', function (string $profile) {
+        joinWaitRuntime(queuedHierarchical: $profile === 'queued-hierarchical');
+        $manager = app(DurableSwarmManager::class);
+
+        if ($profile === 'top-level parallel') {
+            $runId = joinWaitParallelRun(completeBranches: false);
+        } elseif ($profile === 'queued-hierarchical') {
+            FakeHierarchicalCoordinator::fake([joinWaitStepNamedPlan()]);
+            $runId = 'join-wait-617-qh';
+            $context = RunContext::from('queued-hierarchical-task', $runId);
+            (new InvokeSwarm(FakeHierarchicalFullSwarm::class, $context->toQueuePayload()))->handle(app(SwarmRunner::class));
+            $manager->wait($runId, 'approval');
+        } else {
+            FakeHierarchicalCoordinator::fake([joinWaitStepNamedPlan()]);
+            $runId = FakeHierarchicalFullSwarm::make()->dispatchDurable('durable-hierarchical-task')->runId;
+            (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+            (new AdvanceDurableSwarm($runId, 1))->handle($manager);
+            $manager->wait($runId, 'approval');
+        }
+
+        $row = joinWaitRunRow($runId);
+        expect($row->status)->toBe('waiting')
+            ->and($row->current_step_index)->toBeNull()
+            ->and(DB::table('swarm_durable_branches')->where('run_id', $runId)->where('parent_node_id', $row->current_node_id)->count())->toBeGreaterThan(0);
+
+        if ($profile !== 'top-level parallel') {
+            // The boundary's node is named exactly like a lease's node for the next step.
+            expect($row->current_node_id)->toBe('step:'.$row->next_step_index);
+        }
+
+        DB::table('swarm_durable_branches')->where('run_id', $runId)->delete();
+        $before = joinWaitDispatches($runId);
+
+        expect($manager->signal($runId, 'approval')->accepted)->toBeTrue()
+            ->and($manager->find($runId)['status'])->toBe('waiting')
+            ->and(app(RunHistoryStore::class)->find($runId)['status'])->toBe('waiting')
+            ->and(joinWaitDispatches($runId))->toBe($before);
+    })->with(['top-level parallel', 'step-durable hierarchical', 'queued-hierarchical']);
+
+    test('a fail_run parent leased to be failed is not a fan-out: its last wait closing moves it to pending', function (bool $pausedBetween) {
+        joinWaitRuntime();
+        $runId = joinWaitParallelRun(completeBranches: false);
+        $manager = app(DurableSwarmManager::class);
+        $store = app(DurableRunStore::class);
+        $manager->wait($runId, 'second');
+        joinWaitMarkBranchesCompleted($runId);
+        DB::table('swarm_durable_branches')->where('run_id', $runId)->where('branch_id', 'parallel:0')->update(['status' => 'failed']);
+
+        // What failWaitingParentFromBranches() does before it records the failure —
+        // and then the worker is gone: the release, and a lease with no markRunning().
+        expect($store)->toBeInstanceOf(ReleasesWaitingRunForFailure::class)
+            ->and($store->releaseWaitingRunForFailure($runId, 3))->toBeTrue()
+            ->and($store->acquireLease($runId, 3, 300))->not->toBeNull();
+
+        $row = joinWaitRunRow($runId);
+        expect($row->status)->toBe('pending')
+            ->and($row->current_step_index)->toBeNull()
+            ->and($row->current_node_id)->toBe('step:3')
+            ->and((int) $row->next_step_index)->toBe(3);
+
+        // One of the two waits closes: the run is waiting again, on the lease's node.
+        expect($store->acceptSignal($runId, 'approval', null, null))->not->toBeNull()
+            ->and(joinWaitRunRow($runId)->status)->toBe('waiting');
+
+        if ($pausedBetween) {
+            // pause() clears the lease token; the node the lease wrote stays.
+            expect($store->pause($runId))->toBeTrue()
+                ->and($store->resume($runId))->toBeTrue()
+                ->and(joinWaitRunRow($runId)->status)->toBe('waiting');
+        }
+
+        // The last wait closes. No branch rows are at step:3, so the run must go on to
+        // pending, where swarm:recover finds it — never stay waiting on nothing.
+        expect($store->acceptSignal($runId, 'second', null, null))->not->toBeNull()
+            ->and(joinWaitRunRow($runId)->status)->toBe('pending');
+    })->with(['the lease still held' => false, 'paused and resumed in between' => true]);
+
+    test('a run that has not fanned out goes to pending when its last wait closes', function (string $shape) {
+        joinWaitRuntime();
+        $manager = app(DurableSwarmManager::class);
+        $store = app(DurableRunStore::class);
+
+        if ($shape === 'never run') {
+            $runId = FakeParallelSwarm::make()->dispatchDurable('parallel-durable-task')->runId;
+        } elseif ($shape === 'coordinator step done') {
+            // The coordinator's checkpoint points the cursor at the parallel node, with
+            // a next index past zero — but the step that ran left its step index set,
+            // and the fan-out has not happened.
+            FakeHierarchicalCoordinator::fake([joinWaitHierarchicalPlan()]);
+            $runId = FakeHierarchicalFullSwarm::make()->dispatchDurable('durable-hierarchical-task')->runId;
+            (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+            $row = joinWaitRunRow($runId);
+            expect($row->current_node_id)->toBe('parallel_node')
+                ->and($row->current_step_index)->not->toBeNull()
+                ->and((int) $row->next_step_index)->toBe(1)
+                ->and(DB::table('swarm_durable_branches')->where('run_id', $runId)->count())->toBe(0);
+        } else {
+            // A hierarchical run's first step is leased at the `coordinator` node, with
+            // no current step yet and its next index still zero.
+            FakeHierarchicalCoordinator::fake([joinWaitHierarchicalPlan()]);
+            $runId = FakeHierarchicalFullSwarm::make()->dispatchDurable('durable-hierarchical-task')->runId;
+            expect($store->acquireLease($runId, 0, 300))->not->toBeNull();
+            $row = joinWaitRunRow($runId);
+            expect($row->current_node_id)->toBe('coordinator')
+                ->and($row->current_step_index)->toBeNull()
+                ->and((int) $row->next_step_index)->toBe(0);
+        }
+
+        $manager->wait($runId, 'approval');
+        $before = joinWaitDispatches($runId);
+
+        expect($manager->signal($runId, 'approval')->accepted)->toBeTrue()
+            ->and($manager->find($runId)['status'])->toBe('pending')
+            ->and(joinWaitDispatches($runId)['step'])->toBe($before['step'] + 1);
+    })->with(['never run', 'first step leased', 'coordinator step done']);
+});

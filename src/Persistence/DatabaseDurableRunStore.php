@@ -2878,7 +2878,7 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
         /** @var object|null $run */
         $run = ($this->connection->getDriverName() === 'pgsql'
             ? $runQuery->lock('for no key update')
-            : $runQuery->lockForUpdate())->first(['status', 'current_node_id', 'current_step_index', 'next_step_index', 'wait_generation']);
+            : $runQuery->lockForUpdate())->first(['status', 'current_node_id', 'current_step_index', 'next_step_index', 'route_cursor', 'wait_generation']);
 
         return $run;
     }
@@ -2887,15 +2887,17 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
     {
         // Closers have written their wait row before locking the run; createWait
         // already holds the run before inserting. A fan-out (waitForBranches) takes the run row as its
-        // first statement and holds it until it commits, so this waits for one in flight.
-        // No closer makes an ordinary read in its transaction before it holds the run row:
-        // the timeout and child closers reach this point first, and a signal's acceptance
-        // (acceptSignal) has already locked the run row before it reads its idempotency
-        // key. So the branch read below sees such a fan-out committed — under Postgres each
-        // statement takes a fresh snapshot, under MySQL's REPEATABLE READ the snapshot is
-        // taken at the first ordinary read, after the lock. (createWait() can be called
-        // after an earlier read — persistChildIntent() reads the context first — but its
-        // new wait is open, so it never reaches the branch read.)
+        // first statement and holds it until it commits, so this waits for one in flight,
+        // and the locked row read here is current on every engine.
+        // No closer the package runs makes an ordinary read in its transaction before it
+        // holds the run row: the timeout and child closers reach this point first, and a
+        // signal's acceptance (acceptSignal) has already locked the run row before it
+        // reads its idempotency key. So in those the branch read below sees such a
+        // fan-out committed — under Postgres each statement takes a fresh snapshot, under
+        // MySQL's REPEATABLE READ the snapshot is taken at the first ordinary read, after
+        // the lock. An application transaction that read before it closed the wait keeps
+        // its older MySQL snapshot, and the branch read can then miss a fan-out that
+        // committed since: lockedRunRowIsAtFanOut() decides from the locked row for it.
         $run = $this->lockRunRow($runId);
 
         /** @var object|null $latestOpenWait */
@@ -2936,10 +2938,10 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
             }
 
             $nodeId = is_string($run->current_node_id ?? null) ? $run->current_node_id : null;
-            $atBranchBoundary = $nodeId !== null && $this->branchTable()
+            $atBranchBoundary = $nodeId !== null && ($this->branchTable()
                 ->where('run_id', $runId)
                 ->where('parent_node_id', $nodeId)
-                ->exists();
+                ->exists() || $this->lockedRunRowIsAtFanOut($run));
 
             $this->table()
                 ->where('run_id', $runId)
@@ -2976,6 +2978,40 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
                 'wait_timeout_at' => $nextTimedWait->timeout_at ?? null,
                 'updated_at' => $timestamp,
             ]);
+    }
+
+    /**
+     * Whether the locked run row is the row a fan-out wrote, with no step run and no
+     * lease node written over it since — so the run is at a branch boundary even when
+     * this transaction's snapshot is too old to see the branch rows (#617).
+     *
+     * waitForBranches() clears the step index and pins its parent node, with a next
+     * index past zero; markRunning() sets the step index again when the next step
+     * starts. In between, only a lease taken without markRunning() — the one a
+     * `fail_run` failure takes to fail the parent — rewrites the node, to the node of
+     * the next step. On a run with a route cursor that node is the cursor's, which is
+     * still the boundary's own (the cursor moves only in a step markRunning() started).
+     * On a run without one it is `step:<next>`, where no branch rows are: that row is
+     * not a fan-out's, and such a run goes on to `pending` as it always has.
+     *
+     * createWait() reads the same columns for a different question (has the join been
+     * released) and is deliberately not shared with this.
+     */
+    private function lockedRunRowIsAtFanOut(object $run): bool
+    {
+        if ($run->current_step_index !== null
+            || ! is_string($run->current_node_id ?? null)
+            || (int) $run->next_step_index <= 0) {
+            return false;
+        }
+
+        $cursor = $this->decodeJson(is_string($run->route_cursor ?? null) ? $run->route_cursor : null, null);
+
+        if (is_array($cursor) && is_string($cursor['current_node_id'] ?? null)) {
+            return true;
+        }
+
+        return $run->current_node_id !== 'step:'.(int) $run->next_step_index;
     }
 
     /**
