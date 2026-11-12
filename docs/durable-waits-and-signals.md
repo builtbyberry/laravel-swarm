@@ -153,7 +153,9 @@ its boundary. An entered declared boundary writes no continuation step outbox
 entry; the boundary release dispatches its continuation. An already-present
 outcome retains the ordinary enqueue path. A boundary persistence failure rolls
 back the checkpoint, so retry/recovery can re-run the agent step and spend its
-provider tokens again, up to the durable job tries (`swarm.durable.job.tries`).
+provider tokens again. `swarm.durable.job.tries` limits the attempts of one queued
+job; each `swarm:recover` redispatch is a fresh job, so a failure that persists
+can keep spending until the run is fixed or cancelled.
 `RoutesDurableWaits::durableWaits()` and
 `DispatchesChildSwarms::durableChildSwarms()` now run inside the checkpoint
 transaction under the run lock and may run again when it retries. They must be

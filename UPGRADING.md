@@ -62,7 +62,9 @@ Ordinary declared waits and child-swarm intents now persist inside the step
 checkpoint transaction. A boundary persistence failure rolls back that step's
 checkpoint; retry/recovery can re-run the completed agent step, so application
 side effects must tolerate that repetition. Re-running the step spends its
-provider tokens again, up to the durable job tries (`swarm.durable.job.tries`).
+provider tokens again. `swarm.durable.job.tries` limits the attempts of one queued
+job; each `swarm:recover` redispatch is a fresh job, so a failure that persists
+can keep spending until the run is fixed or cancelled.
 `RoutesDurableWaits::durableWaits()` and
 `DispatchesChildSwarms::durableChildSwarms()` now run inside the checkpoint
 transaction under the run lock and may run again when it retries. They must be
