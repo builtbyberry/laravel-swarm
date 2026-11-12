@@ -11,6 +11,7 @@ use BuiltByBerry\LaravelSwarm\Enums\DurableLifecycleStatus;
 use BuiltByBerry\LaravelSwarm\Events\SwarmCancelled;
 use BuiltByBerry\LaravelSwarm\Events\SwarmPaused;
 use BuiltByBerry\LaravelSwarm\Events\SwarmResumed;
+use BuiltByBerry\LaravelSwarm\Exceptions\DurableWaitSetChangedException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\DurableCancelResult;
@@ -19,12 +20,16 @@ use BuiltByBerry\LaravelSwarm\Responses\DurableResumeResult;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Database\Connection;
+use Illuminate\Database\DetectsConcurrencyErrors;
+use Throwable;
 
 /**
  * @internal
  */
 class DurableLifecycleController
 {
+    use DetectsConcurrencyErrors;
+
     public function __construct(
         protected DurableRunStore $durableRuns,
         protected DatabaseRunHistoryStore $historyStore,
@@ -104,35 +109,63 @@ class DurableLifecycleController
      */
     public function resume(string $runId, callable $dispatchWaiting): DurableResumeResult
     {
+        $canRetry = $this->connection->transactionLevel() === 0;
         $run = $this->runs->requireRun($runId);
 
         if ($run['status'] !== 'paused') {
             throw new SwarmException("Durable run [{$runId}] cannot be resumed from status [{$run['status']}].");
         }
 
+        $resumed = false;
         $context = null;
         $updated = null;
 
-        $resumed = $this->connection->transaction(function () use ($runId, $run, &$context, &$updated): bool {
-            if (! $this->durableRuns->resume($runId)) {
-                return false;
+        // One budget for generation changes and database concurrency victims. Only
+        // an outermost rollback gives MySQL a fresh snapshot for the next attempt.
+        for ($attempt = 1; $attempt <= 3; $attempt++) {
+            $context = null;
+            $updated = null;
+
+            try {
+                $resumed = $this->connection->transaction(function () use ($runId, $run, &$context, &$updated): bool {
+                    if (! $this->durableRuns->resume($runId)) {
+                        return false;
+                    }
+
+                    $updated = $this->runs->requireRun($runId);
+                    $context = $this->runs->loadContext($runId);
+                    $this->historyStore->syncDurableState($runId, $updated['status'], $this->capture->context($context), $context->metadata, $this->runs->ttlSeconds(), false);
+
+                    if ($updated['status'] === 'waiting') {
+                        return true;
+                    }
+
+                    if (! $this->runs->isQueueHierarchicalParallel($updated)) {
+                        $nextStepIndex = (int) ($updated['next_step_index'] ?? $run['next_step_index']);
+                        $this->eager->enqueueStep($runId, $nextStepIndex, $updated['queue_connection'], $updated['queue_name']);
+                    }
+
+                    return true;
+                }, attempts: 1);
+                break;
+            } catch (Throwable $exception) {
+                if (! $exception instanceof DurableWaitSetChangedException && ! $this->causedByConcurrencyError($exception)) {
+                    throw $exception;
+                }
+
+                if (! $canRetry) {
+                    if ($exception instanceof DurableWaitSetChangedException) {
+                        throw new SwarmException("Durable run [{$runId}] could not be resumed: a wait was opened on it concurrently; retry the resume outside this transaction.", previous: $exception);
+                    }
+
+                    throw $exception;
+                }
+
+                if ($attempt === 3) {
+                    throw new SwarmException("Durable run [{$runId}] could not be resumed: waits on it kept changing; retry the resume.", previous: $exception);
+                }
             }
-
-            $updated = $this->runs->requireRun($runId);
-            $context = $this->runs->loadContext($runId);
-            $this->historyStore->syncDurableState($runId, $updated['status'], $this->capture->context($context), $context->metadata, $this->runs->ttlSeconds(), false);
-
-            if ($updated['status'] === 'waiting') {
-                return true;
-            }
-
-            if (! $this->runs->isQueueHierarchicalParallel($updated)) {
-                $nextStepIndex = (int) ($updated['next_step_index'] ?? $run['next_step_index']);
-                $this->eager->enqueueStep($runId, $nextStepIndex, $updated['queue_connection'], $updated['queue_name']);
-            }
-
-            return true;
-        });
+        }
 
         if (! $resumed || $context === null || ! is_array($updated)) {
             throw new SwarmException("Durable run [{$runId}] could not be resumed.");

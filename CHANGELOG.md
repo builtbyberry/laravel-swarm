@@ -174,6 +174,25 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
 
 ### Fixed
 
+- **A paused run cannot resume past a concurrently created wait (#621).** Resume
+  observes the existing creation generation before scanning waits, then checks
+  the locked run without taking another wait lock. Package-owned resume
+  transactions share three attempts across generation changes and database
+  concurrency errors; exhaustion asks the caller to retry. Inside an application
+  transaction, a concurrent wait create-and-close can now fail loudly on MySQL
+  `REPEATABLE READ`, asking for resume outside that transaction. Ordinary declared
+  waits and child intents now commit with their step checkpoint, as fan-out
+  boundaries already do. An entered boundary writes no continuation step outbox
+  entry; an already-present outcome keeps ordinary enqueueing. Boundary persistence
+  failure rolls the checkpoint back, so retry/recovery can re-run the step;
+  notification and child dispatch remain after commit. Accepting a stale
+  generation or keeping the separate boundary commit was rejected because either
+  can advance a step past its obligation. Deterministic regressions cover retry
+  budgets, rollback, effects, SQL Server lock SQL and process race schedules.
+  No new migration or configuration. Every creator, resumer and checkpoint
+  executor must run this version; the existing generation migration alone gives
+  no protection. See [upgrade guidance](UPGRADING.md#concurrent-wait-creation-and-resume).
+
 - **`swarm:recover` repairs queued-hierarchical runs stranded by a pre-upgrade
   wait closer (#615).** Before the open-wait join rule (#600), a signal, wait
   timeout or child outcome that closed the last wait of a `queue()`

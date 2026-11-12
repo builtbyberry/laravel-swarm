@@ -363,7 +363,7 @@ test('flag off: a step advance pushes no job directly and leaves an unreserved r
         ->and(app(DurableOutbox::class)->drain([DurableDispatchType::Step], 100)->dispatched)->toBe(1);
 });
 
-test('flag off: wait and child boundaries keep their step row for the relay, unreserved', function (string $swarm): void {
+test('G6 flag off: wait and child boundaries write no parent continuation for the relay', function (string $swarm): void {
     Queue::fake();
     FakeResearcher::fake(['parent-step', 'child-research']);
     $runId = $swarm::make()->dispatchDurable('task')->runId;
@@ -373,9 +373,8 @@ test('flag off: wait and child boundaries keep their step row for the relay, unr
     $rows = DB::table('swarm_durable_outbox')->where('run_id', $runId)->get();
 
     expect(app(DurableSwarmManager::class)->find($runId)['status'])->toBe('waiting')
-        ->and($rows)->toHaveCount(1)
-        ->and($rows[0]->reserved_at)->toBeNull()
-        ->and(eagerDirectJobs())->toBe([]);
+        ->and($rows)->toHaveCount(0)
+        ->and(eagerDirectJobs($runId))->toBe([]);
 })->with([
     'declared wait' => [DurableWaitAttributeSwarm::class],
     'child swarm' => [ChildDispatchingSwarm::class],
@@ -540,7 +539,7 @@ test('an eager push plus a relay push for the same step advance it exactly once'
 // The boundary ordering
 // ---------------------------------------------------------------------------
 
-test('flag on: entering a declared wait pushes nothing and settles the dead step row; the signal pushes afresh', function (): void {
+test('flag on: entering a declared wait pushes nothing; the signal pushes its continuation', function (): void {
     eagerOn();
     Queue::fake();
     $response = DurableWaitAttributeSwarm::make()->dispatchDurable('wait-task');
@@ -1186,24 +1185,47 @@ test('flag on: a sync queue connection keeps plain relay rows and pushes nothing
         ->and($rows[0]->reserved_at)->toBeNull();
 });
 
-test('flag on: a boundary that throws after the checkpoint still pushes the collected step', function (): void {
+test('R7 an ordinary after-child-intent crash commits its wait and recovers once without a parent step', function (bool $capture): void {
     eagerOn();
+    config()->set('swarm.capture.inputs', $capture);
     Queue::fake();
     FakeResearcher::fake(['parent-step', 'child-research']);
     $response = ChildDispatchingSwarm::make()->dispatchDurable('parent-task');
+    $runId = $response->runId;
     $manager = app(DurableSwarmManager::class);
     $manager->afterChildIntentForTesting(function (): void {
         throw new RuntimeException('boundary crashed');
     });
 
-    expect(fn () => (new AdvanceDurableSwarm($response->runId, 0))->handle($manager))
+    expect(fn () => (new AdvanceDurableSwarm($runId, 0))->handle($manager))
         ->toThrow(RuntimeException::class, 'boundary crashed');
+    $store = app(DurableRunStore::class);
+    $child = $store->childRuns($runId)[0];
+    expect($manager->find($runId)['status'])->toBe('waiting')
+        ->and($manager->find($runId)['next_step_index'])->toBe(1)
+        ->and($store->waits($runId))->toHaveCount(1)
+        ->and($store->waits($runId)[0]['status'])->toBe('waiting')
+        ->and($child['dispatched_at'])->toBeNull()
+        ->and($manager->find($child['child_run_id']))->toBeNull();
 
-    $jobs = eagerDirectStepJobs($response->runId);
-    expect($jobs)->toHaveCount(1)
-        ->and($jobs[0]->stepIndex)->toBe(1)
-        ->and(eagerOutboxRow($jobs[0]->outboxEntryId))->not->toBeNull();
-});
+    $manager->afterChildIntentForTesting(null);
+    $manager->recover(runId: $runId);
+    $manager->recover(runId: $runId);
+    expect($store->childRuns($runId))->toHaveCount(1)
+        ->and($store->childRunForChild($child['child_run_id'])['dispatched_at'])->not->toBeNull()
+        ->and(app(ContextStore::class)->find($child['child_run_id'])['input'])
+        ->toBe($child['context_payload']['input']);
+    expect(array_values(array_filter(
+        eagerPushedAdvanceJobs(),
+        fn (object $job): bool => $job instanceof AdvanceDurableSwarm && $job->runId === $child['child_run_id'],
+    )))->toHaveCount(1);
+    // Capture-off recovery intentionally uses the persisted redacted payload (R4).
+    if (! $capture) {
+        expect($child['context_payload']['input'])->toBe('[redacted]');
+    }
+    expect(eagerDirectStepJobs($runId))->toBe([])
+        ->and(DB::table('swarm_durable_outbox')->where('run_id', $runId)->where('dispatch_type', 'step')->where('step_index', 1)->count())->toBe(0);
+})->with(['capture on' => true, 'capture off' => false]);
 
 test('drain reports first reclaims of direct rows separately from relay reclaims', function (): void {
     $this->freezeTime();
