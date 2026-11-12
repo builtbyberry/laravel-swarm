@@ -152,8 +152,13 @@ concurrent pause, resume or relay cannot observe a committed checkpoint without
 its boundary. An entered declared boundary writes no continuation step outbox
 entry; the boundary release dispatches its continuation. An already-present
 outcome retains the ordinary enqueue path. A boundary persistence failure rolls
-back the checkpoint, so retry/recovery can re-run the agent step. Persistence
-retries themselves do not repeat agent execution. Notifications and child dispatch
+back the checkpoint, so retry/recovery can re-run the agent step and spend its
+provider tokens again, up to the durable job tries (`swarm.durable.job.tries`).
+`RoutesDurableWaits::durableWaits()` and
+`DispatchesChildSwarms::durableChildSwarms()` now run inside the checkpoint
+transaction under the run lock and may run again when it retries. They must be
+fast, deterministic and side-effect free. Persistence retries themselves do not
+repeat agent execution. Notifications and child dispatch
 run after commit. A notification failure leaves committed state available to `swarm:recover` and
 `swarm:relay`. Inside an application transaction, these effects wait for the
 swarm connection's outermost commit; a failure is reported without interrupting
@@ -163,11 +168,16 @@ Resume observes the wait-creation generation before its locking wait scan,
 then locks the run. An observed open wait returns a paused run to `waiting`.
 If the scan was empty but the generation changed, an outermost resume retries
 from a fresh transaction, sharing three total attempts with database concurrency
-errors. Exhaustion throws `SwarmException` saying `waits on it kept changing;
-retry the resume.` Inside an application transaction it does not retry: a
-concurrent wait create-and-close after an older MySQL `REPEATABLE READ` snapshot
-now throws `SwarmException` saying `a wait was opened on it concurrently; retry
-the resume outside this transaction.` The run remains paused. An observed open
+errors. Exhaustion throws a retryable `SwarmException` with the last failure as
+`previous`, saying either `waits on it kept changing; retry the resume.` or
+`the database kept reporting concurrency conflicts; retry the resume.`
+Inside an application transaction on any engine, a wait created between the scan
+and run lock can throw `SwarmException` saying `a wait was opened on it
+concurrently; retry the resume outside this transaction.` On MySQL
+`REPEATABLE READ`, a wait created and closed since an older snapshot always
+triggers this conservative fence. The run remains paused. This is not a database
+concurrency error, so `DB::transaction(..., attempts: 3)` does not retry it;
+retry resume outside the application transaction after it commits. An observed open
 wait still wins over a conservative generation mismatch. SQLite relies on write
 serialization and retries; real lock scheduling depends on the database engine.
 

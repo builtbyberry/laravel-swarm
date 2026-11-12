@@ -181,7 +181,7 @@ class DurableStepCheckpointCoordinator
 
             $this->runBoundaryEffects($runId, $boundaryEffects);
         } finally {
-            $this->pushCollected($runId, $nextStepIndex, $run, $enteredBoundary, $stepEntries, $branchEntries);
+            $this->pushCollected($runId, $nextStepIndex, $run, $stepEntries, $branchEntries);
         }
     }
 
@@ -219,24 +219,13 @@ class DurableStepCheckpointCoordinator
      * @param  list<int>  $stepEntries
      * @param  list<array{0: int, 1: string, 2: ?string, 3: ?string}>  $branchEntries
      */
-    protected function pushCollected(string $runId, int $nextStepIndex, array $run, bool $enteredBoundary, array $stepEntries, array $branchEntries): void
+    protected function pushCollected(string $runId, int $nextStepIndex, array $run, array $stepEntries, array $branchEntries): void
     {
         foreach ($branchEntries as [$entryId, $branchId, $connection, $queue]) {
             $this->eager->branch($entryId, $runId, $branchId, $connection, $queue);
         }
 
         foreach ($stepEntries as $entryId) {
-            if ($enteredBoundary) {
-                // The run is now waiting: its step entry can only be a no-op, and every
-                // way out of the boundary dispatches the continuation itself (signal
-                // release and child reconciliation enqueue a fresh entry, a wait
-                // timeout dispatches directly). Settle it rather than leave it for the
-                // relay to reclaim and push as a no-op once its reservation goes stale.
-                $this->outbox->settle($entryId, $runId);
-
-                continue;
-            }
-
             $this->eager->step($entryId, $runId, $nextStepIndex, $run['queue_connection'], $run['queue_name']);
         }
     }

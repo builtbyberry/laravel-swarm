@@ -30,31 +30,43 @@ See [wait creation and transaction retries](https://github.com/builtbyberry/lara
 The database store now fences resume against wait creation using the existing
 `wait_generation` column. A resume outside an application transaction shares a
 budget of three attempts across generation changes and database concurrency
-errors. Exhaustion throws `SwarmException` with:
+errors. After that budget, outermost resume concurrency errors now surface as
+`SwarmException` with the original exception as `previous`. Exhaustion selects
+its retryable message from the last failure:
 
 ```text
 Durable run [<run-id>] could not be resumed: waits on it kept changing; retry the resume.
+Durable run [<run-id>] could not be resumed: the database kept reporting concurrency conflicts; retry the resume.
 ```
 
 The failed attempts leave the run paused. Retry resume. Inside an application
-transaction, the package cannot refresh an older MySQL `REPEATABLE READ`
-snapshot. If another process created and closed a wait since that snapshot,
-resume now throws `SwarmException` without changing the paused run:
+transaction on any database engine, a wait created between resume's scan and
+its run lock can trigger the fence. On MySQL `REPEATABLE READ`, a wait created
+and closed since an older snapshot always triggers the conservative fence,
+because that snapshot cannot refresh. Resume throws `SwarmException` without
+changing the paused run:
 
 ```text
 Durable run [<run-id>] could not be resumed: a wait was opened on it concurrently; retry the resume outside this transaction.
 ```
 
-Finish or roll back the application transaction and retry resume outside it.
-An open wait found by the current locking scan still returns the run to
-`waiting`, including inside an older application snapshot. Database concurrency
+This is not a database concurrency error: Laravel's `DB::transaction(...,
+attempts: 3)` does not retry it. Finish or roll back the application transaction
+and retry resume outside it after commit or rollback. An open wait found by the
+current locking scan still returns the run to `waiting`, including inside an
+older application snapshot. Database concurrency
 errors inside application transactions still propagate for the application to
 handle by retrying its whole transaction.
 
 Ordinary declared waits and child-swarm intents now persist inside the step
 checkpoint transaction. A boundary persistence failure rolls back that step's
 checkpoint; retry/recovery can re-run the completed agent step, so application
-side effects must tolerate that repetition. Persistence transactions retry
+side effects must tolerate that repetition. Re-running the step spends its
+provider tokens again, up to the durable job tries (`swarm.durable.job.tries`).
+`RoutesDurableWaits::durableWaits()` and
+`DispatchesChildSwarms::durableChildSwarms()` now run inside the checkpoint
+transaction under the run lock and may run again when it retries. They must be
+fast, deterministic and side-effect free. Persistence transactions retry
 concurrency errors up to three attempts without re-running the agent between
 those attempts. An entered declared boundary writes **no continuation step
 outbox entry**; its release dispatches the continuation. A boundary whose outcome
@@ -76,8 +88,10 @@ version before relying on this guarantee. Mixed-version operation stays
 vulnerable. The existing `wait_generation` migration alone gives no protection;
 there is no additional migration in this fix. Store extenders overriding
 `resume()` must observe the generation before the wait scan and compare it with
-the locked run only when that scan found no open waits; never acquire a wait-row
-lock after the run lock. See [durable waits](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-waits-and-signals.md#creating-a-wait-from-application-code).
+the locked run only when that scan found no open waits; on a mismatch, throw
+`DurableWaitSetChangedException` without writing anything so the lifecycle
+controller can retry from a fresh transaction. Never acquire a wait-row lock
+after the run lock. See [durable waits](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-waits-and-signals.md#creating-a-wait-from-application-code).
 
 ### Durable branch fan-out cap (`swarm.durable.parallel.max_concurrent_branches`)
 

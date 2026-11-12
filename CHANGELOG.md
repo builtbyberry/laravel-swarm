@@ -110,6 +110,9 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
 
 ### Changed
 
+- **Durable resume retries and checkpoint boundaries (#621).** Review the
+  [application transaction, extension and rollout changes](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#concurrent-wait-creation-and-resume).
+
 - **BREAKING for custom `DurableOutbox` implementations.**
   `enqueueStep()` and `enqueueBranch()` now take a trailing
   `bool $directDispatch = false` and return the id of the row they write, and
@@ -174,24 +177,15 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
 
 ### Fixed
 
-- **A paused run cannot resume past a concurrently created wait (#621).** Resume
-  observes the existing creation generation before scanning waits, then checks
-  the locked run without taking another wait lock. Package-owned resume
-  transactions share three attempts across generation changes and database
-  concurrency errors; exhaustion asks the caller to retry. Inside an application
-  transaction, a concurrent wait create-and-close can now fail loudly on MySQL
-  `REPEATABLE READ`, asking for resume outside that transaction. Ordinary declared
-  waits and child intents now commit with their step checkpoint, as fan-out
-  boundaries already do. An entered boundary writes no continuation step outbox
-  entry; an already-present outcome keeps ordinary enqueueing. Boundary persistence
-  failure rolls the checkpoint back, so retry/recovery can re-run the step;
-  notification and child dispatch remain after commit. Accepting a stale
-  generation or keeping the separate boundary commit was rejected because either
-  can advance a step past its obligation. Deterministic regressions cover retry
-  budgets, rollback, effects, SQL Server lock SQL and process race schedules.
-  No new migration or configuration. Every creator, resumer and checkpoint
-  executor must run this version; the existing generation migration alone gives
-  no protection. See [upgrade guidance](UPGRADING.md#concurrent-wait-creation-and-resume).
+- **A paused run cannot resume past a concurrently created wait (#621).** Ordinary
+  declared waits and child intents now commit with the step checkpoint. Resume
+  can fail loudly inside an application transaction, leaving the run paused and
+  asking the caller to retry outside it. A boundary persistence failure rolls
+  back the checkpoint, so retry/recovery re-runs the step and spends its provider
+  tokens again; notifications and child dispatch remain after commit. Rollout
+  requires all wait creators, resumers (web, console and application processes)
+  and checkpoint executors to run this version. No new migration or configuration.
+  See [upgrade guidance](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#concurrent-wait-creation-and-resume).
 
 - **`swarm:recover` repairs queued-hierarchical runs stranded by a pre-upgrade
   wait closer (#615).** Before the open-wait join rule (#600), a signal, wait

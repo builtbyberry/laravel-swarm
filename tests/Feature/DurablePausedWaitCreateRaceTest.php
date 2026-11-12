@@ -2,20 +2,24 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Events\SwarmResumed;
 use BuiltByBerry\LaravelSwarm\Events\SwarmWaiting;
 use BuiltByBerry\LaravelSwarm\Exceptions\DurableWaitSetChangedException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
+use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableLifecycleController;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\PausedWait\RetryDurableLifecycleController;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\PausedWait\RetryDurableRunStore;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\ChildDispatchingSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\DurableWaitAttributeSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\OrdinaryBoundaryHierarchicalSwarm;
 use Illuminate\Database\DeadlockException;
@@ -32,6 +36,7 @@ beforeEach(function (): void {
     config()->set('swarm.durable.queue.connection', 'durable-test');
     Artisan::call('migrate:fresh', ['--database' => 'testing']);
     app()->instance(DurableRunStore::class, app(RetryDurableRunStore::class));
+    app()->bind(DurableLifecycleController::class, RetryDurableLifecycleController::class);
     FakeResearcher::fake(['research']);
     FakeWriter::fake(['written']);
     FakeHierarchicalCoordinator::fake([['start_at' => 'writer', 'nodes' => [
@@ -39,6 +44,11 @@ beforeEach(function (): void {
         'finish' => ['type' => 'finish', 'output_from' => 'writer'],
     ]]]);
 });
+
+function pausedWaitRaceSql(string $sql): string
+{
+    return strtolower(str_replace(['"', '`', '[', ']'], '', $sql));
+}
 
 function pausedWaitRaceRun(): string
 {
@@ -60,7 +70,7 @@ function pausedWaitRaceDeadlock(): QueryException
 
 // Same-connection mutation, rolled back with the failed attempt. This proves retry
 // control flow, not cross-connection visibility or SQLite concurrent commits.
-test('G5 a changed scan generation rolls back and retries once from a fresh transaction', function (bool $waitOnRetry): void {
+test('a changed scan generation rolls back and retries once from a fresh transaction', function (bool $waitOnRetry): void {
     $runId = pausedWaitRaceRun();
     $store = app(DurableRunStore::class);
     $store->scan = function (string $id) use ($store): void {
@@ -81,7 +91,7 @@ test('G5 a changed scan generation rolls back and retries once from a fresh tran
         ->and(pausedWaitRaceStepRows($runId))->toBe($before + ($waitOnRetry ? 0 : 1));
 })->with(['retry pending' => false, 'retry waiting' => true]);
 
-test('G5 the database store signals a changed empty scan without writing pending', function (): void {
+test('the database store signals a changed empty scan without writing pending', function (): void {
     $runId = pausedWaitRaceRun();
     $store = app(DurableRunStore::class);
     $store->scan = fn (string $id) => DB::table('swarm_durable_runs')->where('run_id', $id)->increment('wait_generation');
@@ -90,7 +100,7 @@ test('G5 the database store signals a changed empty scan without writing pending
     expect($store->find($runId)['status'])->toBe('paused')->and($store->attempts)->toBe(1);
 });
 
-test('G5 a generation change inside an application transaction refuses without retry', function (): void {
+test('a generation change inside an application transaction refuses without retry', function (): void {
     $runId = pausedWaitRaceRun();
     $store = app(DurableRunStore::class);
     $store->scan = fn (string $id) => DB::table('swarm_durable_runs')->where('run_id', $id)->increment('wait_generation');
@@ -102,7 +112,7 @@ test('G5 a generation change inside an application transaction refuses without r
         ->and(pausedWaitRaceStepRows($runId))->toBe($before);
 });
 
-test('G5 R3 changing waits exhaust exactly three attempts and leave the run paused', function (): void {
+test('changing waits exhaust exactly three attempts and leave the run paused', function (): void {
     Event::fake([SwarmResumed::class]);
     $runId = pausedWaitRaceRun();
     $store = app(DurableRunStore::class);
@@ -116,7 +126,7 @@ test('G5 R3 changing waits exhaust exactly three attempts and leave the run paus
     Event::assertNotDispatched(SwarmResumed::class);
 });
 
-test('R2 R10 a resume victim retries once with one committed event outbox and eager push', function (string $edge): void {
+test('a resume victim retries once with one committed event outbox and eager push', function (string $edge): void {
     Event::fake([SwarmResumed::class]);
     $runId = pausedWaitRaceRun();
     config()->set('swarm.durable.eager_dispatch', true);
@@ -135,7 +145,7 @@ test('R2 R10 a resume victim retries once with one committed event outbox and ea
         // QueryExecuted runs after INSERT: history, run update and outbox write
         // must all roll back, including the discarded attempt's after-commit push.
         DB::listen(function (QueryExecuted $query) use (&$failed): void {
-            if (! $failed && str_starts_with(strtolower($query->sql), 'insert into "swarm_durable_outbox"')) {
+            if (! $failed && str_starts_with(pausedWaitRaceSql($query->sql), 'insert into swarm_durable_outbox')) {
                 $failed = true;
                 throw pausedWaitRaceDeadlock();
             }
@@ -152,7 +162,7 @@ test('R2 R10 a resume victim retries once with one committed event outbox and ea
     Queue::assertPushed(AdvanceDurableSwarm::class, 1);
 })->with(['nested store', 'after outbox insert']);
 
-test('R10 generation changes and concurrency victims share one three-attempt budget', function (): void {
+test('generation changes and concurrency victims share one three-attempt budget', function (): void {
     $runId = pausedWaitRaceRun();
     $store = app(DurableRunStore::class);
     $store->beforeResume = function () use ($store): void {
@@ -165,7 +175,7 @@ test('R10 generation changes and concurrency victims share one three-attempt bud
     expect($store->attempts)->toBe(3)->and($store->find($runId)['status'])->toBe('paused');
 });
 
-test('R2 a concurrency victim inside an application transaction belongs to the application', function (): void {
+test('a concurrency victim inside an application transaction belongs to the application', function (): void {
     $runId = pausedWaitRaceRun();
     $store = app(DurableRunStore::class);
     $store->beforeResume = fn () => throw pausedWaitRaceDeadlock();
@@ -173,7 +183,7 @@ test('R2 a concurrency victim inside an application transaction belongs to the a
     expect($store->attempts)->toBe(1)->and($store->find($runId)['status'])->toBe('paused');
 });
 
-test('G6 a failure inside ordinary boundary persistence rolls back its checkpoint', function (string $swarm): void {
+test('a failure inside ordinary boundary persistence rolls back its checkpoint', function (string $swarm, string $failure): void {
     $runId = $swarm::make()->dispatchDurable('task')->runId;
     $manager = app(DurableSwarmManager::class);
     $store = app(DurableRunStore::class);
@@ -181,19 +191,26 @@ test('G6 a failure inside ordinary boundary persistence rolls back its checkpoin
     $manager->beforeStepCheckpointForTesting(function () use ($runId, $store, &$before): void {
         $before = $store->find($runId);
     });
-    $store->beforeCreate = fn () => throw new RuntimeException('inside createWait');
+    $store->{$failure} = fn () => throw new RuntimeException('inside boundary persistence');
     $stepRows = pausedWaitRaceStepRows($runId);
 
-    expect(fn () => (new AdvanceDurableSwarm($runId, 0))->handle($manager))->toThrow(RuntimeException::class, 'inside createWait');
+    expect(fn () => (new AdvanceDurableSwarm($runId, 0))->handle($manager))->toThrow(RuntimeException::class, 'inside boundary persistence');
     $after = $store->find($runId);
     expect($after['next_step_index'])->toBe($before['next_step_index'])
         ->and($after['status'])->toBe($before['status'])
         ->and($after['execution_token'])->toBe($before['execution_token'])
         ->and($store->waits($runId))->toBe([])
+        ->and($store->childRuns($runId))->toBe([])
+        ->and(app(ContextStore::class)->find($runId)['metadata'])->not->toHaveKey('durable_dispatched_child_swarms')
         ->and(pausedWaitRaceStepRows($runId))->toBe($stepRows);
-})->with([DurableWaitAttributeSwarm::class, OrdinaryBoundaryHierarchicalSwarm::class]);
+})->with([
+    'declared wait' => [DurableWaitAttributeSwarm::class, 'beforeCreate'],
+    'hierarchical wait' => [OrdinaryBoundaryHierarchicalSwarm::class, 'beforeCreate'],
+    'child before wait' => [ChildDispatchingSwarm::class, 'beforeCreate'],
+    'child after wait and intent insert' => [ChildDispatchingSwarm::class, 'afterChildRun'],
+]);
 
-test('R5 a failure after cursor persistence before the boundary rolls the checkpoint back', function (): void {
+test('a failure after cursor persistence before the boundary rolls the checkpoint back', function (): void {
     $runId = DurableWaitAttributeSwarm::make()->dispatchDurable('task')->runId;
     $manager = app(DurableSwarmManager::class);
     $before = null;
@@ -209,13 +226,13 @@ test('R5 a failure after cursor persistence before the boundary rolls the checkp
         ->and(pausedWaitRaceStepRows($runId))->toBe($rows);
 });
 
-test('G6 an entered ordinary boundary never inserts a continuation step entry', function (bool $eager): void {
+test('an entered ordinary boundary never inserts a continuation step entry', function (bool $eager): void {
     config()->set('swarm.durable.eager_dispatch', $eager);
     Queue::fake();
     $runId = DurableWaitAttributeSwarm::make()->dispatchDurable('task')->runId;
     $insertions = 0;
     DB::listen(function (QueryExecuted $query) use (&$insertions): void {
-        if (str_starts_with(strtolower($query->sql), 'insert into "swarm_durable_outbox"')) {
+        if (str_starts_with(pausedWaitRaceSql($query->sql), 'insert into swarm_durable_outbox')) {
             $insertions++;
         }
     });
@@ -226,7 +243,7 @@ test('G6 an entered ordinary boundary never inserts a continuation step entry', 
         ->and(app(DurableRunStore::class)->find($runId)['status'])->toBe('waiting');
 })->with(['relay' => false, 'eager' => true]);
 
-test('R11 a boundary outcome already present follows the ordinary enqueue path', function (): void {
+test('a boundary outcome already present follows the ordinary enqueue path', function (): void {
     $context = RunContext::from('task');
     $context->mergeMetadata(['durable_wait_outcomes' => ['approval_received' => ['status' => 'signalled', 'payload' => true, 'timed_out' => false]]]);
     $runId = DurableWaitAttributeSwarm::make()->dispatchDurable($context)->runId;
@@ -237,7 +254,7 @@ test('R11 a boundary outcome already present follows the ordinary enqueue path',
         ->and(pausedWaitRaceStepRows($runId))->toBe($before + 1);
 });
 
-test('R5 ordinary boundary notification failure at level zero propagates after commit', function (): void {
+test('ordinary boundary notification failure at level zero propagates after commit', function (): void {
     $runId = DurableWaitAttributeSwarm::make()->dispatchDurable('task')->runId;
     $level = null;
     Event::listen(SwarmWaiting::class, function () use (&$level): void {
@@ -251,7 +268,7 @@ test('R5 ordinary boundary notification failure at level zero propagates after c
         ->and(app(DurableRunStore::class)->waits($runId))->toHaveCount(1);
 });
 
-test('R5 nested ordinary effects wait for commit and report without discarding later callbacks', function (): void {
+test('nested ordinary effects wait for commit and report without discarding later callbacks', function (): void {
     $runId = DurableWaitAttributeSwarm::make()->dispatchDurable('task')->runId;
     Exceptions::fake();
     $notifications = 0;
@@ -271,7 +288,7 @@ test('R5 nested ordinary effects wait for commit and report without discarding l
     Exceptions::assertReported(RuntimeException::class);
 });
 
-test('R5 rolling back an application checkpoint discards its ordinary boundary effects', function (): void {
+test('rolling back an application checkpoint discards its ordinary boundary effects', function (): void {
     $runId = DurableWaitAttributeSwarm::make()->dispatchDurable('task')->runId;
     $notifications = 0;
     Event::listen(SwarmWaiting::class, function () use (&$notifications): void {
@@ -287,19 +304,19 @@ test('R5 rolling back an application checkpoint discards its ordinary boundary e
         ->and(app(DurableRunStore::class)->find($runId)['next_step_index'])->toBe(0);
 });
 
-test('R8 generation observation precedes the wait scan', function (): void {
+test('generation observation precedes the wait scan', function (): void {
     $runId = pausedWaitRaceRun();
     $queries = [];
     DB::listen(function (QueryExecuted $query) use (&$queries): void {
-        $queries[] = $query->sql;
+        $queries[] = pausedWaitRaceSql($query->sql);
     });
     app(DurableRunStore::class)->resume($runId);
-    $observed = array_find_key($queries, fn (string $sql): bool => str_starts_with($sql, 'select "wait_generation"'));
-    $scanned = array_find_key($queries, fn (string $sql): bool => str_contains($sql, 'select "id" from "swarm_durable_waits"'));
+    $observed = array_find_key($queries, fn (string $sql): bool => str_starts_with($sql, 'select ') && str_contains($sql, 'wait_generation') && str_contains($sql, 'swarm_durable_runs'));
+    $scanned = array_find_key($queries, fn (string $sql): bool => str_starts_with($sql, 'select ') && str_contains($sql, 'swarm_durable_waits'));
     expect($observed)->not->toBeNull()->and($scanned)->not->toBeNull()->and($observed)->toBeLessThan($scanned);
 });
 
-test('G5 an observed open wait wins over a conservative generation mismatch', function (): void {
+test('an observed open wait wins over a conservative generation mismatch', function (): void {
     $runId = pausedWaitRaceRun();
     $store = app(DurableRunStore::class);
     $store->createWait($runId, 'seen');
@@ -308,7 +325,7 @@ test('G5 an observed open wait wins over a conservative generation mismatch', fu
         ->and($store->attempts)->toBe(1)->and($store->find($runId)['status'])->toBe('waiting');
 });
 
-test('R8 rolled back wait creation does not poison a later resume generation', function (): void {
+test('rolled back wait creation does not poison a later resume generation', function (): void {
     $runId = pausedWaitRaceRun();
     $store = app(DurableRunStore::class);
     expect(fn () => DB::transaction(function () use ($store, $runId): void {
@@ -320,7 +337,7 @@ test('R8 rolled back wait creation does not poison a later resume generation', f
         ->and((string) DB::table('swarm_durable_runs')->where('run_id', $runId)->value('wait_generation'))->toBe('0');
 });
 
-test('R5 ordinary persistence victims retry the checkpoint without reexecuting the agent', function (string $swarm): void {
+test('ordinary persistence victims retry the checkpoint without reexecuting the agent', function (string $swarm, string $failure): void {
     $calls = 0;
     FakeResearcher::fake(function () use (&$calls): string {
         $calls++;
@@ -339,18 +356,37 @@ test('R5 ordinary persistence victims retry the checkpoint without reexecuting t
     $runId = $swarm::make()->dispatchDurable('task')->runId;
     $store = app(DurableRunStore::class);
     $persists = 0;
-    $store->beforeCreate = function () use (&$persists): void {
+    $before = null;
+    app(DurableSwarmManager::class)->beforeStepCheckpointForTesting(function () use ($runId, $store, &$before): void {
+        $before = $store->find($runId);
+    });
+    $checkpoints = 0;
+    $store->beforeRelease = function () use ($runId, $store, &$before, &$checkpoints): void {
+        $checkpoints++;
+        expect($store->find($runId)['next_step_index'])->toBe($before['next_step_index'])
+            ->and($store->waits($runId))->toBe([])
+            ->and($store->childRuns($runId))->toBe([])
+            ->and(app(ContextStore::class)->find($runId)['metadata'])->not->toHaveKey('durable_dispatched_child_swarms');
+    };
+    $store->{$failure} = function () use (&$persists): void {
         if (++$persists === 1) {
             throw pausedWaitRaceDeadlock();
         }
     };
     (new AdvanceDurableSwarm($runId, 0))->handle(app(DurableSwarmManager::class));
-    expect($persists)->toBe(2)->and($calls)->toBe(1)
-        ->and($store->waits($runId))->toHaveCount(1)->and($store->find($runId)['status'])->toBe('waiting');
+    expect($persists)->toBe(2)->and($checkpoints)->toBe($swarm === OrdinaryBoundaryHierarchicalSwarm::class ? 0 : 2)->and($calls)->toBe(1)
+        ->and($store->waits($runId))->toHaveCount(1)->and($store->find($runId)['status'])->toBe('waiting')
+        ->and($store->find($runId)['next_step_index'])->toBe($before['next_step_index'] + 1)
+        ->and($store->childRuns($runId))->toHaveCount($swarm === ChildDispatchingSwarm::class ? 1 : 0);
     Event::assertDispatchedTimes(SwarmWaiting::class, 1);
-})->with([DurableWaitAttributeSwarm::class, OrdinaryBoundaryHierarchicalSwarm::class]);
+})->with([
+    'declared wait' => [DurableWaitAttributeSwarm::class, 'beforeCreate'],
+    'hierarchical wait' => [OrdinaryBoundaryHierarchicalSwarm::class, 'beforeCreate'],
+    'child before wait' => [ChildDispatchingSwarm::class, 'beforeCreate'],
+    'child after wait and intent insert' => [ChildDispatchingSwarm::class, 'afterChildRun'],
+]);
 
-test('G3 the same-connection postcommit hook sees the boundary and rejects the next lease', function (string $swarm): void {
+test('the same-connection postcommit hook sees the boundary and rejects the next lease', function (string $swarm): void {
     $runId = $swarm::make()->dispatchDurable('boundary-probe')->runId;
     $manager = app(DurableSwarmManager::class);
     $store = app(DurableRunStore::class);
@@ -371,3 +407,65 @@ test('G3 the same-connection postcommit hook sees the boundary and rejects the n
     (new AdvanceDurableSwarm($runId, 0))->handle($manager);
     expect($observed)->toBe(['status' => 'waiting', 'open' => 1, 'leased' => false]);
 })->with([DurableWaitAttributeSwarm::class, ChildDispatchingSwarm::class, OrdinaryBoundaryHierarchicalSwarm::class]);
+
+test('resume exhaustion reports the last failure and preserves it as previous', function (string $last): void {
+    $runId = pausedWaitRaceRun();
+    $store = app(DurableRunStore::class);
+    $controller = app(DurableLifecycleController::class);
+    $failure = null;
+    $store->beforeResume = function () use ($store, $last, &$failure): void {
+        $failure = ($store->attempts === 3 ? $last === 'concurrency' : $last !== 'concurrency')
+            ? pausedWaitRaceDeadlock()
+            : new DurableWaitSetChangedException;
+        throw $failure;
+    };
+    $before = pausedWaitRaceStepRows($runId);
+    try {
+        $controller->resume($runId, fn (): bool => false);
+        test()->fail('Expected resume exhaustion.');
+    } catch (SwarmException $exception) {
+        expect($exception->getMessage())->toBe("Durable run [{$runId}] could not be resumed: ".($last === 'concurrency'
+            ? 'the database kept reporting concurrency conflicts' : 'waits on it kept changing').'; retry the resume.')
+            ->and($exception->getPrevious())->toBeInstanceOf($last === 'concurrency' ? DeadlockException::class : DurableWaitSetChangedException::class);
+        if ($last === 'concurrency') {
+            expect($exception->getPrevious()->getPrevious())->toBe($failure);
+        } else {
+            expect($exception->getPrevious())->toBe($failure);
+        }
+    }
+    expect($store->attempts)->toBe(3)->and($store->find($runId)['status'])->toBe('paused')
+        ->and(pausedWaitRaceStepRows($runId))->toBe($before)
+        ->and($controller->backoffs)->toBe($last === 'concurrency' ? [] : [1, 2]);
+})->with(['concurrency', 'generation']);
+
+test('a lost resume race reports the freshly locked status or a vanished run', function (?string $status): void {
+    $runId = pausedWaitRaceRun();
+    $store = app(DurableRunStore::class);
+    $store->beforeResume = function (string $id) use ($status): void {
+        $query = DB::table('swarm_durable_runs')->where('run_id', $id);
+        if ($status === null) {
+            $query->delete();
+        } else {
+            $query->update(['status' => $status]);
+        }
+    };
+    expect(fn () => app(DurableSwarmManager::class)->resume($runId))->toThrow(SwarmException::class,
+        $status === null ? "Durable run [{$runId}] could not be resumed." : "Durable run [{$runId}] cannot be resumed from status [{$status}].");
+})->with(['pending', 'cancelled', null]);
+
+test('a locked fan-out keeps resume waiting when its branch read sees no rows', function (): void {
+    $runId = FakeParallelSwarm::make()->dispatchDurable('task')->runId;
+    $manager = app(DurableSwarmManager::class);
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+    $manager->pause($runId);
+    $store = app(DurableRunStore::class);
+    expect($store->branchesFor($runId))->not->toBeEmpty();
+    // SQLite cannot provide an old snapshot plus a current locked row. Hide the
+    // branch read in the test store while retaining the real waitForBranches row.
+    $store->hideBranches = true;
+    expect($store->branchesFor($runId))->toBe([]);
+    $before = pausedWaitRaceStepRows($runId);
+    expect(app(DurableLifecycleController::class)->resume($runId, fn (): bool => false)->status->value)->toBe('waiting')
+        ->and($store->find($runId)['status'])->toBe('waiting')
+        ->and(pausedWaitRaceStepRows($runId))->toBe($before);
+});

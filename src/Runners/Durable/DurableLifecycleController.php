@@ -20,6 +20,7 @@ use BuiltByBerry\LaravelSwarm\Responses\DurableResumeResult;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Database\Connection;
+use Illuminate\Database\DeadlockException;
 use Illuminate\Database\DetectsConcurrencyErrors;
 use Throwable;
 
@@ -29,6 +30,8 @@ use Throwable;
 class DurableLifecycleController
 {
     use DetectsConcurrencyErrors;
+
+    private const RESUME_ATTEMPTS = 3;
 
     public function __construct(
         protected DurableRunStore $durableRuns,
@@ -122,7 +125,7 @@ class DurableLifecycleController
 
         // One budget for generation changes and database concurrency victims. Only
         // an outermost rollback gives MySQL a fresh snapshot for the next attempt.
-        for ($attempt = 1; $attempt <= 3; $attempt++) {
+        for ($attempt = 1; $attempt <= self::RESUME_ATTEMPTS; $attempt++) {
             $context = null;
             $updated = null;
 
@@ -149,7 +152,13 @@ class DurableLifecycleController
                 }, attempts: 1);
                 break;
             } catch (Throwable $exception) {
-                if (! $exception instanceof DurableWaitSetChangedException && ! $this->causedByConcurrencyError($exception)) {
+                // The store's resume transaction is nested in ours, so Laravel rethrows a
+                // concurrency error from it as DeadlockException. That wrapper keeps an
+                // integer code only, so a Postgres serialization failure ('40001')
+                // arrives with code 0 and a message the detector does not match.
+                if (! $exception instanceof DurableWaitSetChangedException
+                    && ! $exception instanceof DeadlockException
+                    && ! $this->causedByConcurrencyError($exception)) {
                     throw $exception;
                 }
 
@@ -161,13 +170,25 @@ class DurableLifecycleController
                     throw $exception;
                 }
 
-                if ($attempt === 3) {
-                    throw new SwarmException("Durable run [{$runId}] could not be resumed: waits on it kept changing; retry the resume.", previous: $exception);
+                if ($attempt === self::RESUME_ATTEMPTS) {
+                    $reason = $exception instanceof DurableWaitSetChangedException
+                        ? 'waits on it kept changing'
+                        : 'the database kept reporting concurrency conflicts';
+                    throw new SwarmException("Durable run [{$runId}] could not be resumed: {$reason}; retry the resume.", previous: $exception);
+                }
+
+                if (! $exception instanceof DurableWaitSetChangedException) {
+                    $this->backoffResumeConcurrencyRetry($attempt);
                 }
             }
         }
 
         if (! $resumed || $context === null || ! is_array($updated)) {
+            $latest = $this->durableRuns->find($runId);
+            if ($latest !== null) {
+                throw new SwarmException("Durable run [{$runId}] cannot be resumed from status [{$latest['status']}].");
+            }
+
             throw new SwarmException("Durable run [{$runId}] could not be resumed.");
         }
 
@@ -196,6 +217,11 @@ class DurableLifecycleController
             status: $waiting ? DurableLifecycleStatus::Waiting : DurableLifecycleStatus::Resumed,
             waitingBoundaryDispatched: $waitingBoundaryDispatched,
         );
+    }
+
+    protected function backoffResumeConcurrencyRetry(int $attempt): void
+    {
+        usleep(random_int(5_000, 50_000) * $attempt);
     }
 
     public function cancel(string $runId, callable $cancelChild): DurableCancelResult

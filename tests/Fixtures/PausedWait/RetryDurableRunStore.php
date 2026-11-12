@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Tests\Fixtures\PausedWait;
 
-use BuiltByBerry\LaravelSwarm\Tests\ProcessConcurrency\Fixtures\PausedSignal\HookedResumeDurableRunStore;
 use Closure;
+use Illuminate\Database\Query\Builder;
 
 class RetryDurableRunStore extends HookedResumeDurableRunStore
 {
@@ -18,6 +18,27 @@ class RetryDurableRunStore extends HookedResumeDurableRunStore
     public ?Closure $beforeCreate = null;
 
     public ?Closure $afterRelease = null;
+
+    public ?Closure $beforeRelease = null;
+
+    public ?Closure $afterChildRun = null;
+
+    public bool $hideBranches = false;
+
+    protected function branchTable(): Builder
+    {
+        $query = parent::branchTable();
+
+        return $this->hideBranches ? $query->whereRaw('1 = 0') : $query;
+    }
+
+    public function createChildRun(string $parentRunId, string $childRunId, string $childSwarmClass, string $waitName, array $contextPayload): void
+    {
+        parent::createChildRun($parentRunId, $childRunId, $childSwarmClass, $waitName, $contextPayload);
+        if ($this->afterChildRun !== null) {
+            ($this->afterChildRun)($parentRunId);
+        }
+    }
 
     public function resume(string $runId): bool
     {
@@ -42,6 +63,9 @@ class RetryDurableRunStore extends HookedResumeDurableRunStore
 
     public function releaseForNextStep(string $runId, string $executionToken, int $nextStepIndex): void
     {
+        if ($this->beforeRelease !== null) {
+            ($this->beforeRelease)($runId);
+        }
         parent::releaseForNextStep($runId, $executionToken, $nextStepIndex);
         if ($this->afterRelease !== null) {
             ($this->afterRelease)($runId);

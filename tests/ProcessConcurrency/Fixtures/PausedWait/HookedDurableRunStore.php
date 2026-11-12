@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Tests\ProcessConcurrency\Fixtures\PausedWait;
 
-use BuiltByBerry\LaravelSwarm\Tests\ProcessConcurrency\Fixtures\PausedSignal\HookedResumeDurableRunStore;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\PausedWait\HookedResumeDurableRunStore;
 use Closure;
 use Illuminate\Support\Carbon;
 

@@ -73,7 +73,7 @@ afterEach(function (): void {
     }
 });
 
-test('G1 S1 creator holds its inserted wait until resume is blocked then commits', function (): void {
+test('creator holds its inserted wait until resume is blocked then commits', function (): void {
     $runId = pausedCreateRaceRun();
     $dir = pausedCreateRaceDir();
     $before = pausedCreateRaceSteps($runId);
@@ -97,7 +97,7 @@ test('G1 S1 creator holds its inserted wait until resume is blocked then commits
         ->and(pausedCreateRaceSteps($runId))->toBe($before);
 });
 
-test('G2(ii) R1 creator commits after the empty scan before resume locks the run under READ COMMITTED', function (): void {
+test('creator commits after the empty scan before resume locks the run under READ COMMITTED', function (): void {
     $runId = pausedCreateRaceRun();
     $dir = pausedCreateRaceDir();
     $before = pausedCreateRaceSteps($runId);
@@ -112,9 +112,22 @@ test('G2(ii) R1 creator commits after the empty scan before resume locks the run
         ->and(pausedCreateRaceSteps($runId))->toBe($before);
 });
 
-test('G2(iii) MySQL REPEATABLE READ gap/run cycle aborts a victim or completes safely', function (): void {
+test('REPEATABLE READ: a creator committing across the empty scan never leaves the run pending past its wait', function (): void {
     if (DB::connection()->getDriverName() !== 'mysql') {
-        $this->markTestSkipped('MySQL REPEATABLE READ next-key lock cycle only.');
+        // Postgres takes no gap lock, so the creator commits across the scan. The
+        // resumer's run lock then hits a row changed after its snapshot (40001),
+        // and the outermost resume retries into the wait.
+        $runId = pausedCreateRaceRun();
+        $dir = pausedCreateRaceDir();
+        [$resumer, $creator] = app(ConcurrencyManager::class)->driver('process')->run([
+            pausedCreateRaceWorker('scanFirst', [$runId, $dir, 'REPEATABLE READ']),
+            pausedCreateRaceWorker('createAfterScan', [$runId, $dir, 'REPEATABLE READ']),
+        ]);
+        expect($creator)->toBe(['outcome' => 'created'])
+            ->and($resumer['outcome'])->toBe('waiting', json_encode($resumer))
+            ->and(PausedWaitWorker::state($runId))->toBe(['status' => 'waiting', 'open' => 1]);
+
+        return;
     }
     $runId = pausedCreateRaceRun();
     $dir = pausedCreateRaceDir();
@@ -135,7 +148,7 @@ test('G2(iii) MySQL REPEATABLE READ gap/run cycle aborts a victim or completes s
     expect($state['status'] === 'pending' && $state['open'] > 0)->toBeFalse(json_encode([$resumer, $creator, $state]));
 });
 
-test('S2 R1(i) a resumer already owning the run lets later creation restore waiting', function (): void {
+test('a resumer already owning the run lets later creation restore waiting', function (): void {
     $runId = pausedCreateRaceRun();
     $dir = pausedCreateRaceDir();
     [$resumer, $creator] = app(ConcurrencyManager::class)->driver('process')->run([
@@ -147,7 +160,7 @@ test('S2 R1(i) a resumer already owning the run lets later creation restore wait
         ->and(PausedWaitWorker::state($runId))->toBe(['status' => 'waiting', 'open' => 1]);
 });
 
-test('R8 a creator rollback leaves no generation change or wait and resume reaches pending', function (): void {
+test('a creator rollback leaves no generation change or wait and resume reaches pending', function (): void {
     $runId = pausedCreateRaceRun();
     $dir = pausedCreateRaceDir();
     $before = pausedCreateRaceSteps($runId);
@@ -162,7 +175,7 @@ test('R8 a creator rollback leaves no generation change or wait and resume reach
         ->and(pausedCreateRaceSteps($runId))->toBe($before + 1);
 });
 
-test('G3 S5 ordinary checkpoint commits its declared boundary before another worker can lease next', function (string $swarm): void {
+test('ordinary checkpoint commits its declared boundary before another worker can lease next', function (string $swarm): void {
     $runId = $swarm::make()->dispatchDurable('ordinary-boundary')->runId;
     $dir = pausedCreateRaceDir();
     $before = pausedCreateRaceSteps($runId);
@@ -182,11 +195,9 @@ test('G3 S5 ordinary checkpoint commits its declared boundary before another wor
     }
 })->with([DurableWaitAttributeSwarm::class, ChildDispatchingSwarm::class, OrdinaryBoundaryHierarchicalSwarm::class]);
 
-test('G4 create plus close since an application snapshot fails loud only on MySQL REPEATABLE READ', function (string $isolation): void {
+test('resume after wait creation and closure respects the application transaction isolation', function (string $isolation): void {
     $mysqlRR = DB::connection()->getDriverName() === 'mysql' && $isolation === 'REPEATABLE READ';
-    if (DB::connection()->getDriverName() === 'pgsql' && $isolation !== 'READ COMMITTED') {
-        $this->markTestSkipped('The Postgres expectation is READ COMMITTED.');
-    }
+    $postgresRR = DB::connection()->getDriverName() === 'pgsql' && $isolation === 'REPEATABLE READ';
     $runId = pausedCreateRaceRun();
     $dir = pausedCreateRaceDir();
     $before = pausedCreateRaceSteps($runId);
@@ -197,7 +208,15 @@ test('G4 create plus close since an application snapshot fails loud only on MySQ
     expect($creator)->toBe(['outcome' => 'created-closed'])
         ->and((string) DB::table('swarm_durable_runs')->where('run_id', $runId)->value('wait_generation'))->toBe('1')
         ->and(DB::table('swarm_durable_waits')->where('run_id', $runId)->where('name', 'transient')->value('status'))->toBe('child_completed');
-    if ($mysqlRR) {
+    if ($postgresRR) {
+        expect($resumer['outcome'])->toBe('aborted');
+        $serializationFailure = ($resumer['failure'] ?? null) === 'sqlstate:40001';
+        $retryOutside = $resumer['class'] === SwarmException::class
+            && str_contains($resumer['message'], 'retry the resume outside this transaction');
+        expect($serializationFailure || $retryOutside)->toBeTrue()
+            ->and(PausedWaitWorker::state($runId))->toBe(['status' => 'paused', 'open' => 0])
+            ->and(pausedCreateRaceSteps($runId))->toBe($before);
+    } elseif ($mysqlRR) {
         expect($resumer['outcome'])->toBe('aborted')
             ->and($resumer['class'])->toBe(SwarmException::class)
             ->and($resumer['message'])->toContain('retry the resume outside this transaction')
@@ -210,7 +229,7 @@ test('G4 create plus close since an application snapshot fails loud only on MySQ
     }
 })->with(['READ COMMITTED', 'REPEATABLE READ']);
 
-test('R6 a signal closer racing an ordinary checkpoint leaves its new declared wait intact without deadlock', function (): void {
+test('a signal closer racing an ordinary checkpoint leaves its new declared wait intact without deadlock', function (): void {
     $runId = DurableWaitAttributeSwarm::make()->dispatchDurable('closer-checkpoint')->runId;
     $signal = app(DurableRunStore::class)->recordSignal($runId, 'legacy', ['approved' => true], 'ordinary-closer');
     $dir = pausedCreateRaceDir();

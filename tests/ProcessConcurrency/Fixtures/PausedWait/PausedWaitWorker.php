@@ -189,7 +189,7 @@ final class PausedWaitWorker
         } catch (Throwable $e) {
             DB::rollBack();
 
-            return ['outcome' => 'aborted', 'class' => $e::class, 'message' => $e->getMessage()];
+            return ['outcome' => 'aborted', 'class' => $e::class, 'message' => $e->getMessage(), 'failure' => LockBarrier::failure($e)];
         }
     }
 
