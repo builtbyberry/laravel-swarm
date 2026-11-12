@@ -15,7 +15,7 @@ test('SQL Server generation observation uses statement-scoped committed reads be
         ->and($queries[1]['query'])->toContain('[swarm_durable_waits]', 'holdlock');
 });
 
-test('R11 SQL Server resume observes committed generation before shared waits and update locks', function (): void {
+test('SQL Server resume observes committed generation before shared waits and update locks', function (): void {
     $connection = new SqlServerConnection(new PDO('sqlite::memory:'), 'testing', '', ['driver' => 'sqlsrv']);
     $store = new DatabaseDurableRunStore($connection, app('config'), app(SwarmPersistenceCipher::class));
     $queries = $connection->pretend(fn () => $store->resume('sql-server-resume-generation'));

@@ -184,6 +184,14 @@ class DurableLifecycleController
         }
 
         if (! $resumed || $context === null || ! is_array($updated)) {
+            // The store's locked read found the run no longer paused. Outside an
+            // application transaction this ordinary read is current and names the
+            // status that won; inside one it can come from an older snapshot (MySQL
+            // REPEATABLE READ) and still say paused, so name no status there.
+            if (! $canRetry) {
+                throw new SwarmException("Durable run [{$runId}] could not be resumed: it is no longer paused.");
+            }
+
             $latest = $this->durableRuns->find($runId);
             if ($latest !== null) {
                 throw new SwarmException("Durable run [{$runId}] cannot be resumed from status [{$latest['status']}].");

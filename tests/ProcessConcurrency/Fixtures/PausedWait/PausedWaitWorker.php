@@ -193,6 +193,39 @@ final class PausedWaitWorker
         }
     }
 
+    /**
+     * Takes an application snapshot of the paused run, lets another worker cancel
+     * it, then resumes inside the same application transaction.
+     */
+    public static function snapshotResumeAfterCancel(string $runId, string $dir, string $isolation): array
+    {
+        self::boot($isolation);
+        DB::beginTransaction();
+        $seen = DB::table('swarm_durable_runs')->where('run_id', $runId)->value('status');
+        LockBarrier::signal($dir, 'snapshot');
+        LockBarrier::await($dir, 'cancelled');
+        try {
+            app(DurableSwarmManager::class)->resume($runId);
+            DB::commit();
+
+            return ['outcome' => 'resumed', 'seen' => $seen];
+        } catch (Throwable $e) {
+            DB::rollBack();
+
+            return ['outcome' => 'aborted', 'seen' => $seen, 'class' => $e::class, 'message' => $e->getMessage(), 'failure' => LockBarrier::failure($e)];
+        }
+    }
+
+    public static function cancelAfterSnapshot(string $runId, string $dir, string $isolation): array
+    {
+        self::boot($isolation);
+        LockBarrier::await($dir, 'snapshot');
+        $cancelled = app(DurableSwarmManager::class)->cancel($runId);
+        LockBarrier::signal($dir, 'cancelled');
+
+        return ['outcome' => 'cancelled', 'status' => self::state($runId)['status'], 'class' => $cancelled::class];
+    }
+
     public static function createAndClose(string $runId, string $dir, string $isolation): array
     {
         $store = self::boot($isolation);

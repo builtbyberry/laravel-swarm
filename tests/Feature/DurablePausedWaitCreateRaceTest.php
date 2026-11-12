@@ -453,6 +453,21 @@ test('a lost resume race reports the freshly locked status or a vanished run', f
         $status === null ? "Durable run [{$runId}] could not be resumed." : "Durable run [{$runId}] cannot be resumed from status [{$status}].");
 })->with(['pending', 'cancelled', null]);
 
+test('a lost resume race inside an application transaction names no possibly stale status', function (): void {
+    $runId = pausedWaitRaceRun();
+    $store = app(DurableRunStore::class);
+    $store->beforeResume = function (string $id): void {
+        DB::table('swarm_durable_runs')->where('run_id', $id)->update(['status' => 'cancelled']);
+    };
+    DB::beginTransaction();
+    try {
+        expect(fn () => app(DurableSwarmManager::class)->resume($runId))
+            ->toThrow(SwarmException::class, "Durable run [{$runId}] could not be resumed: it is no longer paused.");
+    } finally {
+        DB::rollBack();
+    }
+});
+
 test('a locked fan-out keeps resume waiting when its branch read sees no rows', function (): void {
     $runId = FakeParallelSwarm::make()->dispatchDurable('task')->runId;
     $manager = app(DurableSwarmManager::class);

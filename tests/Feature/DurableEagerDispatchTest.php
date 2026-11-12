@@ -363,7 +363,7 @@ test('flag off: a step advance pushes no job directly and leaves an unreserved r
         ->and(app(DurableOutbox::class)->drain([DurableDispatchType::Step], 100)->dispatched)->toBe(1);
 });
 
-test('G6 flag off: wait and child boundaries write no parent continuation for the relay', function (string $swarm): void {
+test('flag off: wait and child boundaries write no parent continuation for the relay', function (string $swarm): void {
     Queue::fake();
     FakeResearcher::fake(['parent-step', 'child-research']);
     $runId = $swarm::make()->dispatchDurable('task')->runId;
@@ -1185,7 +1185,7 @@ test('flag on: a sync queue connection keeps plain relay rows and pushes nothing
         ->and($rows[0]->reserved_at)->toBeNull();
 });
 
-test('R7 an ordinary after-child-intent crash commits its wait and recovers once without a parent step', function (bool $capture): void {
+test('an ordinary after-child-intent crash commits its wait and recovers once without a parent step', function (bool $capture): void {
     eagerOn();
     config()->set('swarm.capture.inputs', $capture);
     Queue::fake();

@@ -195,6 +195,34 @@ test('ordinary checkpoint commits its declared boundary before another worker ca
     }
 })->with([DurableWaitAttributeSwarm::class, ChildDispatchingSwarm::class, OrdinaryBoundaryHierarchicalSwarm::class]);
 
+test('a resume that loses to a cancel inside an application snapshot never reports the stale paused status', function (string $isolation): void {
+    $runId = pausedCreateRaceRun();
+    $dir = pausedCreateRaceDir();
+    $before = pausedCreateRaceSteps($runId);
+    [$resumer, $canceller] = app(ConcurrencyManager::class)->driver('process')->run([
+        pausedCreateRaceWorker('snapshotResumeAfterCancel', [$runId, $dir, $isolation]),
+        pausedCreateRaceWorker('cancelAfterSnapshot', [$runId, $dir, $isolation]),
+    ]);
+    expect($canceller['status'])->toBe('cancelled')
+        ->and($resumer['seen'])->toBe('paused')
+        ->and($resumer['outcome'])->toBe('aborted', json_encode($resumer))
+        ->and($resumer['message'] ?? '')->not->toContain('[paused]');
+    if (DB::connection()->getDriverName() === 'pgsql' && $isolation === 'REPEATABLE READ') {
+        // Postgres refuses the locked read of a row changed after the snapshot.
+        expect(($resumer['failure'] ?? null) === 'sqlstate:40001'
+            || $resumer['message'] === "Durable run [{$runId}] could not be resumed: it is no longer paused.")->toBeTrue(json_encode($resumer));
+    } elseif ($isolation === 'READ COMMITTED') {
+        // A fresh statement snapshot: the status check before resume sees the cancel.
+        expect($resumer['message'])->toBe("Durable run [{$runId}] cannot be resumed from status [cancelled].");
+    } else {
+        // MySQL REPEATABLE READ: the snapshot still says paused; only the locked
+        // read inside resume sees the cancel, and the message names no stale status.
+        expect($resumer['message'])->toBe("Durable run [{$runId}] could not be resumed: it is no longer paused.");
+    }
+    expect(PausedWaitWorker::state($runId)['status'])->toBe('cancelled')
+        ->and(pausedCreateRaceSteps($runId))->toBe($before);
+})->with(['REPEATABLE READ', 'READ COMMITTED']);
+
 test('resume after wait creation and closure respects the application transaction isolation', function (string $isolation): void {
     $mysqlRR = DB::connection()->getDriverName() === 'mysql' && $isolation === 'REPEATABLE READ';
     $postgresRR = DB::connection()->getDriverName() === 'pgsql' && $isolation === 'REPEATABLE READ';
