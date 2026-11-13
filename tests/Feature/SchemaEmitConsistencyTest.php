@@ -107,11 +107,19 @@ test('command.relay error emit carries exception_class (#32)', function (): void
 
     $throwingOutbox = new class implements DurableOutbox
     {
-        public function enqueueStep(string $runId, int $stepIndex, ?string $connection, ?string $queue): void {}
+        public function enqueueStep(string $runId, int $stepIndex, ?string $connection, ?string $queue, bool $directDispatch = false): int
+        {
+            return 0;
+        }
 
-        public function enqueueBranch(string $runId, string $branchId, ?string $connection, ?string $queue): void {}
+        public function enqueueBranch(string $runId, string $branchId, ?string $connection, ?string $queue, bool $directDispatch = false): int
+        {
+            return 0;
+        }
 
         public function enqueueQueuedResume(string $runId, ?string $connection, ?string $queue): void {}
+
+        public function settle(int $entryId, ?string $runId = null): void {}
 
         public function drain(array $types = [], int $limit = 100): DrainResult
         {

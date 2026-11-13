@@ -506,18 +506,29 @@ test('recoverableWaitTimeouts issues a single query when there are no candidates
 });
 
 /**
- * Seed a terminal child run linked to a waiting parent. The parent_run_id FK
- * requires the parent durable run to exist first.
+ * Seed a terminal child run linked to a waiting parent, with the parent's wait for it
+ * still open (the outcome not yet delivered). The parent_run_id FK requires the parent
+ * durable run to exist first.
  */
-function seedTerminalChild(string $parentRunId, string $childRunId, string $status = 'completed'): void
+function seedTerminalChild(string $parentRunId, string $childRunId, string $status = 'completed', string $waitName = 'children', bool $openWait = true): void
 {
     $now = now('UTC');
+
+    if ($openWait && ! DB::table('swarm_durable_waits')->where('run_id', $parentRunId)->where('name', $waitName)->where('status', 'waiting')->exists()) {
+        DB::table('swarm_durable_waits')->insert([
+            'run_id' => $parentRunId,
+            'name' => $waitName,
+            'status' => 'waiting',
+            'created_at' => $now->copy()->subMinute(),
+            'updated_at' => $now->copy()->subMinute(),
+        ]);
+    }
 
     DB::table('swarm_durable_child_runs')->insert([
         'parent_run_id' => $parentRunId,
         'child_run_id' => $childRunId,
         'child_swarm_class' => 'ChildSwarm',
-        'wait_name' => 'children',
+        'wait_name' => $waitName,
         'context_payload' => json_encode([]),
         'status' => $status,
         'output' => null,
@@ -528,6 +539,55 @@ function seedTerminalChild(string $parentRunId, string $childRunId, string $stat
         'updated_at' => $now->copy()->subMinute(),
     ]);
 }
+
+test('parentsWaitingOnTerminalChildren selects only a terminal child whose wait on that parent is still open', function () {
+    $store = app(DatabaseDurableRunStore::class);
+
+    // Delivered: the child's wait was closed (reconciled, or timed out first).
+    seedDurableRun('pw-closed', ['status' => 'waiting']);
+    seedTerminalChild('pw-closed', 'pw-closed-child', openWait: false);
+    DB::table('swarm_durable_waits')->insert([
+        'run_id' => 'pw-closed', 'name' => 'children', 'status' => 'child_completed',
+        'created_at' => now('UTC'), 'updated_at' => now('UTC'),
+    ]);
+
+    // An open wait of another name, or on another run, is not this child's.
+    seedDurableRun('pw-other-name', ['status' => 'waiting']);
+    seedTerminalChild('pw-other-name', 'pw-other-name-child', openWait: false);
+    DB::table('swarm_durable_waits')->insert([
+        'run_id' => 'pw-other-name', 'name' => 'approval', 'status' => 'waiting',
+        'created_at' => now('UTC'), 'updated_at' => now('UTC'),
+    ]);
+    seedDurableRun('pw-other-run', ['status' => 'waiting']);
+    seedTerminalChild('pw-other-run', 'pw-other-run-child', openWait: false);
+    seedDurableRun('pw-unrelated', ['status' => 'running']);
+    DB::table('swarm_durable_waits')->insert([
+        'run_id' => 'pw-unrelated', 'name' => 'children', 'status' => 'waiting',
+        'created_at' => now('UTC'), 'updated_at' => now('UTC'),
+    ]);
+
+    // A parent with one delivered child and one still owed is selected for the owed one.
+    seedDurableRun('pw-mixed', ['status' => 'waiting']);
+    seedTerminalChild('pw-mixed', 'pw-mixed-done', waitName: 'child:pw-mixed-done', openWait: false);
+    seedTerminalChild('pw-mixed', 'pw-mixed-owed', waitName: 'child:pw-mixed-owed');
+
+    expect(collect($store->parentsWaitingOnTerminalChildren())->pluck('run_id')->all())->toBe(['pw-mixed']);
+});
+
+test('parentsWaitingOnTerminalChildren does not let delivered children crowd the limit', function () {
+    $store = app(DatabaseDurableRunStore::class);
+
+    foreach (range(1, 3) as $i) {
+        seedDurableRun("pw-delivered-$i", ['status' => 'waiting']);
+        seedTerminalChild("pw-delivered-$i", "pw-delivered-$i-child", openWait: false);
+    }
+
+    seedDurableRun('pw-owed', ['status' => 'waiting']);
+    seedTerminalChild('pw-owed', 'pw-owed-child');
+    DB::table('swarm_durable_child_runs')->where('child_run_id', 'pw-owed-child')->update(['updated_at' => now('UTC')]);
+
+    expect(collect($store->parentsWaitingOnTerminalChildren(limit: 1))->pluck('run_id')->all())->toBe(['pw-owed']);
+});
 
 test('parentsWaitingOnTerminalChildren batch-loads side tables and is byte-for-byte equal to find() per record', function () {
     $store = app(DatabaseDurableRunStore::class);

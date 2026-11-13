@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
-use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Enums\DurableParallelFailurePolicy;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
@@ -27,7 +26,7 @@ class DurableTopLevelParallelAdvancer
         protected DurableRunContext $runs,
         protected DurableBranchCoordinator $branches,
         protected DurableRunTerminalHandler $terminal,
-        protected DurableOutbox $outbox,
+        protected DurableEagerDispatcher $eager,
     ) {}
 
     /**
@@ -67,7 +66,9 @@ class DurableTopLevelParallelAdvancer
         }
 
         $this->connection->transaction(function () use ($token, $state, $stepLeaseSeconds, $branches, $run): void {
-            $this->historyStore->syncDurableState($state->context->runId, 'running', $this->capture->context($state->context), $state->context->metadata, $this->runs->ttlSeconds(), false, $token, $stepLeaseSeconds);
+            // waitForBranches() first, and the history row after it: nothing the wait
+            // closers write may be written before it in this transaction (the lock-order
+            // rule on DurableRunStore::waitForBranches()).
             $this->durableRuns->waitForBranches($state->context->runId, new BranchWaitPayload(
                 executionToken: $token,
                 nextStepIndex: count($branches),
@@ -76,14 +77,12 @@ class DurableTopLevelParallelAdvancer
                 ttlSeconds: $this->runs->ttlSeconds(),
                 branches: $branches,
             ));
+            $this->historyStore->syncDurableState($state->context->runId, 'running', $this->capture->context($state->context), $state->context->metadata, $this->runs->ttlSeconds(), false, $token, $stepLeaseSeconds);
 
             foreach ($branches as $branch) {
-                $this->outbox->enqueueBranch(
-                    $state->context->runId,
-                    (string) $branch['branch_id'],
-                    $branch['queue_connection'] ?? $run['queue_connection'],
-                    $branch['queue_name'] ?? $run['queue_name'],
-                );
+                $connection = $branch['queue_connection'] ?? $run['queue_connection'];
+                $queue = $branch['queue_name'] ?? $run['queue_name'];
+                $this->eager->enqueueBranch($state->context->runId, (string) $branch['branch_id'], $connection, $queue);
             }
         });
     }

@@ -57,14 +57,13 @@ class LeaseManager
             return;
         }
 
-        $stepTimeout = max(1, (int) ($fresh['step_timeout_seconds'] ?? 300));
-        $token = $this->durableRuns->acquireLease($runId, (int) $fresh['next_step_index'], $stepTimeout);
+        $lease = self::acquireCoordinationLease($this->durableRuns, $fresh);
 
-        if ($token === null) {
+        if ($lease === null) {
             return;
         }
 
-        $this->durableRuns->markFailed($runId, $token, $this->capture->failureArray($exception));
+        $this->durableRuns->markFailed($runId, $lease['token'], $this->capture->failureArray($exception));
     }
 
     /**
@@ -80,11 +79,26 @@ class LeaseManager
             return;
         }
 
-        $stepTimeout = max(1, (int) ($fresh['step_timeout_seconds'] ?? 300));
-        $token = $this->durableRuns->acquireLease($runId, (int) $fresh['next_step_index'], $stepTimeout);
+        $lease = self::acquireCoordinationLease($this->durableRuns, $fresh);
 
-        if ($token !== null) {
-            $this->durableRuns->markCompleted($runId, $token);
+        if ($lease !== null) {
+            $this->durableRuns->markCompleted($runId, $lease['token']);
         }
+    }
+
+    /**
+     * Take the durable lease on a run's coordination row so a queued-hierarchical
+     * continuation can settle it: at its current step, for its step timeout. Null when
+     * another holder has the lease or the row cannot be leased.
+     *
+     * @param  array<string, mixed>  $run  The durable run row, as DurableRunStore::find() returns it.
+     * @return array{token: string, step_timeout: int}|null
+     */
+    public static function acquireCoordinationLease(DurableRunStore $durableRuns, array $run): ?array
+    {
+        $stepTimeout = max(1, (int) ($run['step_timeout_seconds'] ?? 300));
+        $token = $durableRuns->acquireLease((string) $run['run_id'], (int) $run['next_step_index'], $stepTimeout);
+
+        return $token === null ? null : ['token' => $token, 'step_timeout' => $stepTimeout];
     }
 }

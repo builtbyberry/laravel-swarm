@@ -6,7 +6,6 @@ namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
-use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Events\SwarmChildCompleted;
@@ -20,6 +19,7 @@ use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use Carbon\CarbonImmutable;
+use Closure;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Foundation\Application;
@@ -46,10 +46,11 @@ class DurableChildSwarmCoordinator
         protected Application $application,
         protected DurableRunContext $runs,
         protected DurablePayloadCapture $payloads,
-        protected DurableOutbox $outbox,
+        protected DurableEagerDispatcher $eager,
         protected ConfigRepository $config,
         protected LoggerInterface $logger,
         protected SwarmAuditDispatcher $audit,
+        protected DurableJoinRelease $joinRelease,
     ) {}
 
     public function afterChildIntentForTesting(?callable $hook): void
@@ -59,8 +60,9 @@ class DurableChildSwarmCoordinator
 
     /**
      * @param  string|array<string, mixed>|RunContext  $task
+     * @param  (Closure(Closure(): void): void)|null  $deferEffects  Collect effects for later execution; null invokes them here.
      */
-    public function dispatchChildSwarm(string $parentRunId, string $childSwarmClass, string|array|RunContext $task, ?string $dedupeKey = null): DurableChildRun
+    public function dispatchChildSwarm(string $parentRunId, string $childSwarmClass, string|array|RunContext $task, ?string $dedupeKey = null, ?Closure $deferEffects = null): DurableChildRun
     {
         $parent = $this->runs->requireRun($parentRunId);
         $swarm = $this->application->make($childSwarmClass);
@@ -73,20 +75,28 @@ class DurableChildSwarmCoordinator
         $context->mergeMetadata(['parent_run_id' => $parentRunId]);
         $waitName = $this->childWaitName($context->runId);
 
-        $this->persistChildIntent($parent, $context, $childSwarmClass, $waitName, $dedupeKey);
+        $this->persistChildIntent($parent, $context, $childSwarmClass, $waitName, $dedupeKey, $deferEffects);
 
-        if (is_callable($this->afterChildIntentHook)) {
-            ($this->afterChildIntentHook)($parentRunId, $context->runId);
+        $dispatch = function () use ($parentRunId, $context, $childSwarmClass, $waitName): void {
+            if (is_callable($this->afterChildIntentHook)) {
+                ($this->afterChildIntentHook)($parentRunId, $context->runId);
+            }
+
+            $this->dispatchChildIntent([
+                'parent_run_id' => $parentRunId,
+                'child_run_id' => $context->runId,
+                'child_swarm_class' => $childSwarmClass,
+                'wait_name' => $waitName,
+                'context_payload' => $context->toArray(),
+                'status' => 'pending',
+            ]);
+        };
+
+        if ($deferEffects !== null) {
+            $deferEffects($dispatch);
+        } else {
+            $dispatch();
         }
-
-        $this->dispatchChildIntent([
-            'parent_run_id' => $parentRunId,
-            'child_run_id' => $context->runId,
-            'child_swarm_class' => $childSwarmClass,
-            'wait_name' => $waitName,
-            'context_payload' => $context->toArray(),
-            'status' => 'pending',
-        ]);
 
         $child = $this->durableRuns->childRunForChild($context->runId);
 
@@ -95,8 +105,9 @@ class DurableChildSwarmCoordinator
 
     /**
      * @param  array<string, mixed>  $parent
+     * @param  (Closure(Closure(): void): void)|null  $deferEffects  Collect effects for later execution; null invokes them here.
      */
-    protected function persistChildIntent(array $parent, RunContext $childContext, string $childSwarmClass, string $waitName, ?string $dedupeKey = null): void
+    protected function persistChildIntent(array $parent, RunContext $childContext, string $childSwarmClass, string $waitName, ?string $dedupeKey = null, ?Closure $deferEffects = null): void
     {
         $parentRunId = (string) $parent['run_id'];
         $reason = "Waiting for child swarm [{$childContext->runId}].";
@@ -115,17 +126,25 @@ class DurableChildSwarmCoordinator
             $this->durableRuns->createChildRun($parentRunId, $childContext->runId, $childSwarmClass, $waitName, $this->capture->context($childContext)->toArray());
             $this->contextStore->put($this->capture->activeContext($parentContext), $this->runs->ttlSeconds());
             $this->historyStore->syncDurableState($parentRunId, 'waiting', $this->capture->context($parentContext), $parentContext->metadata, $this->runs->ttlSeconds(), false);
-        });
+        }, 3);
 
-        $this->events->dispatch(new SwarmWaiting(
-            runId: $parentRunId,
-            swarmClass: $parent['swarm_class'],
-            topology: $parent['topology'],
-            waitName: $waitName,
-            reason: $reason,
-            metadata: $metadata,
-            executionMode: $this->runs->publicLifecycleExecutionMode($parent),
-        ));
+        $notify = function () use ($parentRunId, $parent, $waitName, $reason, $metadata): void {
+            $this->events->dispatch(new SwarmWaiting(
+                runId: $parentRunId,
+                swarmClass: $parent['swarm_class'],
+                topology: $parent['topology'],
+                waitName: $waitName,
+                reason: $reason,
+                metadata: $metadata,
+                executionMode: $this->runs->publicLifecycleExecutionMode($parent),
+            ));
+        };
+
+        if ($deferEffects !== null) {
+            $deferEffects($notify);
+        } else {
+            $notify();
+        }
     }
 
     /**
@@ -359,14 +378,24 @@ class DurableChildSwarmCoordinator
                 ];
                 $context->mergeMetadata(['durable_child_runs' => $children]);
                 $this->contextStore->put($this->capture->activeContext($context), $this->runs->ttlSeconds());
-                $this->historyStore->syncDurableState($parent['run_id'], 'pending', $this->capture->context($context), $context->metadata, $this->runs->ttlSeconds(), false);
+
+                // History follows the parent: it stays waiting while another wait is open or
+                // the parent is still at its branch boundary, and is written before any join
+                // is released.
+                $updated = $this->runs->requireRun($parent['run_id']);
+                $this->historyStore->syncDurableState($parent['run_id'], $updated['status'], $this->capture->context($context), $context->metadata, $this->runs->ttlSeconds(), false);
 
                 if (! $this->durableRuns->markChildTerminalEventDispatched((string) $child['child_run_id'])) {
                     return false;
                 }
 
-                $updated = $this->runs->requireRun($parent['run_id']);
-                $this->outbox->enqueueStep($parent['run_id'], (int) $updated['next_step_index'], $updated['queue_connection'], $updated['queue_name']);
+                if ($updated['status'] === 'pending') {
+                    $this->eager->enqueueStep($parent['run_id'], (int) $updated['next_step_index'], $updated['queue_connection'], $updated['queue_name']);
+                } elseif ($updated['status'] === 'waiting') {
+                    // Never inside this transaction: the join release locks the parent's other
+                    // open waits, and this transaction already holds the parent row.
+                    $this->joinRelease->releaseAfterCommit($parent['run_id']);
+                }
 
                 return true;
             });

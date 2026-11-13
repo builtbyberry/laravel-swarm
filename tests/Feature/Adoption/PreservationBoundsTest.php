@@ -64,18 +64,25 @@ it('requires concrete durable stores even when a custom context wrapper satisfie
     Http::assertNothingSent();
 });
 
-it('retains the signal record before release crash gap and run scoped idempotency', function () {
+it('records a signal with its acceptance, so a crash before the wait release leaves nothing and the key is accepted once, with run scoped idempotency', function () {
+    // The database store accepts a signal atomically (#611): the signal row is written in
+    // the acceptance transaction that closes the wait. A crash once the wait is closed and
+    // the signal recorded, before that transaction commits, leaves neither. The earlier
+    // boundary — the signal recorded before the acceptance, surviving its crash — still
+    // holds for a store without that capability (DurableSignalAcceptanceAtomicityTest).
     $store = new class(DB::connection(), config(), app(SwarmPersistenceCipher::class)) extends DatabaseDurableRunStore
     {
         public bool $crash = true;
 
-        public function releaseWaitWithSignal(string $runId, string $name, int $signalId): bool
+        public function acceptSignal(string $runId, string $name, mixed $payload, ?string $idempotencyKey): ?array
         {
+            $accepted = parent::acceptSignal($runId, $name, $payload, $idempotencyKey);
+
             if ($this->crash) {
                 throw new RuntimeException('crash before wait release');
             }
 
-            return parent::releaseWaitWithSignal($runId, $name, $signalId);
+            return $accepted;
         }
     };
     app()->instance(DurableRunStore::class, $store);
@@ -84,18 +91,21 @@ it('retains the signal record before release crash gap and run scoped idempotenc
     $manager->wait($response->runId, 'approval');
     expect(fn () => $response->signal('approval', ['value' => 'signal-secret'], 'same-key'))
         ->toThrow(RuntimeException::class, 'crash before wait release');
-    expect($store->signals($response->runId))->toHaveCount(1)
+    expect($store->signals($response->runId))->toHaveCount(0)
         ->and($manager->find($response->runId)['status'])->toBe('waiting')
         ->and($store->waits($response->runId)[0]['status'])->toBe('waiting');
     $store->crash = false;
+    $accepted = $response->signal('approval', ['value' => 'signal-secret'], 'same-key');
+    expect($accepted->accepted)->toBeTrue()->and($accepted->duplicate)->toBeFalse()
+        ->and($store->signals($response->runId))->toHaveCount(1);
     $duplicate = $response->signal('different-name', ['value' => 'changed'], 'same-key');
     expect($duplicate->duplicate)->toBeTrue()->and($duplicate->accepted)->toBeFalse()
         ->and($store->signals($response->runId)[0]['name'])->toBe('approval')
         ->and($store->signals($response->runId)[0]['payload'])->toBe(['value' => 'signal-secret']);
     $same = $response->signal('approval', ['value' => 'signal-secret'], 'same-key');
     expect($same->duplicate)->toBeTrue()->and($same->accepted)->toBeFalse()
-        ->and($manager->find($response->runId)['status'])->toBe('waiting');
-    expect($response->signal('approval', ['value' => 'signal-secret'], 'new-key')->accepted)->toBeTrue();
+        ->and($store->signals($response->runId))->toHaveCount(1);
+    expect($response->signal('approval', ['value' => 'signal-secret'], 'new-key')->duplicate)->toBeFalse();
     $other = WorkflowSwarm::make()->dispatchDurable('other');
     expect($other->signal('approval', [], 'same-key')->duplicate)->toBeFalse();
 });

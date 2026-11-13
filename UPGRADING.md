@@ -1,5 +1,459 @@
 # Upgrading Laravel Swarm
 
+## Upgrading to realtime-dispatch
+
+### Wait creation at branch joins
+
+Run `php artisan migrate` before starting the new workers. The additive
+`wait_generation` column starts existing runs at zero; it tracks creations, not
+open-wait counts, so no wait-count backfill is needed. Plan the table alteration
+for your database version and table size; older engines may copy or lock the
+table. Replace all queue and recovery workers before relying on the guarantee.
+Code rollback can leave this column in place; do not drop it while new workers
+still run. The counter is removed with its run by existing retention.
+
+An explicit `DurableSwarmManager::wait()` in the released `pending` window before
+the next durable step starts now throws `SwarmException`, with no new wait
+persisted. Register obligations before join release. Queued hierarchical
+continuations retain the released
+`pending` coordination state, so the same rejection applies there. Framework
+declared waits and child intents at durable hierarchical fan-out are persisted
+atomically with that fan-out. Store extenders overriding `createWait()` must
+advance the generation in SQL under the run lock, atomically with insertion.
+An override of `releaseWaitingRunForJoin()` must observe the generation before
+its open-wait scan and compare it with the current locked run, refusing if it
+changed. It must not take another wait-row lock after locking the run.
+See [wait creation and transaction retries](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-waits-and-signals.md#creating-a-wait-from-application-code).
+
+### Concurrent wait creation and resume
+
+The database store now fences resume against wait creation using the existing
+`wait_generation` column. A resume outside an application transaction shares a
+budget of three attempts across generation changes and database concurrency
+errors. After that budget, outermost resume concurrency errors now surface as
+`SwarmException` with the original exception as `previous`. Exhaustion selects
+its retryable message from the last failure:
+
+```text
+Durable run [<run-id>] could not be resumed: waits on it kept changing; retry the resume.
+Durable run [<run-id>] could not be resumed: the database kept reporting concurrency conflicts; retry the resume.
+```
+
+The failed attempts leave the run paused. Retry resume. Inside an application
+transaction on any database engine, a wait created between resume's scan and
+its run lock can trigger the fence. On MySQL `REPEATABLE READ`, a wait created
+and closed since an older snapshot always triggers the conservative fence,
+because that snapshot cannot refresh. Resume throws `SwarmException` without
+changing the paused run:
+
+```text
+Durable run [<run-id>] could not be resumed: a wait was opened on it concurrently; retry the resume outside this transaction.
+```
+
+This is not a database concurrency error: Laravel's `DB::transaction(...,
+attempts: 3)` does not retry it. Finish or roll back the application transaction
+and retry resume outside it after commit or rollback. An open wait found by the
+current locking scan still returns the run to `waiting`, including inside an
+older application snapshot. Database concurrency
+errors inside application transactions still propagate for the application to
+handle by retrying its whole transaction.
+
+Ordinary declared waits and child-swarm intents now persist inside the step
+checkpoint transaction. A boundary persistence failure rolls back that step's
+checkpoint; retry/recovery can re-run the completed agent step, so application
+side effects must tolerate that repetition. Re-running the step spends its
+provider tokens again. `swarm.durable.job.tries` limits the attempts of one queued
+job; each `swarm:recover` redispatch is a fresh job, so a failure that persists
+can keep spending until the run is fixed or cancelled.
+`RoutesDurableWaits::durableWaits()` and
+`DispatchesChildSwarms::durableChildSwarms()` now run inside the checkpoint
+transaction under the run lock and may run again when it retries. They must be
+fast, deterministic and side-effect free. Persistence transactions retry
+concurrency errors up to three attempts without re-running the agent between
+those attempts. An entered declared boundary writes **no continuation step
+outbox entry**; its release dispatches the continuation. A boundary whose outcome
+is already present retains the ordinary enqueue path. Notifications and child
+dispatch execute after commit; inside an application transaction they wait for
+its outermost commit. A notification failure leaves the checkpoint and boundary
+committed.
+
+A committed child intent is recovered by `swarm:recover` from its persisted
+capture payload, which can be redacted when input capture is off. That known
+limit, and the window in which an intent is stamped dispatched before its child
+run exists, are unchanged by this fix. A checkpoint still takes its history row
+before the run row while a wait closer takes them in the opposite order; retries
+recover a deadlock victim there rather than removing that lock cycle.
+
+**Rollout:** migrate first, then replace every wait creator, resumer (including
+web, console and application processes) and checkpoint executor with this
+version before relying on this guarantee. Mixed-version operation stays
+vulnerable. The existing `wait_generation` migration alone gives no protection;
+there is no additional migration in this fix. Store extenders overriding
+`resume()` must observe the generation before the wait scan and compare it with
+the locked run only when that scan found no open waits; on a mismatch, throw
+`DurableWaitSetChangedException` without writing anything so the lifecycle
+controller can retry from a fresh transaction. Never acquire a wait-row lock
+after the run lock. See [durable waits](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-waits-and-signals.md#creating-a-wait-from-application-code).
+
+### Durable branch fan-out cap (`swarm.durable.parallel.max_concurrent_branches`)
+
+Off by default; nothing changes until you set it. If you do:
+
+- **Turn it on last.** Set the cap only after every queue worker and the
+  `swarm:recover` scheduler run this version. Older workers neither release held
+  branches nor refuse to run them.
+- **Drain before rolling back.** Set the cap to `null`, resume or cancel any paused
+  capped runs, run `swarm:recover`, and confirm `swarm:health --durable` shows no
+  held branches before deploying a version without the cap.
+
+See [Capping branch fan-out](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-execution.md#capping-branch-fan-out),
+including how to release held branches by hand after a rollback.
+
+### Custom `DurableOutbox` implementations
+
+The `DurableOutbox` contract changed to support eager durable dispatch
+(`swarm.durable.eager_dispatch`). The bundled `DatabaseDurableOutbox` is updated
+for you; applications that only *inject* `DurableOutbox` need no changes.
+
+If your application binds its **own `DurableOutbox` implementation**, update it
+before upgrading, whether or not you turn eager dispatch on: PHP rejects the old
+signatures when the class loads.
+
+- `enqueueStep()` and `enqueueBranch()` take a trailing
+  `bool $directDispatch = false` parameter and return `int`, the id of the row
+  written. When `$directDispatch` is `true`, write the row already reserved
+  (`reserved_at` set to now) so your relay leaves it alone until the reservation
+  goes stale.
+- Add `settle(int $entryId, ?string $runId = null): void`, which deletes the row
+  with that id. `$runId` is context for reporting a failure only. It must not
+  throw: a failed settle should be reported and swallowed.
+
+`enqueueQueuedResume()` is unchanged.
+
+### `swarm:relay` takes one overlap lease per lane
+
+`swarm:relay` now holds a separate lease for each outbox lane (durable, audit,
+callback), only while that lane drains a batch. Nothing needs changing for a
+single bare `swarm:relay` schedule entry, but monitoring may:
+
+- `status: skipped_overlap` on the `command.relay` audit event now means every
+  selected lane was held by another invocation. A run that found only some lanes
+  held drains the rest, reports its normal status, lists the held lanes in the
+  new always-present `contended_lanes` field, and exits 1. Alert on a non-empty
+  `contended_lanes` or the exit code rather than on `skipped_overlap` alone.
+- During a rolling deploy an old relay (one lease for everything) and a new
+  relay (lane leases) can drain the same lane at the same time. The bundled
+  database outboxes claim with `FOR UPDATE SKIP LOCKED` on MySQL and PostgreSQL,
+  so they take disjoint batches. A custom `DurableOutbox` (or audit/callback
+  outbox) must claim in a way that two concurrent drains cannot both take the
+  same row.
+- Relays can now be split by lane on separate cadences. See
+  [Command overlap leases](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/maintenance.md#command-overlap-leases) for the
+  split-cadence schedule and the health thresholds a slower lane needs.
+
+### Resuming a run that was paused while waiting
+
+`resume()` on a durable run paused in a signal or child-swarm wait now returns it
+to `waiting` instead of `pending`, and no step is queued. Code that resumed such a
+run and expected its next step to run must now let the wait be released: deliver
+the signal, let the child finish, or let `swarm:recover` time the wait out.
+`DurableResumeResult::$status` is `DurableLifecycleStatus::Waiting` for these
+runs. A run whose wait was released while it was paused (for example its child
+finished) has nothing left to wait on and resumes to `pending` as before.
+
+- **Signals delivered while paused (#601).** A signal sent to a paused run that
+  has an open wait of that name is now accepted at delivery: the wait closes, the
+  run stays paused, and resume queues its next step. `accepted` is `true` while the
+  run is still paused, so code that treated `accepted` as "the run is moving now"
+  should also check the run's status. A paused run's signal is still only recorded
+  when it is sent inside a database transaction (including transaction
+  middleware and the `RefreshDatabase` / `DatabaseTransactions` test traits) or
+  with a custom store that does not implement `AcceptsDurableSignals`; send those
+  again after resume with a **new** idempotency key, as before. See
+  [Signals While Paused](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-waits-and-signals.md#signals-while-paused).
+  - Signals that older code recorded while a run was paused are not recovered:
+    send them again after resume with a new key.
+  - If you already re-send paused-time signals after resume with a new key, that
+    second delivery is now recorded and not applied twice; you can stop re-sending.
+  - During a rolling deploy, any process that delivers signals and still runs the
+    old code records a paused run's signal without accepting it. Signals are
+    accepted where `signal()` is called (web nodes serving the signal webhook, hosts
+    running `swarm:signal`, application code calling `SwarmOperator::signal()`), not
+    in queue workers. Keep the re-send rule until every one of those runs the new
+    code.
+  - Rolling back is safe for data. A wait closed by a signal while the run was
+    paused is an ordinary signalled wait: older code resumes such a run to `pending`
+    and runs its next step with the signal applied. There is no schema change. After
+    a rollback, though, signals delivered while a run is paused are again only
+    recorded, so go back to re-sending them after resume with a new idempotency key.
+  - A custom store that implements `AcceptsDurableSignals` now has `acceptSignal()`
+    called for paused runs as well as waiting ones. It must close the wait without
+    moving a paused run out of `paused`; the bundled database store does.
+  - An application transaction that signals a paused run and then resumes it can
+    deadlock on MySQL with another process signalling the same run. The database
+    aborts one side completely; retry it, for example with
+    `DB::transaction(..., attempts: 3)`.
+- **Runs that already advanced past an open wait.** Under the old behaviour a run
+  resumed past its open wait kept that wait row open (`status = 'waiting'`) while
+  it moved on. If such a run is still in flight and is paused again after you
+  upgrade, resume now holds it in `waiting` on that stale wait. A child wait clears
+  when the child finishes and a timed wait clears through `swarm:recover`, but an
+  untimed signal wait does not clear by itself. Before or right after deploying,
+  find those rows:
+
+  ```sql
+  select w.id, w.run_id, w.name, r.status
+  from swarm_durable_waits w
+  join swarm_durable_runs r on r.run_id = w.run_id
+  where w.status = 'waiting'
+    and r.finished_at is null
+    and r.status in ('pending', 'running');
+  ```
+
+  A run in `pending` or `running` with an open wait is one that went past it. If
+  its workflow no longer needs that wait, deliver the signal it is waiting for
+  once the run is `waiting` again, or cancel the run; if your table names are
+  configured (`swarm.tables.durable_waits`, `swarm.tables.durable`), use those.
+- **Custom `DurableRunStore` implementations**, and classes extending
+  `DatabaseDurableRunStore` that override `resume()` or `syncRunWaitSummary()`,
+  must follow the same rules or keep the old behaviour silently: `resume()` sets
+  `waiting` when the run has an open wait row or branch work under its current
+  node and `pending` otherwise, deciding from a locked read of the open waits
+  taken before the run row is written; a wait release must not change a `paused`
+  run's status.
+- An application transaction that already holds the run (for example one that
+  paused it) and then resumes it can deadlock with a worker releasing one of the
+  run's waits at that moment. The database aborts one side and rolls it back;
+  retry it.
+- During a rolling deploy, workers still on the old code keep the old behaviour
+  until they are replaced.
+
+### A branch join waits for open waits
+
+A durable run waiting at a parallel join is no longer released to its join while
+it has an open wait (an application `wait()`, or a child swarm's `child:<id>`
+wait); the join runs once every wait is closed and every branch is done.
+
+- **Waits nobody closes now hold the run.** Code that opened a wait at a branch
+  boundary and relied on the branches finishing to move the run on must now
+  close it: deliver the signal, let the child finish, or give the wait a timeout
+  so `swarm:recover` times it out. Find runs held this way with:
+
+  ```sql
+  select w.run_id, w.name, w.created_at
+  from swarm_durable_waits w
+  join swarm_durable_runs r on r.run_id = w.run_id
+  where w.status = 'waiting'
+    and r.status = 'waiting'
+    and r.finished_at is null
+    and exists (
+      select 1 from swarm_durable_branches b
+      where b.run_id = r.run_id and b.parent_node_id = r.current_node_id
+    );
+  ```
+
+  Use your configured table names (`swarm.tables.durable_waits`,
+  `swarm.tables.durable`, `swarm.tables.durable_branches`) if you changed them.
+  For one run, `php artisan swarm:inspect <run-id> --json` lists its waits and
+  their status.
+- **`fail_run` is unchanged on the bundled store:** a branch failure fails the
+  parent at once even while a wait is open, because `DatabaseDurableRunStore`
+  implements `Contracts\ReleasesWaitingRunForFailure`. If the worker that failed
+  the branch dies before failing the parent, `swarm:recover` now fails the
+  parent instead of releasing it to its join. With an open wait, that happens
+  once the wait closes.
+- **History status.** After a signal is accepted, a child swarm finishes, or a
+  wait times out while another wait is still open, or while the run is still at
+  its branch boundary, the run's history status stays `waiting` instead of
+  `pending`. Monitoring that keyed on `pending` after one of these should read
+  the durable run status instead.
+- **Custom `DurableRunStore` implementations**, and classes extending
+  `DatabaseDurableRunStore` that override `releaseWaitingRunForJoin()`,
+  `recoverableWaitingJoins()` or `syncRunWaitSummary()`, must follow the same
+  rules or keep the old behaviour silently: `releaseWaitingRunForJoin()` refuses
+  while the run has an open wait, deciding from a shared-lock read of its open
+  waits taken before the run row is written; `recoverableWaitingJoins()` excludes
+  runs with an open wait before its limit; closing a run's last wait leaves it
+  `waiting` when it has branch rows under its current node. That last decision
+  must not rest on an ordinary read of the branch rows alone (#617): inside an
+  application transaction that already read on MySQL, that read can miss a
+  fan-out committed since. `DatabaseDurableRunStore` also decides from the run
+  row it has just locked — a row a fan-out wrote, with no step run since. An
+  override of `syncRunWaitSummary()` that keeps its own branch read keeps the
+  old MySQL behaviour, and an override of `lockRunRow()` must also return
+  `route_cursor`. The durable manager
+  is still built on `DatabaseDurableRunStore`, so wherever it runs a `fail_run`
+  branch failure fails the parent at once even with an open wait.
+- **Failing a `fail_run` parent at once is an optional store capability (#616).**
+  A store gets it by implementing `Contracts\ReleasesWaitingRunForFailure`:
+  `releaseWaitingRunForFailure()` moves a run from `waiting` at the given step
+  index, unfinished, to `pending` in one conditional write whatever waits are
+  open, returns true only when that call moved it, and takes no wait-row lock
+  after writing the run row. A store without it falls back to
+  `releaseWaitingRunForJoin()`, which refuses while a wait is open: the parent is
+  not failed then, and a later `swarm:recover` sweep fails it once its waits have
+  closed. A decorating store keeps the capability only if it implements the
+  interface and forwards `releaseWaitingRunForFailure()`. Subclasses of
+  `DatabaseDurableRunStore` inherit it.
+- During a rolling deploy, workers still on the old code keep the old behaviour
+  until they are replaced. See
+  [Rolling out the open-wait join rule](#rolling-out-the-open-wait-join-rule) for
+  the order to replace them in and for runs the old code left stranded.
+
+### A wait closing while its run fans out
+
+The wait-generation migration above is required for this release. These two
+lock-order rules also apply to code that implements or extends the durable store:
+
+- **`waitForBranches()` takes the run row first.** A fan-out now locks the run
+  row before it writes the context, branch or run-state rows, the order the wait
+  releases take. A custom `DurableRunStore`, or a class extending
+  `DatabaseDurableRunStore` that overrides `waitForBranches()`, must do the same,
+  and code that calls `waitForBranches()` inside its own transaction must not
+  write the run's context or history row before the call. Otherwise a signal,
+  wait timeout or child outcome arriving mid-fan-out can deadlock with it.
+- **Atomic signal acceptance is an optional store capability.**
+  `DatabaseDurableRunStore` implements the new `Contracts\AcceptsDurableSignals`
+  and records a signal in the transaction that accepts it. A custom
+  `DurableRunStore` without the interface keeps the earlier behaviour: the signal
+  is recorded first, and if its acceptance fails the same idempotency key is a
+  duplicate. A decorating store keeps atomic acceptance only if it implements the
+  interface and forwards `acceptSignal()` and `signalForIdempotencyKey()`. Subclasses of `DatabaseDurableRunStore`
+  inherit it. `acceptSignal()` calls your `recordSignal()` and
+  `syncRunWaitSummary()`, but it closes the wait itself: an override of
+  `releaseWaitWithSignal()` no longer runs when a signal is accepted, so move that
+  logic into an `acceptSignal()` override.
+- **Signals already stranded stay stranded.** A signal whose acceptance failed
+  before you upgrade is still recorded under its idempotency key, and its wait is
+  still open: sending the same key again still returns a duplicate. Send it again
+  with a new idempotency key, or let the wait time out (`swarm:recover`).
+- **During a rolling deploy** both failures this fixes can still happen until
+  every worker runs the new code: a fan-out on an old worker takes the context and
+  history rows before the run row and can deadlock with a wait closer, and a
+  signal accepted on an old worker is recorded before its acceptance, so if that
+  acceptance fails its key is a duplicate. A deadlocked signal is sent again (with
+  a new key if it was accepted by an old worker); a timed-out wait is closed by the
+  next `swarm:recover` sweep. An old and a new worker accepting signals for two
+  different waits of one run with the same idempotency key can also deadlock.
+  Replace all workers together to avoid these.
+
+### A queued-hierarchical resume runs only once its join is released
+
+No configuration or schema change. A `ResumeQueuedHierarchicalSwarm` job now runs
+the continuation only while the run's durable coordination row is `pending`
+(released to its join); a stray or duplicate delivery is acknowledged and does
+nothing (#610).
+
+- **Custom `ClaimsQueuedRunExecution` history stores**, and classes extending
+  `DatabaseRunHistoryStore` that override `acquireQueuedRunContinuationLease()`,
+  must follow the same rule or keep letting a stray resume run the continuation
+  early: take the continuation lease, fresh or as a crash reclaim, only while the
+  durable row is `pending`, and otherwise return a non-acquired outcome without
+  touching the history row. Read the durable row with an exclusive lock, before
+  the history row, inside the acquisition transaction; that is the order the
+  fan-out and the wait closers take, and the other order can deadlock with a
+  fan-out.
+- **`DatabaseRunHistoryStore::isQueueHierarchicalParallelRun()` is removed.** Its
+  scope check is now part of the locked read in
+  `lockQueueHierarchicalRunReleasedToJoin()`. A subclass that called or overrode
+  it must move that logic; an override of the old method is no longer called.
+- **During a rolling deploy** a resume handled by a worker still on the old code
+  can still run early. Replace all workers together.
+
+### Rolling out the open-wait join rule
+
+No configuration or schema change (#615). Read this before replacing workers that
+ran a release without the rule in [A branch join waits for open waits](#a-branch-join-waits-for-open-waits).
+
+- **Replace every participant together.** That means queue workers, `swarm:relay`,
+  the `swarm:recover` scheduler, and every process that accepts signals: web nodes,
+  `swarm:signal`, and application code that calls the signal API. Until a process
+  runs the new code it keeps the old behaviour: it releases joins past open waits,
+  and it closes a run's last wait the old way (below).
+- **Do not run the new `swarm:recover` while an old worker can still take durable
+  jobs.** The repair below, and the rule that an ordinary advance job never runs a
+  `queue()` `multi_worker` hierarchical run, hold only once no old worker remains:
+  an old worker given a delayed advance job for a repaired run still takes its
+  durable lease, and can run it beside its own continuation. Stop the old workers
+  and let their in-flight jobs finish, deploy every participant, then start the
+  workers, `swarm:relay` and the `swarm:recover` schedule.
+- **Runs the old code stranded are repaired by `swarm:recover`.** When the old code
+  closed the last wait (a signal, a wait timeout, a child finishing) of a
+  `queue()` `multi_worker` hierarchical run still at its parallel boundary, it moved
+  the run to durable and history `pending` and pushed an ordinary advance job. That
+  job ran the run on the step-durable path, pushing itself again until the
+  branches finished; if it was lost (dropped, failed past its tries, flushed during
+  the deploy) the run never finished. `swarm:recover` now puts a run in that shape
+  back at its boundary once it has been quiet past
+  `swarm.durable.recovery.grace_seconds`, then releases its join through its own
+  continuation, fails it for a `fail_run` branch failure, or leaves it for its last
+  branch, logging `recovery put a queued-hierarchical run stranded by a pre-upgrade
+  wait closer back at its parallel boundary`. Each sweep repairs at most `--limit`
+  runs, so let the schedule run for a few sweeps after the deploy, and keep
+  `swarm:relay` running: the released join's continuation is delivered by the
+  relay.
+- **An ordinary advance job for such a run is ignored.** On the new code it settles
+  its own outbox entry, logs `ignored an ordinary advance job delivered for a
+  queued-hierarchical run`, and does nothing else. A run whose old job was still
+  re-queuing itself therefore stops at that job's next delivery and is repaired by
+  `swarm:recover` after the grace period. Before, it finished on the step-durable
+  path.
+- **Finding candidates.** This lists the runs the repair takes: the stranded shape
+  with no retry due, no live lease and no open wait. A run in this list is repaired
+  once it has been quiet past the grace period; one whose old job is still being
+  delivered keeps moving `updated_at` and is taken when it stops. A run that matches
+  everything but a retry, a lease or an open wait is outside the automatic repair
+  (see below).
+
+  ```sql
+  select r.run_id, r.current_node_id, r.updated_at
+  from swarm_durable_runs r
+  join swarm_run_histories h on h.run_id = r.run_id
+  where r.coordination_profile = 'queue_hierarchical_parallel'
+    and r.status = 'pending'
+    and r.finished_at is null
+    and r.next_retry_at is null
+    and (r.leased_until is null or r.leased_until < current_timestamp)
+    and h.status = 'pending'
+    and exists (
+      select 1 from swarm_durable_branches b
+      where b.run_id = r.run_id and b.parent_node_id = r.current_node_id
+    )
+    and not exists (
+      select 1 from swarm_durable_waits w
+      where w.run_id = r.run_id and w.status = 'waiting'
+    );
+  ```
+
+  Use your configured table names (`swarm.tables.durable`, `swarm.tables.history`,
+  `swarm.tables.durable_branches`, `swarm.tables.durable_waits`) if you changed
+  them. The timestamps are stored in UTC. For one run,
+  `php artisan swarm:inspect <run-id> --json` shows the durable `run` status,
+  the `history` status and metadata (`queue_hierarchical_waiting_parallel`), the
+  `branches` under its current node, and its `waits`.
+- **What is not repaired automatically.** Only that shape is. An old advance job
+  that got past the join and was then lost (its current node is no longer the
+  boundary), one that scheduled a retry, one whose worker died mid-step (durable
+  and history `running`), or one that hit the run's timeout leave other shapes:
+  inspect them with `swarm:inspect`, and cancel (`swarm:cancel`) and start again any
+  that cannot finish. A custom `DurableRunStore`, or a store that decorates
+  `DatabaseDurableRunStore`, gets no repair; the ignored advance job applies to
+  every store.
+- **Custom `DurableRunStore` implementations: `parentsWaitingOnTerminalChildren()`.**
+  It still returns one waiting parent record per terminal child, but now only for a
+  child whose wait on that parent (the child's `wait_name`) is still open, applied
+  before the limit. Before, a parent still at its
+  branch boundary was returned again on every sweep once its child outcome was in,
+  taking a place under `--limit` from a parent that needed its outcome. A custom
+  store, or a class extending `DatabaseDurableRunStore` that overrides the method,
+  keeps that behaviour until it applies the same filter.
+- **Transactions your application opens.** The lock order the open-wait rule relies
+  on covers only the transactions the package opens. An application transaction
+  that already holds a run's row (pausing and resuming a run in one transaction, or
+  a job transaction left open around branch completion) keeps its old locking and
+  can still deadlock with a wait closer. Retry the whole aborted transaction, and
+  avoid holding a run's row across branch completion or resume.
+
 ## Upgrading to v0.28.1
 
 This patch deliberately departs from the additive-only patch policy stated

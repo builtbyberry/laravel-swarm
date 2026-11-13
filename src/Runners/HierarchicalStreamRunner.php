@@ -25,6 +25,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamStart;
 use BuiltByBerry\LaravelSwarm\Streaming\NativeProtocolFailureReporter;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
+use BuiltByBerry\LaravelSwarm\Support\AgentResponseOutput;
 use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\NativeAgentInvoker;
@@ -301,7 +302,7 @@ class HierarchicalStreamRunner extends StaticHierarchicalStreamRunner
                 ActiveRunContext::exit();
             }
 
-            $coordinatorOutput = (string) $coordinatorResponse;
+            $coordinatorOutput = AgentResponseOutput::text($coordinatorResponse);
             $coordinatorUsage = $this->usageFromResponse($coordinatorResponse);
 
             $coordinatorDurationMs = MonotonicTime::elapsedMilliseconds($stepStartedAt);

@@ -159,9 +159,23 @@ Common patterns:
 - Bind a test double for `BuiltByBerry\LaravelSwarm\Runners\Durable\DurableJobDispatcher`
   **before** resolving `DurableSwarmManager` so you can assert how many
   `AdvanceDurableSwarm` / `AdvanceDurableBranch` dispatches occurred or inject
-  controlled failures.
+  controlled failures. With `swarm.durable.eager_dispatch` on, jobs pushed on
+  commit do not go through the double's `dispatchStep()` / `dispatchBranch()`;
+  observe them with `Queue::fake()` instead.
 - Bind `BuiltByBerry\LaravelSwarm\Runners\DurableRunRecorder` if you need to spy
   checkpoint writes; the service provider documents `makeWith` parameters.
+- With `swarm.durable.parallel.max_concurrent_branches` set, held branches are
+  released only after a finished branch's transaction really commits. Suites that
+  wrap each test in a transaction that never commits (`RefreshDatabase`,
+  `DatabaseTransactions`) will see capped fan-outs stall: leave the cap unset there
+  (`<env name="SWARM_DURABLE_PARALLEL_MAX_CONCURRENT_BRANCHES" value=""/>` in
+  `phpunit.xml`) or use `DatabaseMigrations`. See
+  [Capping branch fan-out](durable-execution.md#capping-branch-fan-out).
+- A signal sent to a paused run is accepted only outside a database transaction.
+  Under `RefreshDatabase` or `DatabaseTransactions` every test runs inside one, so
+  a paused run's signal is recorded and not accepted. Test paused-run signals with
+  `DatabaseMigrations` or `DatabaseTruncation`. See
+  [Signals While Paused](durable-waits-and-signals.md#signals-while-paused).
 
 For the full collaborator graph, container singleton rules, and which types
 must not be registered globally, read
