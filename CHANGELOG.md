@@ -110,6 +110,9 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
 
 ### Changed
 
+- **Durable resume retries and checkpoint boundaries (#621).** Review the
+  [application transaction, extension and rollout changes](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#concurrent-wait-creation-and-resume).
+
 - **BREAKING for custom `DurableOutbox` implementations.**
   `enqueueStep()` and `enqueueBranch()` now take a trailing
   `bool $directDispatch = false` and return the id of the row they write, and
@@ -173,6 +176,16 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   See [UPGRADING](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#a-queued-hierarchical-resume-runs-only-once-its-join-is-released).
 
 ### Fixed
+
+- **A paused run cannot resume past a concurrently created wait (#621).** Ordinary
+  declared waits and child intents now commit with the step checkpoint. Resume
+  can fail loudly inside an application transaction, leaving the run paused and
+  asking the caller to retry outside it. A boundary persistence failure rolls
+  back the checkpoint, so retry/recovery re-runs the step and spends its provider
+  tokens again; notifications and child dispatch remain after commit. Rollout
+  requires all wait creators, resumers (web, console and application processes)
+  and checkpoint executors to run this version. No new migration or configuration.
+  See [upgrade guidance](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#concurrent-wait-creation-and-resume).
 
 - **`swarm:recover` repairs queued-hierarchical runs stranded by a pre-upgrade
   wait closer (#615).** Before the open-wait join rule (#600), a signal, wait

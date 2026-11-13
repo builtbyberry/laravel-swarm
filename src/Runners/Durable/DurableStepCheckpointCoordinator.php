@@ -85,11 +85,19 @@ class DurableStepCheckpointCoordinator
             && $hierarchicalResult->branches !== []
             && $hierarchicalResult->waitingParentNodeId !== null;
 
-        // Checkpoint and outbox writes share a transaction. At fan-out the same
-        // transaction also persists the declared boundary; its effects are collected
-        // below and run only after commit. Ordinary checkpoints retain their existing
-        // separate boundary transaction. Collected eager jobs are pushed in finally
-        // even when a post-commit notification throws; relay/recovery repairs a crash.
+        // Checkpoint and declared-boundary persistence share one transaction; effects
+        // are collected and run after commit. Ordinary path lock inventory:
+        // history -> run (guardedUpdate) -> optional stream seal -> run (createWait
+        // relock) -> generation update -> wait insert -> history. No step outbox
+        // entry is written at an entered boundary; without one, history -> run ->
+        // optional stream seal -> step outbox is the ordinary enqueue path. The
+        // hierarchical checkpoint also writes artifacts, node output and context
+        // before its guarded run update; native message consumption precedes the
+        // boundary. Those writes roll back with a failed persistence attempt.
+        // Closers take wait -> run -> context/history. That history-before-run
+        // inversion against closers is known and not changed here;
+        // transaction retries recover victims, they do not remove the lock cycle.
+        // See DurableRunRecorder and DurableSignalHandler for the owning writes.
         $stepEntries = [];
         $branchEntries = [];
         $boundaryEffects = [];
@@ -101,7 +109,7 @@ class DurableStepCheckpointCoordinator
         // join still sees every branch row, so the parent waits for all of them.
         $cap = $isBranchWait ? $this->admission->capForFanOut() : null;
 
-        $withTransaction = function () use ($run, $runId, $nextStepIndex, $hierarchicalResult, $context, $nativeSettingsAttempt, $cap, $swarm, $isBranchWait, $enterDurableBoundary, &$stepEntries, &$branchEntries, &$boundaryEffects, &$enteredBoundary): void {
+        $withTransaction = function () use ($run, $runId, $nextStepIndex, $hierarchicalResult, $context, $nativeSettingsAttempt, $cap, $swarm, $enterDurableBoundary, &$stepEntries, &$branchEntries, &$boundaryEffects, &$enteredBoundary): void {
             // Reset in case the surrounding transaction is retried.
             $stepEntries = [];
             $branchEntries = [];
@@ -111,15 +119,12 @@ class DurableStepCheckpointCoordinator
             if ($nativeSettingsAttempt !== null) {
                 $this->nativeInputs->commitConsumedMessages($context, $nativeSettingsAttempt);
             }
-            if ($isBranchWait) {
-                // Persist the declared obligation in the fan-out transaction. The
-                // collector keeps notifications and child dispatch outside its
-                // retry/rollback boundary, with the child's live input intact.
-                $deferEffects = static function (Closure $effect) use (&$boundaryEffects): void {
-                    $boundaryEffects[] = $effect;
-                };
-                $enteredBoundary = $enterDurableBoundary($run, $swarm, $context, $nextStepIndex, $deferEffects) === true;
-            }
+            // Keep notifications and child dispatch outside the retry/rollback
+            // boundary, with the child's live input intact.
+            $deferEffects = static function (Closure $effect) use (&$boundaryEffects): void {
+                $boundaryEffects[] = $effect;
+            };
+            $enteredBoundary = $enterDurableBoundary($run, $swarm, $context, $nextStepIndex, $deferEffects) === true;
 
             if ($hierarchicalResult !== null && $hierarchicalResult->branches !== []) {
                 $branches = $this->durableRuns->branchesFor($runId, $hierarchicalResult->waitingParentNodeId);
@@ -146,6 +151,11 @@ class DurableStepCheckpointCoordinator
                 return;
             }
 
+            if ($enteredBoundary) {
+                // Every exit from this boundary dispatches its own continuation.
+                return;
+            }
+
             $direct = $this->eager->directFor($run['queue_connection']);
             $entryId = $this->outbox->enqueueStep($runId, $nextStepIndex, $run['queue_connection'], $run['queue_name'], $direct);
 
@@ -169,17 +179,9 @@ class DurableStepCheckpointCoordinator
                 ($this->afterStepCheckpointHook)($runId, $nextStepIndex);
             }
 
-            if ($isBranchWait) {
-                // Already entered atomically with fan-out. Re-entering here could
-                // select a second wait or duplicate a child from the older context.
-                $this->runBoundaryEffects($runId, $boundaryEffects);
-            } else {
-                // Ordinary checkpoints retain the independent boundary transaction:
-                // a later notification failure must leave its intent recoverable.
-                $enteredBoundary = $enterDurableBoundary($run, $swarm, $context, $nextStepIndex, null) === true;
-            }
+            $this->runBoundaryEffects($runId, $boundaryEffects);
         } finally {
-            $this->pushCollected($runId, $nextStepIndex, $run, $enteredBoundary, $stepEntries, $branchEntries);
+            $this->pushCollected($runId, $nextStepIndex, $run, $stepEntries, $branchEntries);
         }
     }
 
@@ -217,24 +219,13 @@ class DurableStepCheckpointCoordinator
      * @param  list<int>  $stepEntries
      * @param  list<array{0: int, 1: string, 2: ?string, 3: ?string}>  $branchEntries
      */
-    protected function pushCollected(string $runId, int $nextStepIndex, array $run, bool $enteredBoundary, array $stepEntries, array $branchEntries): void
+    protected function pushCollected(string $runId, int $nextStepIndex, array $run, array $stepEntries, array $branchEntries): void
     {
         foreach ($branchEntries as [$entryId, $branchId, $connection, $queue]) {
             $this->eager->branch($entryId, $runId, $branchId, $connection, $queue);
         }
 
         foreach ($stepEntries as $entryId) {
-            if ($enteredBoundary) {
-                // The run is now waiting: its step entry can only be a no-op, and every
-                // way out of the boundary dispatches the continuation itself (signal
-                // release and child reconciliation enqueue a fresh entry, a wait
-                // timeout dispatches directly). Settle it rather than leave it for the
-                // relay to reclaim and push as a no-op once its reservation goes stale.
-                $this->outbox->settle($entryId, $runId);
-
-                continue;
-            }
-
             $this->eager->step($entryId, $runId, $nextStepIndex, $run['queue_connection'], $run['queue_name']);
         }
     }

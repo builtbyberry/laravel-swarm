@@ -132,7 +132,7 @@ These classes live in `BuiltByBerry\LaravelSwarm\Runners\Durable\` unless noted.
 | `DurableRunInspector` | `find` / `inspect*` / labels / details / progress persistence. |
 | `DurableLifecycleController` | Pause, resume, cancel, queue routing updates. |
 | `DurableRecoveryCoordinator` | `recover()` scan and redispatch semantics. |
-| `DurableBoundaryCoordinator` | Declarative waits and child-swarm boundary entry after checkpoints. |
+| `DurableBoundaryCoordinator` | Declarative waits and child-swarm intents committed with the step checkpoint. |
 | `DurableChildSwarmCoordinator` | Child durable dispatch and parent wait reconciliation. |
 | `DurableBranchCoordinator` / `DurableBranchAdvancer` | Durable branch lifecycle, worker execution, and branch terminal checkpointing. |
 | `DurableStepAdvancer` | Lease-owned coordinator for `advance()`; delegates execution setup, topology-specific advancement, checkpoints, and terminal transitions. |

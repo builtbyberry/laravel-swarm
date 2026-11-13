@@ -837,19 +837,18 @@ the child finishes, or `swarm:recover` releases the wait as timed out:
   after resume with a new idempotency key. See
   [Signals While Paused](durable-waits-and-signals.md#signals-while-paused).
 - Resume decides from a locked read of the run's open waits, so a wait released
-  at the same moment cannot leave the run waiting on nothing. If your application
-  calls `resume()` inside a transaction that already holds the run (for example
-  one that also paused it, or signalled it), a worker releasing one of its waits
-  at that moment, or another process accepting a signal for it, can deadlock
-  with it; the database aborts one side completely, and retrying it is safe.
-  Let Laravel retry the whole transaction:
-
-  ```php
-  DB::transaction(function () use ($operator, $runId) {
-      $operator->signal($runId, 'approval_received', ['approved' => true], 'approval-123');
-      $operator->resume($runId);
-  }, attempts: 3);
-  ```
+  at the same moment cannot leave the run waiting on nothing. Outside an
+  application transaction, it retries generation changes and database concurrency
+  failures up to three total attempts. Exhaustion throws a retryable
+  `SwarmException` saying `waits on it kept changing; retry the resume.` or
+  `the database kept reporting concurrency conflicts; retry the resume.`
+- Inside an application transaction, resume can throw the `SwarmException`
+  saying `retry the resume outside this transaction` when concurrent wait
+  creation changes its fence. The run stays paused. This is not a database
+  concurrency error, so `DB::transaction(..., attempts: 3)` does not retry it.
+  Retry resume outside that transaction after it commits. Database concurrency
+  errors still require retrying the whole application transaction. See
+  [concurrent wait creation and resume](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#concurrent-wait-creation-and-resume).
 
 `swarm:recover` is the safety net for stranded durable runs. Schedule it
 frequently:
@@ -920,7 +919,12 @@ responsibility — put a policy, gate, or middleware in front of the call.
 Control verbs **fail loud**: an unknown or foreign `runId`, or a run in a status
 the verb cannot act on, throws
 `BuiltByBerry\LaravelSwarm\Exceptions\SwarmException`. A verb never silently
-no-ops. `signal()` is idempotent per `idempotencyKey` (a duplicate delivery is
+no-ops. `resume()` also throws retryable `SwarmException` on retry exhaustion
+or with `retry the resume outside this transaction` inside an application
+transaction; the run stays paused. The latter is not a database concurrency
+error, so `attempts:` does not retry it. Retry resume after the transaction
+commits. See [concurrent wait creation and resume](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#concurrent-wait-creation-and-resume).
+`signal()` is idempotent per `idempotencyKey` (a duplicate delivery is
 reported as `duplicate`, not re-applied) and `recover()` is lease-guarded, so a
 double dispatch is safe.
 

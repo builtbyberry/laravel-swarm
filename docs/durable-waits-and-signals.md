@@ -139,20 +139,55 @@ with its run. Apply the [upgrade steps](https://github.com/builtbyberry/laravel-
 before replacing workers.
 
 The package retries database concurrency failures up to three attempts for wait
-creation, child-intent persistence, hierarchical fan-out and join release. If
-you call these operations inside your own database transaction, retry that
+creation, child-intent persistence, ordinary checkpoints, hierarchical fan-out
+and join release. If you call these operations inside your own database transaction, retry that
 **whole transaction** on a concurrency exception, for example with Laravel's
 `DB::transaction($work, attempts: 3)`. A nested savepoint cannot retry an
 InnoDB transaction that the engine has aborted. Keep retryable work free of
 external side effects.
 
-At a durable hierarchical fan-out, the framework persists its declared wait or
-child intent with the checkpoint and branch dispatch records, before branches
-can release the join. Notifications and child dispatch run after commit. A
-notification failure leaves committed state available to `swarm:recover` and
+At every durable step checkpoint, including hierarchical fan-out, the framework
+persists its declared wait or child intent in the checkpoint transaction. A
+concurrent pause, resume or relay cannot observe a committed checkpoint without
+its boundary. An entered declared boundary writes no continuation step outbox
+entry; the boundary release dispatches its continuation. An already-present
+outcome retains the ordinary enqueue path. A boundary persistence failure rolls
+back the checkpoint, so retry/recovery can re-run the agent step and spend its
+provider tokens again. `swarm.durable.job.tries` limits the attempts of one queued
+job; each `swarm:recover` redispatch is a fresh job, so a failure that persists
+can keep spending until the run is fixed or cancelled.
+`RoutesDurableWaits::durableWaits()` and
+`DispatchesChildSwarms::durableChildSwarms()` now run inside the checkpoint
+transaction under the run lock and may run again when it retries. They must be
+fast, deterministic and side-effect free. Persistence retries themselves do not
+repeat agent execution. Notifications and child dispatch
+run after commit. A notification failure leaves committed state available to `swarm:recover` and
 `swarm:relay`. Inside an application transaction, these effects wait for the
 swarm connection's outermost commit; a failure is reported without interrupting
 the application's later commit callbacks. Rollback discards the effects.
+
+Resume observes the wait-creation generation before its locking wait scan,
+then locks the run. An observed open wait returns a paused run to `waiting`.
+If the scan was empty but the generation changed, an outermost resume retries
+from a fresh transaction, sharing three total attempts with database concurrency
+errors. Exhaustion throws a retryable `SwarmException` with the last failure as
+`previous`, saying either `waits on it kept changing; retry the resume.` or
+`the database kept reporting concurrency conflicts; retry the resume.`
+Inside an application transaction on any engine, a wait created between the scan
+and run lock can throw `SwarmException` saying `a wait was opened on it
+concurrently; retry the resume outside this transaction.` On MySQL
+`REPEATABLE READ`, a wait created and closed since an older snapshot always
+triggers this conservative fence. The run remains paused. This is not a database
+concurrency error, so `DB::transaction(..., attempts: 3)` does not retry it;
+retry resume outside the application transaction after it commits. An observed open
+wait still wins over a conservative generation mismatch. SQLite relies on write
+serialization and retries; real lock scheduling depends on the database engine.
+
+Every creator, resumer (web, console and application processes) and checkpoint
+executor must run this version. Mixed versions remain vulnerable; applying the
+existing generation migration alone gives no protection. See
+[concurrent wait creation and resume](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#concurrent-wait-creation-and-resume)
+for the rollout and the existing child recovery and checkpoint/closer limits.
 
 ## Declaring Waits On A Swarm
 
@@ -205,9 +240,10 @@ class ApprovalSwarm implements Swarm, RoutesDurableWaits
 }
 ```
 
-Declared waits are entered after an agent-step checkpoint. That means recovery
-can resume the run without replaying the provider call that completed before the
-wait.
+Declared waits commit atomically with the agent-step checkpoint. Once both have
+committed, recovery can resume after the wait without replaying that completed
+provider call. A failure while persisting the boundary rolls back the checkpoint
+and can cause the step to run again on retry/recovery.
 
 ## Sending Signals
 

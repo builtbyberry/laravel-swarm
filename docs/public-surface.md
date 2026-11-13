@@ -65,7 +65,7 @@ records preserved contracts, exact removal scope and unsupported new integration
 | `#[QueuedHierarchicalParallelCoordination]` | Opt a hierarchical queued swarm into multi-worker parallel coordination. | [Hierarchical Routing](hierarchical-routing.md#queue) |
 | `#[DurableParallelFailurePolicy]` | Configure durable parallel branch failure behavior. | [Durable Execution](durable-execution.md#durable-hierarchical-parallel-flow), [Parallel Research Swarm](../examples/parallel-research-swarm/README.md) |
 | `#[DurableRetry]` | Declare durable retry policy on a swarm or agent method. | [Durable Retries And Progress](durable-retries-and-progress.md) |
-| `#[DurableWait]` | Declare durable waits entered after checkpoints. | [Durable Waits And Signals](durable-waits-and-signals.md) |
+| `#[DurableWait]` | Declare durable waits committed with the step checkpoint. | [Durable Waits And Signals](durable-waits-and-signals.md) |
 | `#[DurableLabels]` | Attach initial durable labels for inspection. | [Durable Waits And Signals](durable-waits-and-signals.md#labels-and-details), [Durable Execution](durable-execution.md#durable-operator-surfaces) |
 | `#[DurableDetails]` | Attach durable details for inspection. | [Durable Waits And Signals](durable-waits-and-signals.md#labels-and-details), [Durable Execution](durable-execution.md#durable-operator-surfaces) |
 | `#[MemoryReplay]` | Override the global `swarm.memory.replay_mode` config for a single swarm class. Accepts `ReplayMode::FrozenView` (default; agents re-execute against the original invocation's memory snapshot, buffer Run-scope mutations, and save them after invocation, guardrails, and step recording succeed) or `ReplayMode::FreshExecution` (agents re-execute against live memory; use only when idempotency is guaranteed externally). When absent, the global config default (`frozen_view`) applies. (v0.9.0+) | [Swarm Memory](memory.md#replay-semantics) |
@@ -98,7 +98,12 @@ controller, an approval workflow, or scheduled maintenance). Resolve it with
 `SwarmHistory` / `RunHistoryStore` path below. The contract is deliberately
 authorization-agnostic: authorizing that a caller may control a given run is
 the consuming application's responsibility. Verbs fail loud (throw
-`SwarmException`) on an unknown run — never a silent no-op.
+`SwarmException`) on an unknown run. `resume()` also throws retryable
+`SwarmException` on retry exhaustion or with `retry the resume outside this
+transaction` inside an application transaction, leaving the run paused. The
+latter is not a database concurrency error, so `attempts:` does not retry it;
+retry resume after the transaction commits. See
+[concurrent wait creation and resume](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#concurrent-wait-creation-and-resume).
 
 | Surface | Purpose | Primary documentation |
 | --- | --- | --- |
@@ -206,14 +211,15 @@ describe engine behavior for orientation only.
 | `Routing\RoutePlanSchema` | Reusable JsonSchema builders — `worker()`, `rollup()`, `parallel()`, `finish()`, `node()` — that type each hierarchical route-plan node variant and combine them with `laravel/ai` ^0.9 `anyOf`, so a coordinator with a known node skeleton constrains the model to a valid node shape. `HierarchicalRoutePlanner` stays the authoritative validator. `worker()` declares `next` as required-but-nullable and `with_outputs` as a required list (v0.28.1). (v0.21.0+) | [Hierarchical Routing](hierarchical-routing.md#constraining-node-shape-with-anyof) |
 | `ConfiguresDurableRetries` | Configure per-swarm and per-agent durable retry policies. | [Durable Retries And Progress](durable-retries-and-progress.md) |
 | `RoutesDurableBranches` | Route durable parallel branches to a specific queue connection and queue name. | [Durable Execution](durable-execution.md) |
-| `RoutesDurableWaits` | Declare durable waits entered after checkpoints; each wait specifies name, optional timeout, and optional metadata. | [Durable Waits And Signals](durable-waits-and-signals.md) |
-| `DispatchesChildSwarms` | Declare durable child swarms dispatched after checkpoints; parent pauses until all children complete. | [Durable Child Swarms](durable-child-swarms.md) |
+| `RoutesDurableWaits` | Declare durable waits committed with the step checkpoint; each wait specifies name, optional timeout, and optional metadata. | [Durable Waits And Signals](durable-waits-and-signals.md) |
+| `DispatchesChildSwarms` | Declare durable child intents committed with the step checkpoint; dispatch runs after commit and the parent waits until all children complete. | [Durable Child Swarms](durable-child-swarms.md) |
 | `ContextStore` | Store active run context. | [Persistence And History](persistence-and-history.md) |
 | `ArtifactRepository` | Store step and run artifacts. | [Persistence And History](persistence-and-history.md) |
 | `RunHistoryStore` | Store run and step history. | [Persistence And History](persistence-and-history.md) |
 | `StreamEventStore` | Store replayable stream events. | [Streaming](streaming.md), [Persistence And History](persistence-and-history.md#replaying-stream-events) |
 | `DurableRunStore` | Durable runtime persistence and operational reads (e.g. `find()`, `runIdsForLabels()`, `recoverableQueuedResumes()` — added v0.12.2, see [Upgrading](../UPGRADING.md#upgrading-to-v0122)). `waitForBranches()` locks the run row before any other write, and a caller writes neither the run's context nor its history row before calling it in the same transaction (realtime-dispatch, see [Upgrading](../UPGRADING.md#a-wait-closing-while-its-run-fans-out)). `parentsWaitingOnTerminalChildren()` returns a parent for a terminal child only while the parent's wait for that child is still open, applied before the limit (realtime-dispatch, see [Upgrading](../UPGRADING.md#rolling-out-the-open-wait-join-rule)). | [Durable Runtime Architecture](durable-runtime-architecture.md), [Durable Execution](durable-execution.md) |
 | `AcceptsDurableSignals` | Optional capability for a `DurableRunStore`: record a signal in the transaction that accepts it, so an acceptance that fails can be sent again with the same idempotency key. The bundled database store implements it; a custom or decorating store keeps it only by implementing and forwarding `acceptSignal()` and `signalForIdempotencyKey()`. `acceptSignal()` is called for a waiting run and for a paused one, and must leave a paused run paused (#601). (realtime-dispatch) | [Durable Waits And Signals](durable-waits-and-signals.md), [Upgrading](../UPGRADING.md#a-wait-closing-while-its-run-fans-out) |
+| `Exceptions\DurableWaitSetChangedException` | Public retry signal a store's `resume()` throws without writing when its empty wait scan and locked generation disagree; the lifecycle controller catches it and retries from a fresh transaction (#621). (realtime-dispatch) | [Upgrading](../UPGRADING.md#concurrent-wait-creation-and-resume) |
 | `ReleasesWaitingRunForFailure` | Optional capability for a `DurableRunStore`: `releaseWaitingRunForFailure()` moves a parent waiting at its branch boundary to `pending` whatever waits are open, so a `fail_run` branch failure fails it at once. The bundled database store implements it; a custom or decorating store keeps it only by implementing and forwarding the method. Without it, the parent is not failed while a wait is open, and a later `swarm:recover` sweep fails it once its waits have closed (#616). (realtime-dispatch) | [Durable Execution](durable-execution.md#durable-hierarchical-parallel-flow), [Upgrading](../UPGRADING.md#a-branch-join-waits-for-open-waits) |
 | `SwarmInputGuardrail` | Validate task input before any agent runs. | [Guardrails](guardrails.md), [Guardrails Policy](../examples/guardrails-policy/README.md) |
 | `SwarmStepGuardrail` | Validate each agent output before the step is recorded. | [Guardrails](guardrails.md), [Guardrails Policy](../examples/guardrails-policy/README.md) |

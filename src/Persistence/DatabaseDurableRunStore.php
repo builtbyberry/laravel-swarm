@@ -12,6 +12,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\ReleasesWaitingRunForFailure;
 use BuiltByBerry\LaravelSwarm\Contracts\StoresDurableCitationEvidence;
 use BuiltByBerry\LaravelSwarm\Contracts\StoresDurableNativeStepResults;
 use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
+use BuiltByBerry\LaravelSwarm\Exceptions\DurableWaitSetChangedException;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostDurableLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\ConfirmsHeldLease;
@@ -523,15 +524,7 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
     public function releaseWaitingRunForJoin(string $runId, int $nextStepIndex): bool
     {
         return $this->connection->transaction(function () use ($runId, $nextStepIndex): bool {
-            // Observe before the wait scan. An older application snapshot can
-            // only make this conservative; the locked read below is current.
-            $generationQuery = $this->table()->where('run_id', $runId);
-            if ($this->connection->getDriverName() === 'sqlsrv') {
-                // Do not retain a shared run lock before taking the wait locks
-                // when an application uses a stricter SQL Server isolation level.
-                $generationQuery->lock('with (readcommitted)');
-            }
-            $observedGeneration = (string) $generationQuery->value('wait_generation');
+            $observedGeneration = $this->observeWaitGeneration($runId);
 
             // An open wait (a signal wait, or a child swarm's child:<id> wait) holds the run
             // at its join: releasing it would run the join past an unsignalled wait. The wait
@@ -1347,15 +1340,14 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
     public function resume(string $runId): bool
     {
         return $this->connection->transaction(function () use ($runId): bool {
-            // An open wait (a signal wait, or a child swarm's child:<id> wait) keeps the run
-            // waiting: resuming to pending would let the next step run without the signal or
-            // the child's outcome. The wait rows are read before the run row is written — the
-            // order every wait release takes (wait UPDATE, then syncRunWaitSummary on the run)
-            // — and with a shared lock, which is a current read even inside an older MySQL
-            // REPEATABLE READ snapshot and waits for a concurrent release of the same wait to
-            // commit instead of reading it as still open. Every open wait row is read and
-            // locked, not just the first: exists() or first() would stop short of a row
-            // another transaction is releasing.
+            $observedGeneration = $this->observeWaitGeneration($runId);
+
+            // Keep wait S -> run X: this current scan waits for closers even in an
+            // older MySQL RR snapshot. Never take another wait lock under the run
+            // lock, since a closer can hold that wait while waiting for the run.
+            // A creator arriving after this resume holds the run waits for it and
+            // then sets the run waiting itself. MySQL RR
+            // gap-lock cycles with creators are retried, not removed by this fence.
             $openWaitIds = $this->waitTable()
                 ->where('run_id', $runId)
                 ->where('status', 'waiting')
@@ -1363,17 +1355,23 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
                 ->sharedLock()
                 ->pluck('id')
                 ->all();
-            $hasOpenWait = $openWaitIds !== [];
+            $this->afterResumeWaitScan($runId);
 
-            // A paused run's cursor and branch rows do not move: no step runs and joins need
-            // a waiting run.
-            $run = $this->find($runId);
-            $nodeId = is_string($run['current_node_id'] ?? null) ? $run['current_node_id'] : null;
-            $hasBranchBoundary = $nodeId !== null && $this->branchTable()
-                ->where('run_id', $runId)
-                ->where('parent_node_id', $nodeId)
-                ->exists();
-            $status = $hasBranchBoundary || $hasOpenWait ? 'waiting' : 'pending';
+            $run = $this->lockRunRow($runId);
+            if ($run === null || $run->status !== 'paused') {
+                return false;
+            }
+
+            if ($openWaitIds !== []) {
+                $status = 'waiting';
+            } else {
+                if ((string) $run->wait_generation !== $observedGeneration) {
+                    throw new DurableWaitSetChangedException;
+                }
+
+                $hasBranchBoundary = $this->lockedRunIsAtBranchBoundary($runId, $run);
+                $status = $hasBranchBoundary ? 'waiting' : 'pending';
+            }
 
             return $this->table()
                 ->where('run_id', $runId)
@@ -1386,6 +1384,12 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
                 ]) === 1;
         });
     }
+
+    /**
+     * @internal Test synchronization seam after the shared wait scan (wait S locks
+     * held), before the run lock. No-op in production; not an extension point.
+     */
+    protected function afterResumeWaitScan(string $runId): void {}
 
     public function cancel(string $runId): bool
     {
@@ -2940,11 +2944,7 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
                 return;
             }
 
-            $nodeId = is_string($run->current_node_id ?? null) ? $run->current_node_id : null;
-            $atBranchBoundary = $nodeId !== null && ($this->branchTable()
-                ->where('run_id', $runId)
-                ->where('parent_node_id', $nodeId)
-                ->exists() || $this->lockedRunRowIsAtFanOut($run));
+            $atBranchBoundary = $this->lockedRunIsAtBranchBoundary($runId, $run);
 
             $this->table()
                 ->where('run_id', $runId)
@@ -2981,6 +2981,33 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
                 'wait_timeout_at' => $nextTimedWait->timeout_at ?? null,
                 'updated_at' => $timestamp,
             ]);
+    }
+
+    /**
+     * Observe before the wait scan without retaining a shared run lock. A creator
+     * holds the run lock through its insert, so a missed creation is committed
+     * when our locked run read returns. An older application snapshot can only
+     * make the generation fence conservative.
+     */
+    protected function observeWaitGeneration(string $runId): string
+    {
+        $query = $this->table()->where('run_id', $runId);
+        if ($this->connection->getDriverName() === 'sqlsrv') {
+            // Avoid retaining a shared run lock before taking the wait locks.
+            $query->lock('with (readcommitted)');
+        }
+
+        return (string) $query->value('wait_generation');
+    }
+
+    private function lockedRunIsAtBranchBoundary(string $runId, object $run): bool
+    {
+        $nodeId = is_string($run->current_node_id ?? null) ? $run->current_node_id : null;
+
+        return $nodeId !== null && ($this->branchTable()
+            ->where('run_id', $runId)
+            ->where('parent_node_id', $nodeId)
+            ->exists() || $this->lockedRunRowIsAtFanOut($run));
     }
 
     /**

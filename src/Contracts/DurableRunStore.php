@@ -156,7 +156,12 @@ interface DurableRunStore
      * branch work under its current node — and to `pending` otherwise. Decide from
      * a locked read of the run's open waits taken before the run row is written
      * (the order the wait releases use), so a wait released concurrently cannot
-     * leave the run waiting on nothing. Returns false when the run is not paused.
+     * leave the run waiting on nothing. Observe wait_generation before that locking
+     * scan, then lock the run; take no wait lock after the run lock. If the scan
+     * found no open wait and the locked generation differs, throw
+     * \BuiltByBerry\LaravelSwarm\Exceptions\DurableWaitSetChangedException without
+     * writing anything, so the caller retries from a fresh transaction.
+     * Returns false when the run is not paused.
      */
     public function resume(string $runId): bool;
 
