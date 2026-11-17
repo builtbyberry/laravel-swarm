@@ -80,7 +80,9 @@ the policy:
 
 - **A tool that throws inside a nested sub-agent.** `laravel/ai`'s `AgentTool`
   degrades any child-run failure to `Agent failed: <message>` and returns it as
-  the tool's result, so the parent swarm run continues.
+  the tool's result, so the parent swarm run continues. Verified on `laravel/ai`
+  1.0–1.4.0; on 1.4.1 the test that proves it fails for an unrelated upstream
+  reason, so this is unconfirmed there.
 - **A tool that throws a `ValidationException`.** `laravel/ai` returns the
   validation messages to the model as a corrective result, so the model can fix
   its arguments and retry, and the run continues.

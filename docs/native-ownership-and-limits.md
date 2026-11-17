@@ -8,8 +8,8 @@ decisions from the v0.28.0 native-feature adoption assessment without reopening 
 audit.
 
 It is verified against `laravel/ai` **v1.0.1** for the entries predating the
-realtime-dispatch release, and against **v1.3.0 and v1.4.0** for the
-tool-failure entry below; `composer.json` requires `^1.0`. It sits on top of — and is distinct from — the earlier
+realtime-dispatch release, and against **v1.3.0, v1.4.0 and v1.4.1** for the
+tool-failure entry below, except where that entry says otherwise; `composer.json` requires `^1.0`. It sits on top of — and is distinct from — the earlier
 `laravel/ai` **preservation baseline** (the C1–C6 review findings and the R01–R30
 disposition ledger in
 [Laravel AI 1.0 adoption evidence](ai-1-release-evidence.md) and
@@ -124,8 +124,9 @@ returned to the model as a failed tool result instead of ending the run. Below
 - **Exact upstream evidence.** `laravel/ai` v1.4.0,
   `Gateway/Concerns/InvokesTools.php` — a throwing handler is rethrown as
   `new ToolExecutionException($exception)` from that method's `catch (Throwable)`,
-  which `Gateway/TextGenerationLoop.php` catches in `executedToolResult()`,
-  reports, and converts into a failed tool result. v1.3.0 has neither the
+  which `Gateway/TextGenerationLoop.php` catches in `executedToolResult()`, then
+  reports and converts into a failed tool result (inline in v1.4.0, in
+  `failedToolResult()` from v1.4.1 — same behaviour). v1.3.0 has neither the
   exception class nor `executedToolResult()`'s catch.
 - **Preserved Swarm behavior (propagation).** Swarm's documented contract is the
   pre-1.4 one — a tool call failure surfaces at the agent-execution boundary —
