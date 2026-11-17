@@ -114,6 +114,35 @@ stream, so it cannot be streamed. This limit is upstream, not a Swarm choice.
   `laravel/ai` release moves past v1.0.1. Until then the rejection and the
   synchronous path stay as-is.
 
+### Tool-failure recovery is not backported below laravel/ai 1.4
+
+`laravel/ai` v1.4.0 made a throwing tool recoverable: the failure is reported and
+returned to the model as a failed tool result instead of ending the run. Below
+1.4 the capability does not exist upstream.
+
+- **Exact upstream evidence.** `laravel/ai` v1.4.0,
+  `vendor/laravel/ai/src/Gateway/Concerns/InvokesTools.php` — a throwing handler
+  is rethrown as `new ToolExecutionException($exception)`, which
+  `Gateway/TextGenerationLoop.php` catches, reports, and converts into a failed
+  tool result. v1.3.0 has neither the exception class nor the catch.
+- **Preserved Swarm behavior (propagation).** Swarm's documented contract is the
+  pre-1.4 one — a tool call failure surfaces at the agent-execution boundary —
+  so `swarm.native_tool_failures` defaults to `propagate` and Swarm rethrows the
+  handler's own exception from inside `laravel/ai`'s catch block on every
+  supported version. The exception a caller sees is the tool's own, never
+  `laravel/ai`'s `@internal` wrapper, which does not exist before 1.4. Proven by
+  `tests/Feature/Adoption/NativeToolFailurePropagationTest.php`.
+- **The limit.** Setting `swarm.native_tool_failures` to `recover` opts into the
+  native behavior, and on `laravel/ai` >= 1.4 it does exactly that. On 1.0–1.3
+  there is nothing to defer to, so `recover` is indistinguishable from
+  `propagate`. Swarm does **not** synthesise recovery below 1.4: doing so would
+  reimplement a native capability behind the package's own API, which is the
+  thing this document exists to refuse.
+- **Affected modes.** Every mode, since all of them drive the native text loop.
+- **Trigger for reevaluation.** Revisit when the supported `laravel/ai` floor
+  moves to >= 1.4, at which point `recover` is uniformly available and the
+  version-dependent half of this limit disappears.
+
 ### Other recorded limits
 
 The retained limits documented here are unchanged by this release: no post-result

@@ -454,6 +454,38 @@ ran a release without the rule in [A branch join waits for open waits](#a-branch
   can still deadlock with a wait closer. Retry the whole aborted transaction, and
   avoid holding a run's row across branch completion or resume.
 
+### Native tool failures on `laravel/ai` 1.4
+
+`laravel/ai` v1.4.0 (PR #1191) changed what a throwing tool does: instead of
+ending the run, the exception is wrapped in an internal `ToolExecutionException`,
+reported, and returned to the model as `The tool call failed: <message>` so the
+agent can recover. Swarm's documented contract is the pre-1.4 one — a tool call
+failure surfaces at the agent-execution boundary — so **Swarm preserves
+propagation by default** and nothing changes for you on upgrade: the run still
+fails, and the exception your handler receives is the one your tool threw, not
+`laravel/ai`'s internal wrapper.
+
+To take `laravel/ai`'s behavior instead, set `swarm.native_tool_failures` to
+`recover` (`SWARM_NATIVE_TOOL_FAILURES=recover`). On `laravel/ai` 1.0–1.3 that
+setting has no effect, because the recovery does not exist upstream and Swarm
+does not synthesise it.
+
+Propagation is implemented with a wildcard `ToolFailed` listener that rethrows
+from inside `laravel/ai`'s catch block, so it holds only while that dispatch
+reaches Swarm. On `laravel/ai` >= 1.4, four things leave `laravel/ai`'s recovery
+in place whatever the policy says:
+
+- a bare `Event::fake()` (an explicit `Event::fake([...])` list is fine);
+- your own **wildcard** `ToolFailed` listener, including a `'*'` catch-all, since
+  `Illuminate\Events\Dispatcher` merges exact-name listeners ahead of wildcard
+  ones — register `ToolFailed` listeners by exact name and they fire normally;
+- an exact-name `ToolFailed` listener that returns `false`, which halts dispatch;
+- `Event::defer()`, which queues the dispatch instead of running listeners inline.
+
+On `laravel/ai` 1.0–1.3 each of these still failed the run, so if your
+application does any of them around a swarm run, check whether you depend on a
+failing tool being terminal.
+
 ## Upgrading to v0.28.1
 
 This patch deliberately departs from the additive-only patch policy stated

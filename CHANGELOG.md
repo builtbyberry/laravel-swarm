@@ -108,6 +108,16 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   it once its waits have closed. See
   [UPGRADING](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#a-branch-join-waits-for-open-waits).
 
+- **`swarm.native_tool_failures` chooses what a failing native tool does to the
+  run (#634).** `propagate` (the default, `SWARM_NATIVE_TOOL_FAILURES`) keeps
+  Swarm's documented contract on every supported `laravel/ai` version: the tool
+  handler's own exception surfaces at the agent-execution boundary and the run
+  fails. `recover` defers to `laravel/ai`, which from v1.4.0 reports the failure
+  and hands it to the model as a failed tool result so the agent can carry on;
+  on `laravel/ai` 1.0–1.3 there is no such recovery upstream, so `recover`
+  behaves as `propagate` there. An unrecognised value falls back to `propagate`.
+  See [Error Handling](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/error-handling.md#native-tool-failures).
+
 ### Changed
 
 - **Durable resume retries and checkpoint boundaries (#621).** Review the
@@ -174,6 +184,23 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   check keeps letting a stray resume job run the continuation early. The
   protected `DatabaseRunHistoryStore::isQueueHierarchicalParallelRun()` is removed.
   See [UPGRADING](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#a-queued-hierarchical-resume-runs-only-once-its-join-is-released).
+
+- **A failing native tool still fails the run on `laravel/ai` 1.4 (#634).**
+  `laravel/ai` v1.4.0 (PR #1191, "Let agents recover from tool failures")
+  stopped a throwing tool from ending the run: the exception is wrapped
+  internally, reported, and returned to the model as
+  `The tool call failed: <message>`. Left alone, a swarm whose native tool failed
+  would have completed successfully with output the model produced after being
+  told the tool failed. Swarm now rethrows the handler's own exception from
+  inside `laravel/ai`'s catch block — the same program point where 1.0–1.3
+  failed — so the contract is unchanged on upgrade, the exception a caller sees
+  is the tool's own rather than `laravel/ai`'s internal wrapper, and a sibling
+  tool call in the same step does not run its side effect first. `ToolFailed` is
+  still dispatched to application listeners registered by exact name. Four
+  dispatcher-level cases leave `laravel/ai`'s recovery in place regardless of the
+  policy — see
+  [when `propagate` does not apply](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/error-handling.md#when-propagate-does-not-apply)
+  and [UPGRADING](UPGRADING.md).
 
 ### Fixed
 

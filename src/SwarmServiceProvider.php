@@ -73,6 +73,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmOperator;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmTelemetrySink;
+use BuiltByBerry\LaravelSwarm\Enums\NativeToolFailurePolicy;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Memory\CacheMemoryStore;
 use BuiltByBerry\LaravelSwarm\Memory\ConversationPropagationPolicy;
@@ -167,6 +168,7 @@ use Illuminate\Contracts\Foundation\CachesConfiguration;
 use Illuminate\Encryption\Encrypter;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
+use Laravel\Ai\Events\ToolFailed;
 use Laravel\Octane\Contracts\OperationTerminated;
 use Psr\Log\LoggerInterface;
 
@@ -556,6 +558,8 @@ class SwarmServiceProvider extends ServiceProvider
             Event::subscribe(SwarmTelemetryEventListener::class);
         }
 
+        $this->registerNativeToolFailurePropagation();
+
         $this->registerOctaneStateReset();
 
         if ($this->app->runningInConsole()) {
@@ -618,6 +622,57 @@ class SwarmServiceProvider extends ServiceProvider
      * the package. The contract is implemented by every terminated event
      * (request, task, tick), so one binding covers all three reset points.
      */
+    /**
+     * Preserve Swarm's documented tool-failure contract on laravel/ai >= 1.4.
+     *
+     * laravel/ai v1.4.0 (PR #1191) stopped a throwing tool from ending the run:
+     * `InvokesTools::executeTool()` wraps the handler's exception in an internal
+     * `ToolExecutionException` and `TextGenerationLoop` reports it and hands the
+     * model a failed tool result instead. Swarm promises the pre-1.4 behaviour —
+     * a tool call failure surfaces at the agent-execution boundary — so this
+     * rethrows the handler's own exception from inside laravel/ai's catch block,
+     * which is the exact program point where 1.0-1.3 failed. No version check is
+     * needed: `ToolFailed` is dispatched identically on every supported version.
+     *
+     * Registered as a WILDCARD listener deliberately.
+     * `Illuminate\Events\Dispatcher::getListeners()` merges exact-name listeners
+     * ahead of wildcard ones whatever the registration order, so this runs after
+     * an application's own exact-name `ToolFailed` listeners and never pre-empts
+     * them. That ordering is observable framework behaviour rather than a
+     * documented guarantee, and NativeToolFailurePropagationTest pins it: if a
+     * future Laravel release reorders listeners, that test fails rather than the
+     * contract lapsing silently.
+     *
+     * Propagation therefore holds only when the dispatch reaches this listener.
+     * docs/error-handling.md and UPGRADING.md document the four ways an
+     * application can bypass it (its own wildcard listener, a bare
+     * `Event::fake()`, an exact-name listener returning false, and
+     * `Dispatcher::defer()`).
+     */
+    protected function registerNativeToolFailurePropagation(): void
+    {
+        Event::listen(ToolFailed::class.'*', function (string $event, array $payload): void {
+            $failed = $payload[0] ?? null;
+
+            if (! $failed instanceof ToolFailed) {
+                return;
+            }
+
+            // Read per dispatch, not at registration, so a runtime config change
+            // is honoured. tryFromConfig() never throws: a typo'd value must not
+            // mask the tool's own exception with a ValueError from in here.
+            $policy = NativeToolFailurePolicy::tryFromConfig(
+                $this->app->make('config')->get('swarm.native_tool_failures'),
+            );
+
+            if ($policy !== NativeToolFailurePolicy::Propagate) {
+                return;
+            }
+
+            throw $failed->exception;
+        });
+    }
+
     protected function registerOctaneStateReset(): void
     {
         $operationTerminated = 'Laravel\Octane\Contracts\OperationTerminated';

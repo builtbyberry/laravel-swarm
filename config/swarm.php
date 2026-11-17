@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Enums\NativeToolFailurePolicy;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Memory\DefaultMemoryCapturePolicy;
 use BuiltByBerry\LaravelSwarm\Memory\DefaultPropagationPolicy;
@@ -41,6 +42,23 @@ return [
         'max_structured_items' => (int) env('SWARM_NATIVE_RESULTS_MAX_STRUCTURED_ITEMS', 4096),
         'max_reasoning_bytes' => (int) env('SWARM_NATIVE_RESULTS_MAX_REASONING_BYTES', 65536),
     ],
+
+    // What a failing native tool does to the run.
+    //
+    // 'propagate' (default) keeps Swarm's documented contract on every supported
+    // laravel/ai version: the handler's own exception surfaces at the
+    // agent-execution boundary and the run fails. 'recover' defers to
+    // laravel/ai, which from v1.4.0 reports the failure and hands the model
+    // "The tool call failed: <message>" so the agent can carry on; on 1.0-1.3
+    // laravel/ai has no such recovery, so 'recover' behaves as 'propagate'
+    // there. An unrecognised value falls back to 'propagate'.
+    //
+    // 'propagate' is implemented by a wildcard ToolFailed listener, so it holds
+    // only while that dispatch reaches Swarm. A bare Event::fake(), an
+    // application wildcard ToolFailed listener, an exact-name listener that
+    // returns false, or Dispatcher::defer() each leave laravel/ai's own
+    // behaviour in place — see docs/error-handling.md and UPGRADING.md.
+    'native_tool_failures' => env('SWARM_NATIVE_TOOL_FAILURES', NativeToolFailurePolicy::Propagate->value),
 
     // Bound arbitrary provider activity data, retaining identity with an explicit
     // partial/limit marker when data is withheld. Limits do not cap event count.
