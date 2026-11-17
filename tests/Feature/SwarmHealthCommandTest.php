@@ -218,17 +218,38 @@ test('custom checkpoint citation notes do not bypass native-result readiness fai
         ->and($checkpoint['details'])->toContain('native-result readiness was checked');
 });
 
+test('swarm health reports the effective native tool-failure policy', function (): void {
+    expect(Artisan::call('swarm:health'))->toBe(0);
+
+    expect(Artisan::output())
+        ->toContain('Native tool failures')
+        ->toContain('effective policy=[propagate]');
+});
+
+test('swarm health warns when the native tool-failure policy is not recognised', function (): void {
+    // The per-failure read defaults silently on purpose, so this row is where an
+    // operator finds out their value was never in effect.
+    config()->set('swarm.native_tool_failure_policy', 'recovery');
+
+    Artisan::call('swarm:health');
+
+    expect(Artisan::output())
+        ->toContain('not a recognised policy')
+        ->toContain('effective policy=[propagate]');
+});
+
 test('swarm health json output is structured', function (): void {
     expect(Artisan::call('swarm:health', ['--json' => true]))->toBe(0);
 
     $payload = json_decode(Artisan::output(), true);
 
-    // 5 persistence checks + native-input readiness + 3 governed-by-default checks
+    // 5 persistence checks + native-input readiness + 4 governed-by-default checks
+    // (guardrails, audit sink, capture policy, native tool-failure policy)
     // + terminal callback delivery (a note while disabled).
     expect($payload)
         ->toBeArray()
         ->and($payload['ok'])->toBeTrue()
-        ->and($payload['checks'])->toHaveCount(10)
+        ->and($payload['checks'])->toHaveCount(11)
         ->and($payload['checks'][0])->toHaveKeys(['component', 'driver', 'store', 'status', 'details']);
 
     // Every check — including the new governance checks — carries the same shape.

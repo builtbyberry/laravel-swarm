@@ -622,57 +622,6 @@ class SwarmServiceProvider extends ServiceProvider
      * the package. The contract is implemented by every terminated event
      * (request, task, tick), so one binding covers all three reset points.
      */
-    /**
-     * Preserve Swarm's documented tool-failure contract on laravel/ai >= 1.4.
-     *
-     * laravel/ai v1.4.0 (PR #1191) stopped a throwing tool from ending the run:
-     * `InvokesTools::executeTool()` wraps the handler's exception in an internal
-     * `ToolExecutionException` and `TextGenerationLoop` reports it and hands the
-     * model a failed tool result instead. Swarm promises the pre-1.4 behaviour —
-     * a tool call failure surfaces at the agent-execution boundary — so this
-     * rethrows the handler's own exception from inside laravel/ai's catch block,
-     * which is the exact program point where 1.0-1.3 failed. No version check is
-     * needed: `ToolFailed` is dispatched identically on every supported version.
-     *
-     * Registered as a WILDCARD listener deliberately.
-     * `Illuminate\Events\Dispatcher::getListeners()` merges exact-name listeners
-     * ahead of wildcard ones whatever the registration order, so this runs after
-     * an application's own exact-name `ToolFailed` listeners and never pre-empts
-     * them. That ordering is observable framework behaviour rather than a
-     * documented guarantee, and NativeToolFailurePropagationTest pins it: if a
-     * future Laravel release reorders listeners, that test fails rather than the
-     * contract lapsing silently.
-     *
-     * Propagation therefore holds only when the dispatch reaches this listener.
-     * docs/error-handling.md and UPGRADING.md document the four ways an
-     * application can bypass it (its own wildcard listener, a bare
-     * `Event::fake()`, an exact-name listener returning false, and
-     * `Dispatcher::defer()`).
-     */
-    protected function registerNativeToolFailurePropagation(): void
-    {
-        Event::listen(ToolFailed::class.'*', function (string $event, array $payload): void {
-            $failed = $payload[0] ?? null;
-
-            if (! $failed instanceof ToolFailed) {
-                return;
-            }
-
-            // Read per dispatch, not at registration, so a runtime config change
-            // is honoured. tryFromConfig() never throws: a typo'd value must not
-            // mask the tool's own exception with a ValueError from in here.
-            $policy = NativeToolFailurePolicy::tryFromConfig(
-                $this->app->make('config')->get('swarm.native_tool_failures'),
-            );
-
-            if ($policy !== NativeToolFailurePolicy::Propagate) {
-                return;
-            }
-
-            throw $failed->exception;
-        });
-    }
-
     protected function registerOctaneStateReset(): void
     {
         $operationTerminated = 'Laravel\Octane\Contracts\OperationTerminated';
@@ -683,6 +632,69 @@ class SwarmServiceProvider extends ServiceProvider
 
         Event::listen($operationTerminated, static function (): void {
             ActiveRunContext::flush();
+        });
+    }
+
+    /**
+     * Preserve Swarm's documented tool-failure contract on laravel/ai >= 1.4.
+     *
+     * laravel/ai v1.4.0 (laravel/ai#1191) stopped a throwing tool from ending
+     * the run: the handler's exception is wrapped internally and the model is
+     * handed a failed tool result instead. Swarm promises the pre-1.4
+     * behaviour, so this rethrows the handler's own exception from inside
+     * laravel/ai's `catch (Throwable)` in `InvokesTools::executeTool()`, where
+     * `ToolFailed` is dispatched before the wrap -- the same program point
+     * where 1.0-1.3 failed. No version check is needed, and nothing here
+     * references a symbol that is absent before 1.4.
+     *
+     * Scoped to Swarm's own runs by the {@see ActiveRunContext} frame every
+     * runner enters around an agent invocation. laravel/ai dispatches
+     * `ToolFailed` for every tool failure in the process, so without the frame
+     * check installing Swarm would also make failures terminal for agents the
+     * application prompts directly, which Swarm does not own.
+     *
+     * Registered as a WILDCARD listener, from `booted()`, so application
+     * listeners are reached first: `Illuminate\Events\Dispatcher` merges
+     * exact-name listeners ahead of wildcard ones, and wildcards run in
+     * registration order. That ordering is observed framework behaviour rather
+     * than a documented guarantee, and NativeToolFailurePropagationTest pins
+     * it. The rethrow still ends the dispatch, so listeners ordered after this
+     * one do not run -- see docs/error-handling.md#native-tool-failures, which
+     * is the single copy of the preconditions and their costs.
+     */
+    protected function registerNativeToolFailurePropagation(): void
+    {
+        $this->app->booted(static function (): void {
+            Event::listen(ToolFailed::class.'*', static function (string $event, array $payload): void {
+                $failed = $payload[0] ?? null;
+
+                if (! $failed instanceof ToolFailed) {
+                    return;
+                }
+
+                // Only Swarm's own runs: a frame means a runner is invoking an
+                // agent. Outside one, laravel/ai keeps its own behaviour.
+                if (ActiveRunContext::current() === null) {
+                    return;
+                }
+
+                // Read per dispatch so a runtime change is honoured, through the
+                // helper so the closure holds no container. tryFromConfig() with
+                // an is_string() guard cannot throw: neither a typo'd value nor
+                // a non-string one (SWARM_NATIVE_TOOL_FAILURE_POLICY=false
+                // arrives as a bool) may mask the tool's own exception.
+                $configured = config('swarm.native_tool_failure_policy');
+
+                $policy = NativeToolFailurePolicy::tryFromConfig(
+                    is_string($configured) ? $configured : null,
+                );
+
+                if ($policy !== NativeToolFailurePolicy::Propagate) {
+                    return;
+                }
+
+                throw $failed->exception;
+            });
         });
     }
 

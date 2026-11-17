@@ -17,6 +17,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamStepCheckpointStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
+use BuiltByBerry\LaravelSwarm\Enums\NativeToolFailurePolicy;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableOutbox;
 use BuiltByBerry\LaravelSwarm\Streaming\Parallel\ParallelProcessStreamTransport;
 use BuiltByBerry\LaravelSwarm\Streaming\Parallel\ParallelStreamLimits;
@@ -107,6 +108,7 @@ class SwarmHealthCommand extends Command
             $results[] = $this->runGuardrailResolutionCheck($app, $config);
             $results[] = $this->runAuditSinkCheck($app);
             $results[] = $this->runCapturePolicyCheck($app);
+            $results[] = $this->runNativeToolFailurePolicyCheck($config);
 
             if ($this->option('parallel-streaming') === true
                 || (bool) $config->get('swarm.streaming.parallel.enabled', false)) {
@@ -434,6 +436,50 @@ class SwarmHealthCommand extends Command
             'details' => $total === 0
                 ? 'no global guardrails configured (swarm.guardrails.input/step/output empty)'
                 : "{$total} global guardrail ref(s) resolve from the container",
+        ];
+    }
+
+    /**
+     * Report the effective native tool-failure policy.
+     *
+     * The per-failure read defaults silently, because it runs inside the
+     * failure path — so this is where an operator finds out which policy is in
+     * effect, whether their configured value was recognised, and whether the
+     * installed laravel/ai even has a recovery to defer to. Without it, "my
+     * tool failed but the run succeeded" has three indistinguishable causes.
+     *
+     * @return array{component: string, driver: string, store: string, status: string, details: string}
+     */
+    protected function runNativeToolFailurePolicyCheck(ConfigRepository $config): array
+    {
+        /** @var mixed $configured */
+        $configured = $config->get('swarm.native_tool_failure_policy');
+
+        $parsed = NativeToolFailurePolicy::parse(is_string($configured) ? $configured : null);
+        $recoveryAvailable = class_exists('Laravel\\Ai\\Exceptions\\ToolExecutionException');
+
+        $details = "effective policy=[{$parsed['policy']->value}]";
+
+        $details .= $recoveryAvailable
+            ? '; installed laravel/ai recovers tool failures, so the policy is what decides'
+            : '; installed laravel/ai has no tool-failure recovery, so a failing tool fails the run either way';
+
+        if ($parsed['invalid']) {
+            return [
+                'component' => 'Native tool failures',
+                'driver' => 'n/a',
+                'store' => 'n/a',
+                'status' => 'warning',
+                'details' => 'swarm.native_tool_failure_policy is not a recognised policy; '.$details.'. Set it to propagate or recover.',
+            ];
+        }
+
+        return [
+            'component' => 'Native tool failures',
+            'driver' => 'n/a',
+            'store' => 'n/a',
+            'status' => 'ok',
+            'details' => $details,
         ];
     }
 

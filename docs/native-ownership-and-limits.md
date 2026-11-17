@@ -7,8 +7,9 @@ each), and the legacy-retirement schedule. It closes the retained and replaced
 decisions from the v0.28.0 native-feature adoption assessment without reopening the
 audit.
 
-It is verified against `laravel/ai` **v1.0.1** (the pinned release; `composer.json`
-requires `^1.0`). It sits on top of — and is distinct from — the earlier
+It is verified against `laravel/ai` **v1.0.1** for the entries predating the
+realtime-dispatch release, and against **v1.3.0 and v1.4.0** for the
+tool-failure entry below; `composer.json` requires `^1.0`. It sits on top of — and is distinct from — the earlier
 `laravel/ai` **preservation baseline** (the C1–C6 review findings and the R01–R30
 disposition ledger in
 [Laravel AI 1.0 adoption evidence](ai-1-release-evidence.md) and
@@ -27,7 +28,7 @@ identity, and accounting.
 | Concern | Owner | Notes and evidence |
 | --- | --- | --- |
 | Provider invocation and failover | Native | Failover is inside a native invocation; workflow/job retries are separate Swarm operations. See [Retry and operator limits](ai-0112-release-evidence.md#retry-and-operator-limits). |
-| Tool execution, the tool-call loop, and filesystem tools | Native | Swarm carries `ToolCall` / `ToolResult` as opaque passthrough; AgentTool nesting is an agent operation, not a Swarm worker. Swarm ships tool implementations (e.g. [filesystem tools](filesystem-tools.md), memory tools) that execute inside the native loop. |
+| Tool execution, the tool-call loop, and filesystem tools | Native | Swarm carries `ToolCall` / `ToolResult` as opaque passthrough; AgentTool nesting is an agent operation, not a Swarm worker. Swarm ships tool implementations (e.g. [filesystem tools](filesystem-tools.md), memory tools) that execute inside the native loop. **One exception since realtime-dispatch:** Swarm retains the *failure outcome* of that loop inside a swarm run — see [Tool-failure recovery is not backported below laravel/ai 1.4](#tool-failure-recovery-is-not-backported-below-laravelai-14). |
 | Structured-output generation | Native | A structured-output agent produces one parsed object, not a token stream — see [Limits](#limits-kept-on-purpose). |
 | Native conversation storage, authorization, retention | Native / application | Separately configured; **not** covered by Swarm capture or sealing — see [Native conversation storage](#native-conversation-storage-is-configured-separately). |
 | Workflow orchestration (topologies, routing, joins) | Swarm | Sequential, parallel, hierarchical, static hierarchical. |
@@ -121,27 +122,45 @@ returned to the model as a failed tool result instead of ending the run. Below
 1.4 the capability does not exist upstream.
 
 - **Exact upstream evidence.** `laravel/ai` v1.4.0,
-  `vendor/laravel/ai/src/Gateway/Concerns/InvokesTools.php` — a throwing handler
-  is rethrown as `new ToolExecutionException($exception)`, which
-  `Gateway/TextGenerationLoop.php` catches, reports, and converts into a failed
-  tool result. v1.3.0 has neither the exception class nor the catch.
+  `Gateway/Concerns/InvokesTools.php` — a throwing handler is rethrown as
+  `new ToolExecutionException($exception)` from that method's `catch (Throwable)`,
+  which `Gateway/TextGenerationLoop.php` catches in `executedToolResult()`,
+  reports, and converts into a failed tool result. v1.3.0 has neither the
+  exception class nor `executedToolResult()`'s catch.
 - **Preserved Swarm behavior (propagation).** Swarm's documented contract is the
   pre-1.4 one — a tool call failure surfaces at the agent-execution boundary —
-  so `swarm.native_tool_failures` defaults to `propagate` and Swarm rethrows the
-  handler's own exception from inside `laravel/ai`'s catch block on every
+  so `swarm.native_tool_failure_policy` defaults to `propagate` and Swarm
+  rethrows the handler's own exception from inside `InvokesTools::executeTool()`'s
+  `catch (Throwable)`, where `ToolFailed` is dispatched before the wrap, on every
   supported version. The exception a caller sees is the tool's own, never
   `laravel/ai`'s `@internal` wrapper, which does not exist before 1.4. Proven by
   `tests/Feature/Adoption/NativeToolFailurePropagationTest.php`.
-- **The limit.** Setting `swarm.native_tool_failures` to `recover` opts into the
-  native behavior, and on `laravel/ai` >= 1.4 it does exactly that. On 1.0–1.3
+- **The limit.** Setting `swarm.native_tool_failure_policy` to `recover` opts into
+  the native behavior, and on `laravel/ai` >= 1.4 it does exactly that. On 1.0–1.3
   there is nothing to defer to, so `recover` is indistinguishable from
   `propagate`. Swarm does **not** synthesise recovery below 1.4: doing so would
   reimplement a native capability behind the package's own API, which is the
   thing this document exists to refuse.
-- **Affected modes.** Every mode, since all of them drive the native text loop.
+- **Scope, and what the override does not reach.** The policy governs tool
+  failures inside a **swarm run**; agents the application prompts directly keep
+  the native behavior. Two native paths keep it even inside a swarm, on every
+  version: a tool throwing inside a nested `AgentTool` (degraded upstream to
+  `Agent failed: <message>`) and a tool throwing a `ValidationException`
+  (returned to the model as a corrective result). Both are documented in
+  [Error Handling](error-handling.md#two-cases-where-a-failing-tool-does-not-fail-the-run).
+- **Affected modes.** Every mode drives the native text loop, so the policy
+  applies in all of them, subject to the two native paths above.
+- **What the override assumes upstream.** That `ToolFailed` is dispatched from
+  inside `executeTool()`'s catch before the wrap; that it carries the handler's
+  own `$exception`; and that `executedToolResult()` catches only
+  `ToolExecutionException`, so a rethrown handler exception escapes unwrapped.
+  The nightly lane runs the full suite against moving `laravel/ai`, so a change
+  to any of the three surfaces within a day.
 - **Trigger for reevaluation.** Revisit when the supported `laravel/ai` floor
   moves to >= 1.4, at which point `recover` is uniformly available and the
-  version-dependent half of this limit disappears.
+  version-dependent half of this limit disappears. The `propagate` **default**
+  is a separate commitment: retire it when upstream marks the pre-1.4 semantics
+  unsupported, or at the next Swarm major, whichever comes first.
 
 ### Other recorded limits
 

@@ -163,3 +163,19 @@ test('memory tools agent scope is off by default and reads its own environment v
     'true' => ['true', true],
     'one' => ['1', true],
 ]);
+
+it('resolves the native tool-failure policy from the environment', function (?string $value, string $expected) {
+    // The env var is the operator's only surface for this policy, so pin that
+    // config/swarm.php actually reads it: a typo in the key would otherwise ship
+    // green while the documented variable silently did nothing.
+    $config = withEnvironment([
+        'SWARM_NATIVE_TOOL_FAILURE_POLICY' => $value,
+    ], fn (): array => require __DIR__.'/../../../config/swarm.php');
+
+    expect($config['native_tool_failure_policy'])->toBe($expected);
+})->with([
+    'unset defaults to propagate' => [null, 'propagate'],
+    'recover' => ['recover', 'recover'],
+    'propagate' => ['propagate', 'propagate'],
+    'an unrecognised value is passed through for the policy to resolve' => ['nonsense', 'nonsense'],
+]);

@@ -2,17 +2,26 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Enums\NativeToolFailurePolicy;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
+use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Tests\Feature\Adoption\Fixtures\NativeCapabilities\CapabilityAgent;
+use BuiltByBerry\LaravelSwarm\Tests\Feature\Adoption\Fixtures\NativeCapabilities\NativeCapabilityWire;
 use BuiltByBerry\LaravelSwarm\Tests\Feature\Adoption\Fixtures\NativeToolFailure\FailingTool;
-use BuiltByBerry\LaravelSwarm\Tests\Feature\Adoption\Fixtures\NativeToolFailure\NativeToolFailureWire;
 use BuiltByBerry\LaravelSwarm\Tests\Feature\Adoption\Fixtures\NativeToolFailure\SiblingTool;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
 use Laravel\Ai\Events\ToolFailed;
 
+/**
+ * The streamed path is covered by tests/Feature/Streaming/NativeHttpParityTest.php
+ * (the `tool` dataset), which this component must keep green: stream tool calls
+ * execute lazily while the consumer iterates, so that test is what proves the
+ * run frame propagation is scoped to is still on the stack at that moment.
+ */
 beforeEach(function () {
     config()->set('swarm.persistence.driver', 'database');
     config()->set('ai.providers.openai.key', 'test-key');
@@ -29,7 +38,7 @@ beforeEach(function () {
  *
  * @param  list<string>  $tools
  */
-function nativeToolFailureWire(array $tools, ?int &$turns = null): void
+function nativeToolFailureTurns(array $tools): void
 {
     $turns = 0;
 
@@ -37,15 +46,24 @@ function nativeToolFailureWire(array $tools, ?int &$turns = null): void
         $turns++;
 
         return Http::response($turns === 1
-            ? NativeToolFailureWire::toolCalls($tools)
-            : NativeToolFailureWire::message());
+            ? NativeCapabilityWire::toolCalls($tools)
+            : NativeCapabilityWire::message());
     });
 }
 
+function nativeToolFailureRecoveryExists(): bool
+{
+    return class_exists('Laravel\Ai\Exceptions\ToolExecutionException');
+}
+
 it('propagates the tool handler exception itself, not laravel/ai 1.4 internal wrapper', function () {
-    nativeToolFailureWire(['FailingTool']);
+    nativeToolFailureTurns([class_basename(FailingTool::class)]);
 
     $thrown = null;
+    $runId = null;
+    Event::listen(ToolFailed::class, function () use (&$runId) {
+        $runId = ActiveRunContext::current()?->runId;
+    });
 
     try {
         app(SwarmRunner::class)->agent(new CapabilityAgent([new FailingTool]))->prompt('task');
@@ -61,14 +79,23 @@ it('propagates the tool handler exception itself, not laravel/ai 1.4 internal wr
         ->and($thrown::class)->toBe(RuntimeException::class)
         ->and($thrown->getMessage())->toBe(FailingTool::MESSAGE)
         ->and(FailingTool::$calls)->toBe(1);
+
+    // The model is never handed the failure: the run dies inside the step
+    // rather than taking a second turn to answer around it.
+    Http::assertSentCount(1);
+
+    // And the run takes Swarm's terminal failure path, as the docs promise.
+    expect($runId)->not->toBeNull()
+        ->and(app(RunHistoryStore::class)->find($runId)['status'])->toBe('failed');
 });
 
 it('still dispatches ToolFailed to the application before the run fails', function () {
-    // Swarm propagates by rethrowing from a WILDCARD ToolFailed listener, which
-    // Illuminate\Events\Dispatcher merges AFTER every exact-name listener. This
-    // pins that ordering: an application listener registered the ordinary way
-    // must still see the failure. Registering Swarm's rethrow by exact name
-    // instead would pre-empt this listener and leave $failures at 0.
+    // Swarm propagates by rethrowing from a WILDCARD listener registered at
+    // booted(), which Illuminate\Events\Dispatcher merges AFTER every
+    // exact-name listener. This pins that ordering: an application listener
+    // registered the ordinary way must still see the failure. Registering
+    // Swarm's rethrow by exact name instead would pre-empt this listener and
+    // leave $failures at 0.
     $failures = 0;
     $seen = null;
     app('events')->listen(ToolFailed::class, function (ToolFailed $event) use (&$failures, &$seen) {
@@ -76,7 +103,7 @@ it('still dispatches ToolFailed to the application before the run fails', functi
         $seen = $event->exception->getMessage();
     });
 
-    nativeToolFailureWire(['FailingTool']);
+    nativeToolFailureTurns([class_basename(FailingTool::class)]);
 
     expect(fn () => app(SwarmRunner::class)->agent(new CapabilityAgent([new FailingTool]))->prompt('task'))
         ->toThrow(RuntimeException::class, FailingTool::MESSAGE);
@@ -86,50 +113,110 @@ it('still dispatches ToolFailed to the application before the run fails', functi
 it('does not run a sibling tool call from the same step once one tool has failed', function () {
     // laravel/ai executes EVERY tool call in a step before yielding any result,
     // so this is what distinguishes rethrowing from inside laravel/ai's own
-    // catch block — where 1.0-1.3 died, and the sibling never ran — from
+    // catch block -- where 1.0-1.3 died, and the sibling never ran -- from
     // deferring the throw to a later Swarm boundary, which would let the
     // sibling's side effect happen first.
-    nativeToolFailureWire(['FailingTool', 'SiblingTool']);
+    nativeToolFailureTurns([class_basename(FailingTool::class), class_basename(SiblingTool::class)]);
 
     expect(fn () => app(SwarmRunner::class)->agent(new CapabilityAgent([new FailingTool, new SiblingTool]))->prompt('task'))
         ->toThrow(RuntimeException::class, FailingTool::MESSAGE);
     expect(FailingTool::$calls)->toBe(1)
         ->and(SiblingTool::$calls)->toBe(0);
+    Http::assertSentCount(1);
 });
 
-it('falls back to propagating when the configured policy is not recognised', function () {
-    // The policy is read from inside the tool-failure path, so an unrecognised
-    // value must not throw a ValueError there and mask the tool's own
-    // exception. NativeToolFailurePolicy::tryFromConfig() defaults silently.
-    config()->set('swarm.native_tool_failures', 'not-a-policy');
+it('falls back to propagating when the configured policy cannot be read as a policy', function (mixed $configured) {
+    // The policy is read from inside the tool-failure path, so no value may
+    // throw there and mask the tool's own exception. A typo'd string is the
+    // obvious case; the non-string ones are the reachable ones --
+    // Illuminate\Support\Env casts `false`/`true` in .env to real booleans, and
+    // the published config file imports the enum, inviting the enum case itself.
+    config()->set('swarm.native_tool_failure_policy', $configured);
 
-    nativeToolFailureWire(['FailingTool']);
+    nativeToolFailureTurns([class_basename(FailingTool::class)]);
 
     expect(fn () => app(SwarmRunner::class)->agent(new CapabilityAgent([new FailingTool]))->prompt('task'))
         ->toThrow(RuntimeException::class, FailingTool::MESSAGE);
+})->with([
+    'typo' => 'not-a-policy',
+    'bool false' => false,
+    'bool true' => true,
+    'int' => 1,
+    'the enum itself, not its value' => NativeToolFailurePolicy::Recover,
+]);
+
+it('leaves a non-swarm laravel/ai agent run to laravel/ai', function () {
+    // The listener is scoped to swarm runs: an agent the application prompts
+    // directly is not Swarm's to govern, so on >= 1.4 it keeps upstream's
+    // recovery. Below 1.4 upstream has none, so the raw exception propagates
+    // there with or without Swarm -- version-asymmetric by nature.
+    nativeToolFailureTurns([class_basename(FailingTool::class)]);
+
+    $call = fn () => (new CapabilityAgent([new FailingTool]))->prompt('task');
+
+    if (nativeToolFailureRecoveryExists()) {
+        expect($call()->text)->toBe('workflow-complete');
+        expect(FailingTool::$calls)->toBe(1);
+        Http::assertSentCount(2);
+
+        return;
+    }
+
+    expect($call)->toThrow(RuntimeException::class, FailingTool::MESSAGE);
 });
 
-it('defers to laravel/ai and lets the run continue when the policy is recover', function () {
-    // laravel/ai only grew tool-failure recovery in v1.4.0 (the release that
-    // added the internal ToolExecutionException), so there is nothing to defer
-    // to below it and this guard is 1.4+ only. Feature-detected rather than
-    // version-pinned, and only ever in a test — never in src/.
-    if (! class_exists('Laravel\Ai\Exceptions\ToolExecutionException')) {
+it('defers to laravel/ai when the policy is recover', function () {
+    config()->set('swarm.native_tool_failure_policy', NativeToolFailurePolicy::Recover->value);
+
+    nativeToolFailureTurns([class_basename(FailingTool::class), class_basename(SiblingTool::class)]);
+
+    $run = fn () => app(SwarmRunner::class)->agent(new CapabilityAgent([new FailingTool, new SiblingTool]))->prompt('task');
+
+    if (! nativeToolFailureRecoveryExists()) {
+        // laravel/ai only grew tool-failure recovery in v1.4.0, so below it
+        // there is nothing to defer to and `recover` is documented as
+        // indistinguishable from `propagate`. Assert that, rather than skipping:
+        // it is the floor behaviour the docs promise.
+        expect($run)->toThrow(RuntimeException::class, FailingTool::MESSAGE);
+        expect(SiblingTool::$calls)->toBe(0);
+
+        return;
+    }
+
+    $response = $run();
+
+    // The run settles normally, the sibling ran, and the model was genuinely
+    // handed the failure -- the exact inverse of the propagate guards above.
+    expect($response->output)->toBe('workflow-complete')
+        ->and(FailingTool::$calls)->toBe(1)
+        ->and(SiblingTool::$calls)->toBe(1);
+    Http::assertSentCount(2);
+    Http::assertSent(fn (Request $request): bool => str_contains(
+        $request->body(),
+        'The tool call failed: '.FailingTool::MESSAGE,
+    ));
+});
+
+it('leaves laravel/ai recovery in place when the dispatch does not reach Swarm', function (Closure $arrange) {
+    // The preconditions documented in docs/error-handling.md#when-propagate-does-not-apply.
+    // Each is only observable on >= 1.4, where laravel/ai has a recovery to
+    // leave in place; below it the run fails either way.
+    if (! nativeToolFailureRecoveryExists()) {
         expect(true)->toBeTrue();
 
         return;
     }
 
-    config()->set('swarm.native_tool_failures', NativeToolFailurePolicy::Recover->value);
+    nativeToolFailureTurns([class_basename(FailingTool::class)]);
+    $arrange();
 
-    nativeToolFailureWire(['FailingTool', 'SiblingTool'], $turns);
+    $response = app(SwarmRunner::class)->agent(new CapabilityAgent([new FailingTool]))->prompt('task');
 
-    $response = app(SwarmRunner::class)->agent(new CapabilityAgent([new FailingTool, new SiblingTool]))->prompt('task');
-
-    // The run settles normally, the model was handed the failure and answered,
-    // and the sibling ran — the exact inverse of the propagate guards above.
     expect($response->output)->toBe('workflow-complete')
-        ->and($turns)->toBe(2)
-        ->and(FailingTool::$calls)->toBe(1)
-        ->and(SiblingTool::$calls)->toBe(1);
-});
+        ->and(FailingTool::$calls)->toBe(1);
+})->with([
+    'a bare Event::fake() dispatches nothing' => [fn () => Event::fake()],
+    'a listener reached first that returns false halts the dispatch' => [
+        fn () => app('events')->listen(ToolFailed::class, fn () => false),
+    ],
+]);

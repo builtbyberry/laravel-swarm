@@ -25,59 +25,134 @@ For input guardrail blocks on dispatch paths (`queue()`, `broadcastOnQueue()`, `
 
 ## Native Tool Failures
 
-When an application tool's handler throws, Swarm's contract is the one stated
-above: the failure surfaces at the **agent execution** boundary and the run takes
-the terminal failure path.
+When an application tool's handler throws inside a swarm run, Swarm's contract is
+the one stated above: the failure surfaces at the **agent execution** boundary and
+the run takes the terminal failure path.
 
-`laravel/ai` v1.4.0 changed this upstream. A throwing tool no longer ends the
-run: `InvokesTools::executeTool()` wraps the handler's exception in an internal
-`ToolExecutionException`, and the text generation loop reports it and hands the
-model `The tool call failed: <message>` as a failed tool result so the agent can
-recover. On `laravel/ai` 1.0–1.3 the exception simply propagated.
+`laravel/ai` v1.4.0 ([laravel/ai#1191](https://github.com/laravel/ai/pull/1191))
+changed this upstream. A throwing tool no longer ends the run: the handler's
+exception is wrapped in an internal `ToolExecutionException`, and the text
+generation loop reports it and hands the model `The tool call failed: <message>`
+as a failed tool result so the agent can recover. On `laravel/ai` 1.0–1.3 the
+exception simply propagated.
 
-Swarm preserves its own contract across that change. `swarm.native_tool_failures`
-(`SWARM_NATIVE_TOOL_FAILURES`) selects which behavior you get:
+Swarm preserves its own contract across that change.
+`swarm.native_tool_failure_policy` (`SWARM_NATIVE_TOOL_FAILURE_POLICY`) selects
+which behavior you get:
 
 | Value | Behavior |
 | --- | --- |
-| `propagate` (default) | The handler's own exception is rethrown and the run fails, on every supported `laravel/ai` version. |
+| `propagate` (default) | The handler's own exception is rethrown and the swarm run fails, on every supported `laravel/ai` version. |
 | `recover` | Defer to `laravel/ai`. On >= 1.4 the failure is reported and returned to the model and the run continues; on 1.0–1.3 `laravel/ai` has no such recovery, so this behaves as `propagate`. |
 
-An unrecognised value falls back to `propagate`. The value is read per failure,
-so a runtime change is honored.
+An unrecognised value falls back to `propagate`, and is warned about once at boot
+rather than from inside the failure path. The value is re-read on each failure, so
+a runtime change is honored **within that process** — but see
+[Where the policy is read](#where-the-policy-is-read) before relying on that.
 
 Under `propagate` the exception that reaches your handler is the one your tool
 threw — same class, same message — not Swarm's and not `laravel/ai`'s internal
-wrapper. `ToolFailed` is still dispatched to your own listeners before the run
-fails, and the terminal failure path is unchanged: history is written `failed`,
-`SwarmFailed` fires, and telemetry records the exception class. A tool that wants
-the run to continue while its result reads as failed should decline rather than
-throw — see [Native Step Results](native-step-results.md).
+wrapper. `ToolFailed` is still dispatched to your own exact-name listeners before
+the run fails, and the terminal failure path is unchanged: history is written
+`failed`, `SwarmFailed` fires, and telemetry records the exception class.
+
+### Scope: swarm runs only
+
+The policy governs tool failures **inside a swarm run**. Agents your application
+prompts directly, with no swarm involved, keep `laravel/ai`'s own behavior — on
+>= 1.4 that means they still recover. Installing Swarm does not change how the
+rest of your application handles tool failures.
+
+### Two cases where a failing tool does not fail the run
+
+Both hold on every supported `laravel/ai` version, so neither is introduced by
+the policy:
+
+- **A tool that throws inside a nested sub-agent.** `laravel/ai`'s `AgentTool`
+  degrades any child-run failure to `Agent failed: <message>` and returns it as
+  the tool's result, so the parent swarm run continues.
+- **A tool that throws a `ValidationException`.** `laravel/ai` returns the
+  validation messages to the model as a corrective result, so the model can fix
+  its arguments and retry, and the run continues.
+
+A tool that wants the run to continue while its result reads as failed should
+return a message rather than throw. Swarm then records the call `failed` in the
+step's `nativeResult->tools` (see [Native Step Results](native-step-results.md)
+for that field). A per-tool "failed but non-terminal" result is not on Swarm's
+public surface today; `swarm.native_tool_failure_policy` is the only lever.
 
 ### When `propagate` does not apply
 
 `propagate` is implemented by a wildcard `ToolFailed` listener that rethrows from
 inside `laravel/ai`'s own catch block, which is the program point where 1.0–1.3
 failed. It therefore holds **only while that event dispatch reaches Swarm's
-listener.** On `laravel/ai` >= 1.4, four things leave `laravel/ai`'s recovery in
+listener.** On `laravel/ai` >= 1.4, two things leave `laravel/ai`'s recovery in
 place regardless of the configured policy:
 
-- **A bare `Event::fake()`.** Nothing is dispatched, so the listener never runs.
-  `Event::fake([SomeEvent::class])` with an explicit list is unaffected.
-- **Your own wildcard `ToolFailed` listener**, including a `'*'` catch-all.
-  `Illuminate\Events\Dispatcher` merges exact-name listeners ahead of wildcard
-  ones, so Swarm's wildcard is reached before yours and yours does not run.
-  Register `ToolFailed` listeners by exact name and they fire normally.
-- **An exact-name `ToolFailed` listener that returns `false`**, which halts
-  dispatch before Swarm's listener.
-- **`Event::defer()`**, which queues the dispatch rather than running listeners
-  inline.
+- **A bare `Event::fake()`.** Nothing is dispatched, so the listener never runs
+  and the run completes. `Event::fake([SomeEvent::class])` with an explicit list
+  that omits `ToolFailed` is unaffected. This bites most often in a test — see
+  [Testing](testing.md).
+- **A listener reached before Swarm's that returns `false`,** which halts the
+  dispatch. Exact-name listeners are always reached first; a wildcard one is
+  reached first only if it was registered before Swarm's.
 
-None of these is version-dependent in the other direction: on `laravel/ai`
-1.0–1.3 each of them still failed the run, because the raw exception did not
-depend on a listener running. If your application does any of them around a
-swarm run and you need the failure to be terminal, catch the failed tool result
-yourself or stop doing it around swarm runs.
+Two further things are worth knowing, neither of which disables propagation:
+
+- **Your own wildcard `ToolFailed` listener may not run.** Swarm registers its
+  wildcard from `booted()`, and `Illuminate\Events\Dispatcher` runs wildcards in
+  registration order, so a wildcard registered after Swarm's does not run,
+  because the rethrow ends the dispatch. Propagation still holds. This applies on
+  every supported version, so a `'*'` catch-all event logger stops recording
+  `ToolFailed` for swarm runs. Register `ToolFailed` listeners by exact name and
+  they always fire.
+- **`Event::defer()` moves when the policy is evaluated.** A deferred dispatch is
+  flushed after the callback returns, by which time the run has left its frame —
+  so the policy does not apply, the run completes under `laravel/ai`'s recovery,
+  and no exception surfaces from the flush.
+
+The listener ordering above is observed framework behavior rather than a
+documented Laravel guarantee. Swarm's own test suite pins it, so a change in
+Laravel fails Swarm's tests rather than silently changing your application — but
+do not build anything load-bearing on listener order. Use `SwarmFailed` or
+Swarm telemetry to observe run failures.
+
+### Where the policy is read
+
+The value is read from configuration on each failure, so a `config()->set(...)`
+in the same process is honored. Two limits:
+
+- **Process-backed parallel branches and queue workers boot their own
+  configuration** from config files and the environment, so a runtime
+  `config()->set(...)` in the dispatching process does not reach them. Set
+  `SWARM_NATIVE_TOOL_FAILURE_POLICY` or the published config file so the value
+  holds on every execution path.
+- **If you publish `config/swarm.php` and run `config:cache`,** a copy published
+  before this release has no `native_tool_failure_policy` key and resolves to the
+  default. Add
+  `'native_tool_failure_policy' => env('SWARM_NATIVE_TOOL_FAILURE_POLICY', 'propagate'),`
+  to your published copy and re-cache before the env var has any effect.
+
+### What `recover` changes besides the control flow
+
+- **The tool's exception message leaves Swarm's redaction perimeter.** It is sent
+  to the provider as conversation text, persisted in native conversation rows
+  (which Swarm's capture flags and column encryption do not govern), reported to
+  your exception handler in full, and can be echoed by the model into the run's
+  output. Swarm otherwise defaults `swarm.audit.redact_exception_messages` to
+  `true` precisely because provider, driver and tool exception messages can carry
+  prompt fragments or PII. A tool that may run under `recover` should throw a
+  message that is safe to show a third party — and note that a message built from
+  user input becomes untrusted text in the agent's context.
+- **The failure leaves the audit-evidence surface.** The run is recorded
+  `completed`, and Swarm emits no tool-level evidence category, so the durable
+  traces are your exception handler's record and the prunable
+  `nativeResult->tools` entry. See [Compliance and audit](compliance-audit.md).
+- **Durable retry does not apply.** Under `propagate` a throwing tool reaches
+  Swarm's terminal path, where an agent carrying `#[DurableRetry]` can retry the
+  step with backoff. Under `recover` the failure never becomes a run failure, so
+  no retry is scheduled, `SwarmFailed` does not fire, and `swarm:recover` has
+  nothing to pick up.
 
 ---
 

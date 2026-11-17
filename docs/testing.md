@@ -40,6 +40,8 @@ original prompt in native events. Native generation counts do not replace Swarm
 workflow guardrail/effect assertions. Use mocked provider HTTP for this proof;
 ordinary fakes do not exercise the native wire path.
 
+**Tool failures and fakes:** a bare `Event::fake()` stops Swarm's tool-failure propagation on `laravel/ai` >= 1.4, so a swarm whose tool throws completes instead of failing. When you assert tool-failure behavior, fake an explicit list that omits `ToolFailed`, or do not fake events at all; see [Error Handling](error-handling.md#when-propagate-does-not-apply).
+
 **Guardrails and fakes:** `SwarmFake` records dispatch intent and bypasses the runner entirely. Guardrails do not fire when a swarm is faked. Test guardrail classes directly as plain PHP units using `RunContext::from()` and `GuardrailStepContext`; see [Guardrails Policy](../examples/guardrails-policy/README.md) for examples.
 
 ## Faking A Swarm

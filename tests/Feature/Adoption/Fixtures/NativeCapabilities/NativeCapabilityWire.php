@@ -37,6 +37,32 @@ class NativeCapabilityWire
     }
 
     /**
+     * Request-1 wire: instruct the model to call SEVERAL application tools in a
+     * single step, in the given order. The native loop runs every tool call in
+     * a step before yielding any result, so this is what a proof about one tool
+     * failing before its siblings needs.
+     *
+     * @param  list<string>  $tools
+     * @return array<string, mixed>
+     */
+    public static function toolCalls(array $tools): array
+    {
+        $output = [];
+
+        foreach (array_values($tools) as $index => $tool) {
+            $output[] = [
+                'type' => 'function_call',
+                'id' => 'item-call'.$index,
+                'call_id' => 'call'.$index,
+                'name' => $tool,
+                'arguments' => (string) json_encode(['value' => 'v'], JSON_THROW_ON_ERROR),
+            ];
+        }
+
+        return self::response($output);
+    }
+
+    /**
      * Request-2 wire: the final assistant message that settles the turn.
      *
      * @return array<string, mixed>

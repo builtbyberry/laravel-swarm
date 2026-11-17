@@ -4,34 +4,23 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Enums;
 
-use Laravel\Ai\Events\ToolFailed;
-
 /**
  * What Swarm promises when a native tool's handler throws (#634).
  *
- * laravel/ai v1.4.0 changed this upstream: a throwing tool no longer ends the
- * run. `InvokesTools::executeTool()` wraps the handler's exception in an
- * internal `ToolExecutionException`, and `TextGenerationLoop` reports it and
- * returns "The tool call failed: <message>" to the model as a failed tool
- * result, so the agent can recover. On laravel/ai 1.0-1.3 the exception simply
- * propagated and the run failed.
- *
- * Swarm's documented contract is the pre-1.4 one — a tool call failure surfaces
- * at the agent-execution boundary (see docs/error-handling.md) — so
+ * laravel/ai changed this in v1.4.0 (laravel/ai#1191): a throwing tool no
+ * longer ends the run. Swarm's documented contract is the pre-1.4 one, so
  * {@see self::Propagate} is the default and is preserved on every supported
- * laravel/ai version. {@see self::Recover} defers to laravel/ai instead.
+ * laravel/ai version, scoped to swarm runs.
  *
- * Propagation is implemented by a wildcard {@see ToolFailed} listener that
- * rethrows the handler's own exception from inside laravel/ai's catch block,
- * which is the exact program point where 1.0-1.3 failed. It therefore holds only
- * when that dispatch reaches Swarm's listener; the preconditions and the four
- * ways an application can bypass them are documented in docs/error-handling.md
- * and UPGRADING.md.
+ * The upstream story, the preconditions under which propagation holds, and
+ * what each value means for the operator are documented once, in
+ * docs/error-handling.md#native-tool-failures. Keep the prose there rather
+ * than restating laravel/ai's internals here.
  */
 enum NativeToolFailurePolicy: string
 {
     /**
-     * A failing native tool fails the run, rethrowing the handler's own
+     * A failing native tool fails the swarm run, rethrowing the handler's own
      * exception (default). Swarm's documented contract, on every supported
      * laravel/ai version.
      */
@@ -53,8 +42,10 @@ enum NativeToolFailurePolicy: string
      * is flagged invalid.
      *
      * Resolution via {@see tryFromConfig()} defaults silently, and deliberately
-     * so: this is read from inside the tool-failure path, where throwing on a
-     * typo'd config value would mask the tool's own exception with a ValueError.
+     * so: it is read from inside the tool-failure path, where throwing on a
+     * typo'd config value would mask the tool's own exception. The `invalid`
+     * flag is what `swarm:health` reads to tell an operator their configured
+     * value was never in effect, so the silence is confined to the hot path.
      *
      * @return array{policy: self, invalid: bool}
      */
