@@ -202,14 +202,17 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   so the contract is unchanged on upgrade, the exception a caller sees is the
   tool's own rather than `laravel/ai`'s internal wrapper, and a sibling tool call
   in the same step does not run its side effect first. Those four tests now pass
-  on `laravel/ai` 1.4.0 under the default policy. The rethrow is scoped to swarm
+  on `laravel/ai` 1.4.0 and 1.4.1 under the default policy. The rethrow is scoped to swarm
   runs, and `ToolFailed` is still dispatched to application listeners registered
   by exact name. One consequence is upstream's, not this change's: up to v1.4.0,
-  `AgentTool` caught a nested sub-agent's failure and returned
+  `AgentTool` caught a nested sub-agent's **own run failure** and returned
   `Agent failed: <message>` to the parent, so it never reached this policy;
-  **v1.4.1 removed that catch**, which makes such a failure an ordinary tool
-  failure carrying the parent agent, so `propagate` now fails the parent swarm
-  run. Swarm follows `laravel/ai` rather than re-creating the old degradation.
+  **v1.4.1 removed that catch**, which makes the child's exception an ordinary
+  tool failure of the parent's call, carrying the parent agent, so `propagate`
+  now fails the parent swarm run. Swarm follows `laravel/ai` rather than
+  re-creating the old degradation. A tool throwing *inside* a sub-agent is a
+  different case and is unchanged: that `ToolFailed` carries the child agent,
+  which Swarm is not invoking, so `laravel/ai` recovers it inside the child.
   For the preconditions under which propagation holds, and what
   `recover` changes for exception-message handling, audit evidence and durable
   retry, see

@@ -146,13 +146,16 @@ returned to the model as a failed tool result instead of ending the run. Below
   failures inside a **swarm run**; agents the application prompts directly keep
   the native behavior. A tool throwing a `ValidationException` keeps it even
   inside a swarm, on every version, because `laravel/ai` returns the messages to
-  the model as a corrective result. A tool throwing inside a nested `AgentTool`
-  did too on 1.0–1.4.0, where upstream degraded a child-run failure to
-  `Agent failed: <message>` — but **v1.4.1 removed that catch**, so such a
-  failure is now an ordinary tool failure carrying the parent agent, and
-  `propagate` fails the parent run. Swarm follows upstream here rather than
-  re-creating the degradation: what counts as a tool failure is `laravel/ai`'s to
-  decide. Both are documented in
+  the model as a corrective result. A tool throwing **inside** a nested
+  `AgentTool` keeps it too on `laravel/ai` >= 1.4, for a different reason: that
+  `ToolFailed` carries the *child* agent, which Swarm is not invoking, so
+  upstream's own recovery handles it inside the child and it never reaches the
+  parent's tool-failure path. Distinct from that, a nested sub-agent's **own run
+  failure** was degraded by `AgentTool` to `Agent failed: <message>` on
+  1.0–1.4.0; **v1.4.1 removed that catch**, so it now arrives as an ordinary tool
+  failure of the parent's call, carrying the parent agent, and `propagate` fails
+  the parent run. Swarm follows upstream rather than re-creating the degradation.
+  All three are documented in
   [Error Handling](error-handling.md#when-a-failing-tool-does-not-fail-the-run).
 - **Affected modes.** Every mode drives the native text loop, so the policy
   applies in all of them, subject to the native paths above.
@@ -163,7 +166,7 @@ returned to the model as a failed tool result instead of ending the run. Below
   and — added after v1.4.1 moved it — whatever `AgentTool` does with a child-run
   failure, since that decides whether a nested failure reaches the policy at all.
   The nightly lane re-resolves `^1.0` and runs the full suite daily, so a change
-  to any of the three that reaches a `laravel/ai` release surfaces within a day;
+  to any of the four that reaches a `laravel/ai` release surfaces within a day;
   one still on its `1.x` branch does not, since no lane tracks that branch.
 - **Trigger for reevaluation.** Revisit when the supported `laravel/ai` floor
   moves to >= 1.4, at which point `recover` is uniformly available and the

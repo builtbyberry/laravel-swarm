@@ -65,8 +65,11 @@ beforeEach(function () {
  * carrying the PARENT agent, so the default `propagate` policy rethrows it and
  * the parent run fails, instead of the parent's model being handed a failed tool
  * result and carrying on. Swarm follows upstream rather than re-creating the
- * degradation; see
- * docs/error-handling.md#when-a-failing-tool-does-not-fail-the-run.
+ * degradation; see docs/error-handling.md#a-sub-agents-own-run-failure.
+ *
+ * Not to be confused with a tool throwing INSIDE the child: that ToolFailed
+ * carries the child agent, which Swarm is not invoking, so laravel/ai recovers
+ * it inside the child and v1.4.1 changed nothing there.
  */
 function nativeAgentToolDegradesChildFailure(): bool
 {
@@ -155,12 +158,18 @@ it('preserves released validation and nested AgentTool result semantics', functi
         // Both agents now fail, in order: the child on its own 429, then the
         // parent once the rethrow leaves its tool loop. On <= 1.4.0 only the
         // child failed, because the catch absorbed it into a parent result.
+        // The parent fails with the child's SAME exception object, which is what
+        // shows it was delegated back rather than re-wrapped on the way out.
         expect($native[AgentFailed::class])->toHaveCount(2)
             ->and($native[AgentFailed::class][0]->prompt->agent)->toBeInstanceOf(NativeChildAgent::class)
             ->and($native[AgentFailed::class][1]->prompt->agent)->toBeInstanceOf(NativeHttpAgent::class)
             ->and($native[AgentFailed::class][1]->exception)->toBeInstanceOf(RateLimitedException::class)
-            ->and(NativeTool::$calls)->toBe(0)
+            ->and($native[AgentFailed::class][1]->exception)->toBe($native[AgentFailed::class][0]->exception)
             ->and(app(RunHistoryStore::class)->find($stream->runId)['status'])->toBe('failed');
+
+        // The parent never reaches a second turn, so there is no third request.
+        Http::assertSentCount(2);
+        Event::assertDispatchedTimes(SwarmFailed::class, 1);
         Event::assertNotDispatched(SwarmCompleted::class);
 
         return;

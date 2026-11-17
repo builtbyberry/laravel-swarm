@@ -202,7 +202,8 @@ quiet because it happens inside the failure path.
 
 [Error Handling](error-handling.md#native-tool-failures) is the single reference
 for the rest: that the policy covers swarm runs only, when a failing tool does
-not fail the run (including the nested sub-agent case, which `laravel/ai` v1.4.1
+not fail the run (a tool throwing *inside* a nested sub-agent is one such case,
+and is distinct from a sub-agent's own run failure, which `laravel/ai` v1.4.1
 changed), the preconditions under which
 `propagate` holds, where the value is read from (parallel branches, queue workers
 and `config:cache` each matter), and what `recover` changes besides the control
