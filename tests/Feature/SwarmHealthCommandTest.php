@@ -14,6 +14,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamStepCheckpointStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
+use BuiltByBerry\LaravelSwarm\Enums\NativeToolFailurePolicy;
 use BuiltByBerry\LaravelSwarm\Enums\RelayLane;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Memory\StreamStepCheckpoint;
@@ -226,17 +227,26 @@ test('swarm health reports the effective native tool-failure policy', function (
         ->toContain('effective policy=[propagate]');
 });
 
-test('swarm health warns when the native tool-failure policy is not recognised', function (): void {
-    // The per-failure read defaults silently on purpose, so this row is where an
-    // operator finds out their value was never in effect.
-    config()->set('swarm.native_tool_failure_policy', 'recovery');
+test('swarm health warns for every value the policy cannot be read from', function (mixed $configured, string $because): void {
+    // The per-failure read defaults silently on purpose -- throwing inside the
+    // failure path would mask the tool's own exception -- so this row is the
+    // only place an operator finds out their value was never in effect. A
+    // non-string is the likelier mistake of the two:
+    // SWARM_NATIVE_TOOL_FAILURE_POLICY=false arrives as a real bool.
+    config()->set('swarm.native_tool_failure_policy', $configured);
 
     Artisan::call('swarm:health');
 
     expect(Artisan::output())
-        ->toContain('not a recognised policy')
+        ->toContain($because)
         ->toContain('effective policy=[propagate]');
-});
+})->with([
+    'a typo' => ['recovery', 'is not a recognised policy'],
+    'bool false, as SWARM_NATIVE_TOOL_FAILURE_POLICY=false arrives' => [false, 'is a [bool], not a policy string'],
+    'bool true' => [true, 'is a [bool], not a policy string'],
+    'an int' => [1, 'is a [int], not a policy string'],
+    'the enum itself, not its value' => [NativeToolFailurePolicy::Recover, 'is a [BuiltByBerry\\LaravelSwarm\\Enums\\NativeToolFailurePolicy], not a policy string'],
+]);
 
 test('swarm health json output is structured', function (): void {
     expect(Artisan::call('swarm:health', ['--json' => true]))->toBe(0);
@@ -1255,7 +1265,8 @@ describe('governance checks in --json output', function (): void {
             ->and($payload['ok'])->toBeTrue()
             ->and($components)->toContain('Guardrails')
             ->and($components)->toContain('Audit sink')
-            ->and($components)->toContain('Capture policy');
+            ->and($components)->toContain('Capture policy')
+            ->and($components)->toContain('Native tool failures');
     });
 
     test('the governance checks are skipped under --audit (audit-outbox scope only)', function (): void {
@@ -1264,7 +1275,8 @@ describe('governance checks in --json output', function (): void {
         expect($output)->toBe(0);
         expect(Artisan::output())
             ->not->toContain('Guardrails')
-            ->not->toContain('Capture policy');
+            ->not->toContain('Capture policy')
+            ->not->toContain('Native tool failures');
     });
 });
 

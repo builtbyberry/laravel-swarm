@@ -65,11 +65,21 @@ prompts directly, with no swarm involved, keep `laravel/ai`'s own behavior — o
 rest of your application handles tool failures.
 
 Swarm decides "inside a swarm run" from the process-local run frame its runners
-enter around each agent invocation. On a long-lived non-Octane worker, a run
-terminated abnormally enough to bypass its `finally` can leave a stale frame
-behind, and a non-swarm tool failure in that worker would then be treated as
-in-run and propagate. Octane workers are flushed on every operation reset, so
-this is confined to a worker that has already died mid-run without unwinding.
+enter around each agent invocation, and clear in a `finally`. Anything that
+stops that `finally` running leaves the frame behind, and a non-swarm tool
+failure later in the same process is then treated as in-run and propagates.
+
+The reachable case is **a streamed run abandoned while its iterator is still
+referenced** — `$it = $stream->getIterator()` and then stopping part-way, rather
+than `foreach`-ing and breaking. A plain `foreach ... break` releases the
+generator, the `finally` runs, and the frame clears, so ordinary early exit is
+safe; so is the SSE response path. An abnormal termination (hard timeout, fatal)
+leaves a frame too, but a process that has died runs no further tool calls, so
+it is the abandoned-iterator case that can actually mis-attribute one. Octane
+flushes the stack on every operation reset, so this is confined to long-lived
+non-Octane workers. If you hold a stream iterator and abandon it, release it —
+unset it or let it go out of scope — before prompting a non-swarm agent in the
+same process.
 
 ### Two cases where a failing tool does not fail the run
 
@@ -87,7 +97,8 @@ the policy:
 can only return a string — which is recorded as a **successful** result, with
 `status: succeeded` in the step's `nativeResult->tools` (see
 [Native Step Results](native-step-results.md) for that field) — or throw, which
-the policy above decides the consequence of. Swarm's own memory tools mark a call
+the policy above decides the consequence of, except for the two cases named
+just above. Swarm's own memory tools mark a call
 failed through an `@internal` mechanism that is not available to application
 tools. So a tool that must not fail the run should return a string describing
 what went wrong and let the model read it, accepting that the recorded status
@@ -129,7 +140,7 @@ documented Laravel guarantee. Swarm's test suite pins the part that matters for
 your listeners — that an exact-name `ToolFailed` listener is reached before
 Swarm's wildcard — so a change there fails Swarm's tests rather than silently
 changing your application. The registration *timing* (Swarm registers from
-`booted()`, after other providers' `boot()`) is not pinned by a test. Either way,
+`booted()`, after other providers' `boot()`) is not guarded by a test. Either way,
 do not build anything load-bearing on listener order: use `SwarmFailed` or Swarm
 telemetry to observe run failures.
 

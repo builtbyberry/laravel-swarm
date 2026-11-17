@@ -199,6 +199,10 @@ it('defers to laravel/ai when the policy is recover', function () {
 
 it('leaves laravel/ai recovery in place when the dispatch does not reach Swarm', function (Closure $arrange) {
     // The preconditions documented in docs/error-handling.md#when-propagate-does-not-apply.
+    // Below 1.4 the floor branch asserts the documented floor outcome rather
+    // than the precondition itself -- with no upstream recovery to leave in
+    // place there is nothing for an arrangement to change, so that lane proves
+    // the floor behaviour, not these cases.
     nativeToolFailureTurns([class_basename(FailingTool::class)]);
     $arrange();
 
@@ -222,3 +226,50 @@ it('leaves laravel/ai recovery in place when the dispatch does not reach Swarm',
         fn () => app('events')->listen(ToolFailed::class, fn () => false),
     ],
 ]);
+
+it('mis-attributes a later non-swarm failure while an abandoned stream iterator is still held', function () {
+    // Pins the limitation documented in docs/error-handling.md#scope-swarm-runs-only.
+    // The scope gate reads the process-local run frame, and a generator's
+    // finally does not run until the generator is released -- so a streamed run
+    // abandoned with its iterator still referenced leaves the frame up, and the
+    // next non-swarm tool failure in that process is treated as in-run. A plain
+    // foreach/break releases the generator and is safe; this needs an explicitly
+    // held getIterator(). If this ever stops being true the limitation has been
+    // fixed, and the doc should lose its caveat.
+    if (! nativeToolFailureRecoveryExists()) {
+        // Below 1.4 a non-swarm failure propagates regardless, so the frame
+        // makes no difference and there is nothing to mis-attribute.
+        expect(ActiveRunContext::current())->toBeNull();
+
+        return;
+    }
+
+    nativeToolFailureTurns([class_basename(FailingTool::class)]);
+
+    $stream = app(SwarmRunner::class)->agent(new CapabilityAgent([]))->stream('task');
+    $iterator = $stream->getIterator();
+
+    try {
+        $staleFrame = null;
+
+        while ($iterator->valid()) {
+            if (ActiveRunContext::current() !== null) {
+                $staleFrame = ActiveRunContext::current()?->runId;
+
+                break; // abandon the generator WITHOUT releasing $iterator
+            }
+
+            $iterator->next();
+        }
+
+        expect($staleFrame)->not->toBeNull()
+            ->and(ActiveRunContext::current()?->runId)->toBe($staleFrame);
+
+        // A direct agent run, nothing to do with a swarm, now propagates.
+        expect(fn () => (new CapabilityAgent([new FailingTool]))->prompt('task'))
+            ->toThrow(RuntimeException::class, FailingTool::MESSAGE);
+    } finally {
+        unset($iterator, $stream);
+        ActiveRunContext::flush();
+    }
+});

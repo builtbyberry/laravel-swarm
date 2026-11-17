@@ -659,8 +659,8 @@ class SwarmServiceProvider extends ServiceProvider
      * registration order. That ordering is observed framework behaviour rather
      * than a documented guarantee. NativeToolFailurePropagationTest pins the
      * half that matters to an application -- that an exact-name listener is
-     * reached before this wildcard -- but not the `booted()` timing, which a
-     * single-provider test harness cannot observe. The rethrow still ends the
+     * reached before this wildcard -- but not the `booted()` timing, which is
+     * observable with a second test provider and simply is not guarded here. The rethrow still ends the
      * dispatch, so listeners ordered after this one do not run -- see
      * docs/error-handling.md#native-tool-failures, the single copy of the
      * preconditions and their costs.

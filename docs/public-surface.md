@@ -54,6 +54,7 @@ records preserved contracts, exact removal scope and unsupported new integration
 | `SwarmTerminalContext` | The settled-terminal summary passed to a delivered queue/durable `then()`/`catch()` callback — `runId`, `slot`, `swarmClass`, `topology`, and (for `catch`) redacted `exceptionClass`/`exceptionMessage`; `succeeded()`/`failed()`. (v0.28.0+) | [Error Handling](error-handling.md#terminal-workflow-callbacks) |
 | `ReplayMode` | Enum used by `#[MemoryReplay]` and `swarm.memory.replay_mode`. Cases: `FrozenView` (the default; retry reads use the frozen snapshot, and accepted Run-scope writes and forgets are saved after invocation, guardrails, and step recording succeed) and `FreshExecution` (live memory, no snapshot guard). (v0.9.0+) | [Swarm Memory](memory.md#replay-semantics) |
 | `NativeToolFailurePolicy` | Enum used by `swarm.native_tool_failure_policy`: `Propagate` (the default) or `Recover`. (realtime-dispatch+) | [Error Handling](error-handling.md#native-tool-failures) |
+
 ## Attributes
 
 | Attribute | Purpose | Primary documentation |

@@ -456,7 +456,17 @@ class SwarmHealthCommand extends Command
         /** @var mixed $configured */
         $configured = $config->get('swarm.native_tool_failure_policy');
 
+        // A non-string is as unusable as a typo'd one, and more likely:
+        // SWARM_NATIVE_TOOL_FAILURE_POLICY=false arrives as a real bool. The
+        // listener has to coerce it silently (throwing there would mask the
+        // tool's own exception); this check is not in the failure path, so it
+        // says so instead.
+        $unusableType = $configured === null || is_string($configured)
+            ? null
+            : get_debug_type($configured);
+
         $parsed = NativeToolFailurePolicy::parse(is_string($configured) ? $configured : null);
+        $invalid = $unusableType !== null || $parsed['invalid'];
         $recoveryAvailable = class_exists('Laravel\\Ai\\Exceptions\\ToolExecutionException');
 
         $details = "effective policy=[{$parsed['policy']->value}]";
@@ -465,13 +475,17 @@ class SwarmHealthCommand extends Command
             ? '; installed laravel/ai recovers tool failures, so the policy is what decides'
             : '; installed laravel/ai has no tool-failure recovery, so a failing tool fails the run either way';
 
-        if ($parsed['invalid']) {
+        if ($invalid) {
+            $because = $unusableType === null
+                ? 'is not a recognised policy'
+                : "is a [{$unusableType}], not a policy string";
+
             return [
                 'component' => 'Native tool failures',
                 'driver' => 'n/a',
                 'store' => 'n/a',
                 'status' => 'warning',
-                'details' => 'swarm.native_tool_failure_policy is not a recognised policy; '.$details.'. Set it to propagate or recover.',
+                'details' => 'swarm.native_tool_failure_policy '.$because.'; '.$details.'. Set it to propagate or recover.',
             ];
         }
 

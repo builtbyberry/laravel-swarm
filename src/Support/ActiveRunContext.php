@@ -38,16 +38,19 @@ use Laravel\Octane\Contracts\OperationTerminated;
  * Lifecycle: the stack is run-scoped and self-healing. Each invocation site
  * pairs {@see enter()} with {@see exit()} in a finally, so under normal flow
  * (including exceptions) the stack returns to empty. On a long-lived worker
- * (queue, Octane) an abnormal termination that bypasses the finally — a hard
- * timeout or fatal — can leave a stale frame. For the readers that only ask
- * "which run am I in", that is harmless: {@see current()} returns the top, and
- * the next run's {@see enter()} pushes a fresh frame above it. One reader does
- * treat a frame's mere presence as "a swarm run is executing" — the native
- * tool-failure propagation listener in {@see SwarmServiceProvider} — so on such
- * a worker a stale frame can make one non-swarm tool failure propagate as
- * though it were in-run.
- * The only residue is a single retained {@see RunContext} reference until the
- * worker recycles. Under Laravel Octane this residue is cleared eagerly: when
+ * (queue, Octane) anything that bypasses the finally can leave a stale frame:
+ * an abnormal termination (a hard timeout or fatal), or — reachably, in normal
+ * code — a streamed run abandoned while its iterator is still referenced, since
+ * the generator's finally does not run until it is released. For the readers
+ * that only ask "which run am I in", that is harmless: {@see current()} returns
+ * the top, and the next run's {@see enter()} pushes a fresh frame above it.
+ * One reader treats a frame's mere presence as "a swarm run is executing" — the
+ * native tool-failure propagation listener in {@see SwarmServiceProvider} — and
+ * for that one a stale frame mis-attributes a later non-swarm tool failure as
+ * in-run. Proven by the held-iterator case in
+ * NativeToolFailurePropagationTest.
+ * Beyond that, the residue is a single retained {@see RunContext} reference
+ * until the worker recycles. Under Laravel Octane it is cleared eagerly: when
  * the package detects Octane is installed, {@see SwarmServiceProvider} wires an
  * {@see OperationTerminated} listener that calls
  * {@see flush()} on every worker reset (request, task, and tick). Non-Octane
