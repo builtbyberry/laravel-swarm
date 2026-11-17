@@ -69,7 +69,10 @@ beforeEach(function () {
  *
  * Not to be confused with a tool throwing INSIDE the child: that ToolFailed
  * carries the child agent, which Swarm is not invoking, so laravel/ai recovers
- * it inside the child and v1.4.1 changed nothing there.
+ * it inside the child and v1.4.1 changed nothing there. The same applies one
+ * AgentTool deeper -- this gate and the branch it guards are about a sub-agent
+ * held directly as a tool of the agent Swarm invokes, which is this file's
+ * fixture.
  */
 function nativeAgentToolDegradesChildFailure(): bool
 {

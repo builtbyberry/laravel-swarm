@@ -106,7 +106,7 @@ class ParallelRunner
                         'native_result' => NativeStepResultProjector::fromResolvedLimits($nativeResultLimits)->fromResponse($response)->toArray(),
                     ];
                 } finally {
-                    ActiveRunContext::exit();
+                    ActiveRunContext::exit($runId);
                 }
             };
         }

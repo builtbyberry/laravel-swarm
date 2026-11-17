@@ -45,6 +45,9 @@ use Laravel\Octane\Contracts\OperationTerminated;
  * the generator's finally does not run until it is released. For the readers
  * that only ask "which run am I in", that is harmless: {@see current()} returns
  * the top, and the next run's {@see enter()} pushes a fresh frame above it.
+ * Normal exits do not shadow one another: {@see exit()} removes the frame of the
+ * run that is leaving, so a run finishing while another straddles it leaves the
+ * straddling run's frame in place.
  * No reader treats a frame's mere presence as "a swarm run is executing": the
  * native tool-failure propagation listener in {@see SwarmServiceProvider} asks
  * {@see isInvoking()} instead, precisely because a frame is legitimately live
@@ -70,9 +73,42 @@ final class ActiveRunContext
         self::$stack[] = new ActiveRunRecord($runId, $swarmClass, $context, $memoryOverride);
     }
 
-    public static function exit(): void
+    /**
+     * Leave a run's frame, removing that run's OWN frame rather than the top.
+     *
+     * Two swarm runs can be live at once without nesting: an application
+     * consuming two streams in an interleaved way enters one run's frame, then
+     * the other's, and the first can finish while the second is still suspended
+     * mid-step -- its frame live, its invocation already recorded by
+     * {@see invoking()}, its tool not yet run. A plain `array_pop` discarded the
+     * suspended run's frame there, after which {@see isInvoking()} could not
+     * find it and the native tool-failure listener silently recovered a genuine
+     * swarm failure. So enter/exit are LIFO within one run's control flow but
+     * not globally, and the frame to remove is named rather than assumed.
+     *
+     * The topmost frame carrying `$runId` is removed, which keeps re-entry with
+     * the same id (memory replay does this) correctly LIFO. A `$runId` with no
+     * frame leaves the stack untouched. Passing nothing pops the top, retained
+     * for callers that genuinely own it; every production call site passes its
+     * own run id. Guarded by tests/Unit/ActiveRunContextInvokingTest.php.
+     */
+    public static function exit(?string $runId = null): void
     {
-        array_pop(self::$stack);
+        if ($runId === null) {
+            array_pop(self::$stack);
+
+            return;
+        }
+
+        for ($i = array_key_last(self::$stack); $i !== null && $i >= 0; $i--) {
+            if (self::$stack[$i]->runId === $runId) {
+                $remaining = self::$stack;
+                array_splice($remaining, $i, 1);
+                self::$stack = $remaining;
+
+                return;
+            }
+        }
     }
 
     public static function current(): ?ActiveRunRecord

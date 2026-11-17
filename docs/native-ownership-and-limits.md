@@ -150,13 +150,17 @@ returned to the model as a failed tool result instead of ending the run. Below
   `AgentTool` keeps it too on `laravel/ai` >= 1.4, for a different reason: that
   `ToolFailed` carries the *child* agent, which Swarm is not invoking, so
   upstream's own recovery handles it inside the child and it never reaches the
-  parent's tool-failure path. Distinct from that, a nested sub-agent's **own run
-  failure** was degraded by `AgentTool` to `Agent failed: <message>` on
-  1.0–1.4.0; **v1.4.1 removed that catch**, so it now arrives as an ordinary tool
-  failure of the parent's call, carrying the parent agent, and `propagate` fails
-  the parent run. Swarm follows upstream rather than re-creating the degradation.
-  All three are documented in
-  [Error Handling](error-handling.md#when-a-failing-tool-does-not-fail-the-run).
+  parent's tool-failure path. Distinct from that, the **own run failure** of a
+  sub-agent held directly as a tool of the swarm-invoked agent was degraded by
+  `AgentTool` to `Agent failed: <message>` on 1.0–1.4.0; **v1.4.1 removed that
+  catch**, so it now arrives as an ordinary tool failure of that agent's own
+  call and `propagate` fails the swarm run. One level deeper it is unaffected,
+  because the failure then carries the intermediate agent, which Swarm is not
+  invoking. Swarm follows upstream rather than re-creating the degradation. The
+  first two are documented in
+  [Error Handling](error-handling.md#when-a-failing-tool-does-not-fail-the-run),
+  the third in
+  [A sub-agent's own run failure](error-handling.md#a-sub-agents-own-run-failure).
 - **Affected modes.** Every mode drives the native text loop, so the policy
   applies in all of them, subject to the native paths above.
 - **What the override assumes upstream.** That `ToolFailed` is dispatched from

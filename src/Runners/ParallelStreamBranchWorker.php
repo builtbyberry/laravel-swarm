@@ -195,7 +195,7 @@ final class ParallelStreamBranchWorker
             return ['branch_id' => $branchId, 'terminal_sent' => true];
         } finally {
             if (($activeContextEntered ?? false) === true) {
-                ActiveRunContext::exit();
+                ActiveRunContext::exit($runId);
             }
             if (is_resource($socket)) {
                 fclose($socket);

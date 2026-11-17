@@ -955,7 +955,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                                 if ($coordinator !== null && $boundary !== null) {
                                     $coordinator->end($boundary);
                                 }
-                                ActiveRunContext::exit();
+                                ActiveRunContext::exit($branchRunId);
                             }
                         };
                     }
@@ -1366,7 +1366,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                 );
             } finally {
                 $this->coordinator->end($boundary);
-                ActiveRunContext::exit();
+                ActiveRunContext::exit($context->runId);
                 NativeOutcomeValidator::rethrowIfUnsupported($nativeStreamFailure);
             }
         }

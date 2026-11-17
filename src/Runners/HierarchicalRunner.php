@@ -1068,7 +1068,7 @@ class HierarchicalRunner
                                     'native_result' => NativeStepResultProjector::fromResolvedLimits($nativeResultLimits)->fromResponse($response)->toArray(),
                                 ];
                             } finally {
-                                ActiveRunContext::exit();
+                                ActiveRunContext::exit($branchRunId);
                             }
                         };
                     }
@@ -1685,7 +1685,7 @@ class HierarchicalRunner
             $response = NativeAgentInvoker::prompt($agent, $invocation);
             $this->outcomes->validateResponse($response);
         } finally {
-            ActiveRunContext::exit();
+            ActiveRunContext::exit($state->context->runId);
         }
         $output = AgentResponseOutput::text($response);
         $usage = $this->usageFromResponse($response);
@@ -1819,7 +1819,7 @@ class HierarchicalRunner
                     );
                 }
             } finally {
-                ActiveRunContext::exit();
+                ActiveRunContext::exit($state->context->runId);
                 NativeOutcomeValidator::rethrowIfUnsupported($nativeStreamFailure);
             }
         }

@@ -299,7 +299,7 @@ class HierarchicalStreamRunner extends StaticHierarchicalStreamRunner
                 $coordinatorResponse = NativeAgentInvoker::prompt($coordinator, $invocation);
                 $this->outcomes->validateResponse($coordinatorResponse);
             } finally {
-                ActiveRunContext::exit();
+                ActiveRunContext::exit($context->runId);
             }
 
             $coordinatorOutput = AgentResponseOutput::text($coordinatorResponse);

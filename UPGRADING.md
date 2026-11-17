@@ -486,17 +486,26 @@ application prompts directly, outside any swarm, keep `laravel/ai`'s own
 behaviour — installing Swarm does not change how the rest of your application
 handles tool failures.
 
-**On `laravel/ai` >= 1.4.1, a nested sub-agent whose own run fails now fails the
-parent swarm run.** Up to and including v1.4.0, `AgentTool` caught a failure of
-the child run and returned `Agent failed: <message>` to the parent as the tool's
-result, so the parent run continued regardless of this policy. v1.4.1 removed
+**On `laravel/ai` >= 1.4.1, a sub-agent held directly as a tool of your swarm's
+agent now fails the swarm run when its own run fails.** Up to and including
+v1.4.0, `AgentTool` caught that failure and returned `Agent failed: <message>` as
+the tool's result, so the run continued regardless of this policy. v1.4.1 removed
 that catch, which makes the child's exception an ordinary tool failure of the
-parent's call, carrying the parent agent — so `propagate` now ends the parent
-run. This is upstream's change, not Swarm's, and Swarm follows it rather than
-re-creating the old degradation. If you rely on a failing sub-agent leaving the
-parent run alive, set `SWARM_NATIVE_TOOL_FAILURE_POLICY=recover` or hold
-`laravel/ai` at `1.4.0`; `recover` restores only that, so the parent's tool
-result reads `The tool call failed: <message>` rather than `Agent failed: ...`.
+swarm-invoked agent's own call — so `propagate` now ends the run. This is
+upstream's change, not Swarm's, and Swarm follows it rather than re-creating the
+old degradation. If you rely on a failing sub-agent leaving the run alive, set
+`SWARM_NATIVE_TOOL_FAILURE_POLICY=recover` or hold `laravel/ai` at `1.4.0`;
+`recover` restores only that, so the tool result reads
+`The tool call failed: <message>` rather than `Agent failed: ...`.
+
+**Only the first level is affected.** With a sub-agent nested inside another
+sub-agent, a failing innermost run surfaces as a tool failure carrying the
+intermediate agent, which Swarm is not invoking, so `laravel/ai` recovers it
+there and the swarm run still completes — on 1.4.0 and 1.4.1 alike. If your
+sub-agents are nested more than one level deep, this upgrade changes no run
+outcome for them, and neither `recover` nor pinning is needed on their account.
+It does change what the intermediate agent's model is shown:
+`The tool call failed: <message>` instead of `Agent failed: <message>`.
 
 **This is not the same as a tool throwing *inside* a sub-agent**, which v1.4.1
 did not change: that `ToolFailed` carries the child agent, which Swarm is not

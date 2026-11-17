@@ -233,7 +233,7 @@ class DurableBranchAdvancer
                                 [$output, $usage, $snapshot, $citationEvidence, $nativeResult] = $this->promptBranchAgent($state, $agent, $branch, $snapshot);
                             }
                         } finally {
-                            ActiveRunContext::exit();
+                            ActiveRunContext::exit($runId);
                         }
                         $durationMs = MonotonicTime::elapsedMilliseconds($startedAt);
 

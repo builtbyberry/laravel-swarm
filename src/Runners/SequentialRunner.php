@@ -383,7 +383,7 @@ class SequentialRunner
                 );
             }
 
-            ActiveRunContext::exit();
+            ActiveRunContext::exit($state->context->runId);
         }
     }
 
@@ -417,7 +417,7 @@ class SequentialRunner
             $this->outcomes->validateResponse($response);
             $citationEvidence = $this->citations->response($response, $state->context->runId, $index, $agent::class);
         } finally {
-            ActiveRunContext::exit();
+            ActiveRunContext::exit($state->context->runId);
         }
         $output = AgentResponseOutput::text($response);
         $usage = $this->usageFromResponse($response);
@@ -514,7 +514,7 @@ class SequentialRunner
                 $this->flushPendingToolCalls($accumulator);
                 $this->breadcrumbUnknownStreamEvents($accumulator->unknownEventClasses, $state->context->runId, $index);
             } finally {
-                ActiveRunContext::exit();
+                ActiveRunContext::exit($state->context->runId);
                 NativeOutcomeValidator::rethrowIfUnsupported($nativeStreamFailure);
             }
         }
