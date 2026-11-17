@@ -1055,7 +1055,7 @@ class HierarchicalRunner
                             try {
                                 $startedAt = MonotonicTime::now();
                                 $invocation = $branchContext->nativeInvocation($nativeRecipient, $input, $attempt);
-                                $response = NativeAgentInvoker::prompt($worker, $invocation);
+                                $response = NativeAgentInvoker::prompt($worker, $invocation, $branchRunId);
                                 Container::getInstance()->make(NativeOutcomeValidator::class)->validateResponse($response);
 
                                 return [
@@ -1682,7 +1682,7 @@ class HierarchicalRunner
                 ? 'generated:coordinator'
                 : ($state->topology === Topology::StaticHierarchical ? 'static:' : 'generated:').(string) ($metadata['node_id'] ?? $index);
             $invocation = $state->context->nativeInvocation($recipient, $input, $state->nativeSettingsAttempt);
-            $response = NativeAgentInvoker::prompt($agent, $invocation);
+            $response = NativeAgentInvoker::prompt($agent, $invocation, $state->context->runId);
             $this->outcomes->validateResponse($response);
         } finally {
             ActiveRunContext::exit($state->context->runId);
@@ -1795,7 +1795,7 @@ class HierarchicalRunner
         try {
             $prefix = $state->topology === Topology::StaticHierarchical ? 'static:' : 'generated:';
             $invocation = $state->context->nativeInvocation($prefix.$nodeId, $input, $state->nativeSettingsAttempt);
-            $stream = NativeAgentInvoker::stream($agent, $invocation);
+            $stream = NativeAgentInvoker::stream($agent, $invocation, $state->context->runId);
             foreach ($stream as $event) {
                 $swarmEvent = $this->mapper->map($event, $state, $index, $agent, $accumulator);
 

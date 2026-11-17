@@ -117,16 +117,37 @@ final class ActiveRunContext
     }
 
     /**
-     * Record the Laravel AI agent Swarm is invoking in the top frame. Called by
-     * {@see NativeAgentInvoker} for every prompted and streamed invocation, with
-     * the configured instance that is actually invoked. A no-op without a frame.
+     * Record the Laravel AI agent Swarm is invoking, on the frame of the run
+     * making the call. Called by {@see NativeAgentInvoker} for every prompted
+     * and streamed invocation, with the configured instance actually invoked.
+     *
+     * The run is NAMED rather than assumed to be on top, for the same reason
+     * {@see exit()} names it: two swarm runs can be live at once without
+     * nesting, and a runner that yields before invoking (every streamed runner
+     * does) can have another run's frame pushed above its own in the meantime.
+     * Writing to `current()` then recorded this run's invocation on the other
+     * run's frame and destroyed the record that was there. Under plain
+     * round-robin consumption of two streams, the run whose record was
+     * overwritten had {@see isInvoking()} answer false for it, so its own
+     * failing tool was silently recovered and the run reported `completed` --
+     * measured as one of the two runs on that schedule, the other still
+     * failing. Which run loses out depends on the interleaving; what matters is
+     * that a run's own failure can go missing at all. Guarded end to end by the
+     * interleaving case in
+     * tests/Feature/Adoption/NativeToolFailurePropagationTest.php.
+     *
+     * The topmost frame carrying `$runId` is used, matching {@see exit()}. A
+     * `$runId` with no frame is a no-op, which is how the invoker behaves
+     * outside any swarm run.
      */
-    public static function invoking(Agent $agent): void
+    public static function invoking(string $runId, Agent $agent): void
     {
-        $top = self::current();
+        for ($i = array_key_last(self::$stack); $i !== null && $i >= 0; $i--) {
+            if (self::$stack[$i]->runId === $runId) {
+                self::$stack[$i]->invokingAgent = $agent;
 
-        if ($top !== null) {
-            $top->invokingAgent = $agent;
+                return;
+            }
         }
     }
 
@@ -144,7 +165,12 @@ final class ActiveRunContext
      * suspends one run's frame under the other's, and the lower run's tool calls
      * still execute when its generator is resumed. Reading only the top would
      * silently recover a genuine swarm failure, which is a worse error than the
-     * one this check exists to prevent.
+     * one this check exists to prevent. The walk is one of three parts that
+     * topology needs: {@see invoking()} must also write to the invoking run's
+     * own frame and {@see exit()} remove that run's own frame, or the records
+     * the walk looks for are overwritten or discarded. All three are guarded
+     * together by the round-robin case in
+     * tests/Feature/Adoption/NativeToolFailurePropagationTest.php.
      *
      * Identity, not class: two instances of the same agent class are different
      * invocations. That is also the residual limit: an application prompting the

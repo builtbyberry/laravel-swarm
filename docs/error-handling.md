@@ -68,14 +68,17 @@ Swarm decides this by the agent it is invoking, not by whether a swarm is
 somewhere on the call stack, and it looks at every run in flight rather than only
 the most recent. Two swarm runs can be live at once without nesting — an
 application consuming two streams in an interleaved way — and each keeps its
-contract, including while one is suspended mid-step and the other finishes.
+contract: a failing tool fails its own run and only its own run, whether the two
+are advanced round-robin or one is suspended mid-step while the other
+finishes.
 An application agent prompted from inside a `foreach` over a
 swarm stream — while that run is genuinely mid-flight, because a stream's tool
 calls run as the consumer iterates — still gets `laravel/ai`'s behaviour.
 
 The case Swarm cannot tell apart is an application prompting **the very same
 agent instance** Swarm is invoking. That includes after a streamed run was
-abandoned: the invocation is recorded for the frame's lifetime, deliberately,
+abandoned: the invocation is recorded until that run's next invocation replaces
+it or its frame goes, deliberately,
 because a stream's tool calls arrive long after the call that started it. If the
 same instance can be reached both ways — a container singleton, or an `agents()`
 method handing back a shared instance — pass a separate instance to the

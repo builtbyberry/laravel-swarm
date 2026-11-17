@@ -208,7 +208,7 @@ class SequentialRunner
                         );
 
                     $invocation = $state->context->nativeInvocation("sequential:{$index}", $input, $state->nativeSettingsAttempt);
-                    $stream = NativeAgentInvoker::stream($agent, $invocation);
+                    $stream = NativeAgentInvoker::stream($agent, $invocation, $state->context->runId);
                     $accumulator = new StreamStepAccumulator($snapshot);
 
                     $nativeStreamFailure = null;
@@ -283,7 +283,7 @@ class SequentialRunner
                     );
 
                     $invocation = $state->context->nativeInvocation("sequential:{$index}", $input, $state->nativeSettingsAttempt);
-                    $response = NativeAgentInvoker::prompt($agent, $invocation);
+                    $response = NativeAgentInvoker::prompt($agent, $invocation, $state->context->runId);
                     $this->outcomes->validateResponse($response);
                     $citationEvidence = $this->citations->response($response, $state->context->runId, $index, $agent::class);
                     $output = AgentResponseOutput::text($response);
@@ -413,7 +413,7 @@ class SequentialRunner
 
         try {
             $invocation = $state->context->nativeInvocation("sequential:{$index}", $input, $state->nativeSettingsAttempt);
-            $response = NativeAgentInvoker::prompt($agent, $invocation);
+            $response = NativeAgentInvoker::prompt($agent, $invocation, $state->context->runId);
             $this->outcomes->validateResponse($response);
             $citationEvidence = $this->citations->response($response, $state->context->runId, $index, $agent::class);
         } finally {
@@ -497,7 +497,7 @@ class SequentialRunner
         $nativeStreamFailure = null;
         try {
             $invocation = $state->context->nativeInvocation("sequential:{$index}", $input, $state->nativeSettingsAttempt);
-            $stream = NativeAgentInvoker::stream($agent, $invocation);
+            $stream = NativeAgentInvoker::stream($agent, $invocation, $state->context->runId);
             foreach ($stream as $event) {
                 $swarmEvent = $this->mapper->map($event, $state, $index, $agent, $accumulator);
 

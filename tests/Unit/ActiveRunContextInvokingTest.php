@@ -25,10 +25,10 @@ it('recognises an agent Swarm is invoking in a frame below the top one', functio
     $upper = new CapabilityAgent([]);
 
     invokingFrame('run-a');
-    ActiveRunContext::invoking($lower);
+    ActiveRunContext::invoking('run-a', $lower);
 
     invokingFrame('run-b');
-    ActiveRunContext::invoking($upper);
+    ActiveRunContext::invoking('run-b', $upper);
 
     expect(ActiveRunContext::isInvoking($upper))->toBeTrue()
         ->and(ActiveRunContext::isInvoking($lower))->toBeTrue();
@@ -39,7 +39,7 @@ it('does not recognise an agent no frame is invoking', function () {
     $other = new CapabilityAgent([]);
 
     invokingFrame('run-a');
-    ActiveRunContext::invoking($invoked);
+    ActiveRunContext::invoking('run-a', $invoked);
 
     // Same class, different instance: identity, not class.
     expect(ActiveRunContext::isInvoking($other))->toBeFalse()
@@ -70,7 +70,7 @@ it('keeps a straddling run\'s frame when the run beneath it exits', function () 
 
     invokingFrame('run-s1');
     invokingFrame('run-s2');
-    ActiveRunContext::invoking($straddled);
+    ActiveRunContext::invoking('run-s2', $straddled);
 
     ActiveRunContext::exit('run-s1');
 
@@ -78,20 +78,55 @@ it('keeps a straddling run\'s frame when the run beneath it exits', function () 
         ->and(ActiveRunContext::current()?->runId)->toBe('run-s2');
 });
 
-it('removes only the named frame when the same run is entered twice', function () {
+it('removes the TOPMOST frame when the same run is entered twice', function () {
     // Re-entry with the same run id (memory replay does this) pushes a second
-    // frame; removing the topmost match keeps that LIFO behaviour intact.
-    invokingFrame('run-a');
-    invokingFrame('run-a');
-    invokingFrame('run-b');
+    // frame; removing the topmost match keeps that LIFO behaviour intact. The
+    // two same-id frames are told apart by their invocation, so removing the
+    // bottommost match instead fails here rather than passing silently.
+    $outer = new CapabilityAgent([]);
+    $inner = new CapabilityAgent([]);
 
+    invokingFrame('run-a');
+    ActiveRunContext::invoking('run-a', $outer);
+
+    invokingFrame('run-a');
+    ActiveRunContext::invoking('run-a', $inner);
+
+    // The second enter() shadowed the first, so the inner frame holds $inner
+    // and the outer one still holds $outer.
     ActiveRunContext::exit('run-a');
 
-    expect(ActiveRunContext::current()?->runId)->toBe('run-b');
+    expect(ActiveRunContext::current()?->runId)->toBe('run-a')
+        ->and(ActiveRunContext::current()?->invokingAgent)->toBe($outer)
+        ->and(ActiveRunContext::isInvoking($inner))->toBeFalse()
+        ->and(ActiveRunContext::isInvoking($outer))->toBeTrue();
+});
 
-    ActiveRunContext::exit('run-b');
+it('records an invocation on its own run\'s frame, not the top one', function () {
+    // A streamed runner yields before it invokes, so another run's frame can be
+    // pushed above its own in between. Writing to the top frame recorded this
+    // run's invocation on the other run's frame AND destroyed the record that
+    // was there, so two interleaved runs erased each other.
+    $mine = new CapabilityAgent([]);
+    $theirs = new CapabilityAgent([]);
 
-    expect(ActiveRunContext::current()?->runId)->toBe('run-a');
+    invokingFrame('run-mine');
+    invokingFrame('run-theirs');
+    ActiveRunContext::invoking('run-theirs', $theirs);
+
+    // run-mine invokes while run-theirs' frame is on top.
+    ActiveRunContext::invoking('run-mine', $mine);
+
+    expect(ActiveRunContext::isInvoking($mine))->toBeTrue()
+        ->and(ActiveRunContext::isInvoking($theirs))->toBeTrue();
+});
+
+it('ignores an invocation for a run with no frame', function () {
+    invokingFrame('run-a');
+
+    ActiveRunContext::invoking('run-gone', new CapabilityAgent([]));
+
+    expect(ActiveRunContext::current()?->invokingAgent)->toBeNull();
 });
 
 it('pops the top frame when exit is called without a run id', function () {

@@ -275,3 +275,77 @@ it('leaves a non-swarm agent alone while a swarm run frame names no invocation',
         ActiveRunContext::flush();
     }
 });
+
+it('fails both runs when two swarm streams are consumed round-robin', function () {
+    // The scope gate asks which agent Swarm is invoking, and the invocation is
+    // recorded on the invoking run's OWN frame. It used to be written to the top
+    // frame instead, so one run's record was overwritten by the other's:
+    // isInvoking() then answered false for that run and its own failing tool was
+    // silently recovered, the run reporting `completed`. On this schedule that
+    // was one of the two runs, the other still failing; which one loses depends
+    // on the interleaving, and a run's own failure going missing at all is the
+    // outcome this component exists to prevent. Alternating iteration is
+    // in-contract (see docs/ai-1-preservation-evidence.md), and a stream's tool
+    // calls run as the consumer iterates, which puts both runs in flight.
+    $agents = [
+        'one' => new CapabilityAgent([new FailingTool], 'round-robin-one'),
+        'two' => new CapabilityAgent([new FailingTool], 'round-robin-two'),
+    ];
+
+    $turns = ['one' => 0, 'two' => 0];
+    Http::fake(function (Request $request) use (&$turns) {
+        $key = str_contains((string) json_encode($request->data()), 'round-robin-two') ? 'two' : 'one';
+        $turns[$key]++;
+
+        return Http::response(NativeCapabilityWire::sse($turns[$key] === 1
+            ? NativeCapabilityWire::toolCalls([class_basename(FailingTool::class)])
+            : NativeCapabilityWire::message()));
+    });
+
+    $streams = [
+        'one' => app(SwarmRunner::class)->agent($agents['one'])->stream('task-one'),
+        'two' => app(SwarmRunner::class)->agent($agents['two'])->stream('task-two'),
+    ];
+    $iterators = ['one' => $streams['one']->getIterator(), 'two' => $streams['two']->getIterator()];
+
+    // One event each per tick, until both generators are finished or thrown.
+    $thrown = ['one' => null, 'two' => null];
+    $done = ['one' => false, 'two' => false];
+
+    while (! $done['one'] || ! $done['two']) {
+        foreach (['one', 'two'] as $key) {
+            if ($done[$key]) {
+                continue;
+            }
+
+            try {
+                if (! $iterators[$key]->valid()) {
+                    $done[$key] = true;
+
+                    continue;
+                }
+
+                $iterators[$key]->next();
+            } catch (Throwable $exception) {
+                $thrown[$key] = $exception;
+                $done[$key] = true;
+            }
+        }
+    }
+
+    $history = app(RunHistoryStore::class);
+
+    // Each run dies on its first tool call, so each makes exactly one request.
+    // The fake routes on the agent's instructions, which only the first request
+    // of a turn carries -- pinning the count here means a change that adds a
+    // second turn fails loudly instead of silently mis-routing.
+    Http::assertSentCount(2);
+
+    expect($thrown['one'])->toBeInstanceOf(RuntimeException::class)
+        ->and($thrown['one']?->getMessage())->toBe(FailingTool::MESSAGE)
+        ->and($thrown['two'])->toBeInstanceOf(RuntimeException::class)
+        ->and($thrown['two']?->getMessage())->toBe(FailingTool::MESSAGE)
+        ->and(FailingTool::$calls)->toBe(2)
+        ->and($history->find($streams['one']->runId)['status'])->toBe('failed')
+        ->and($history->find($streams['two']->runId)['status'])->toBe('failed');
+});

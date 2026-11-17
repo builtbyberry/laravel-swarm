@@ -237,7 +237,7 @@ test('reconstructed tools and one-shot messages match the direct Laravel AI requ
     app(NativeInputManager::class)->admit($context, Topology::Parallel, ExecutionMode::Queue);
     $invocation = RunContext::fromPayload($context->toQueuePayload())
         ->nativeInvocation('parallel:0', 'wire-task', new NativeAgentSettingsAttempt);
-    NativeAgentInvoker::prompt(new FakeResearcher, $invocation);
+    NativeAgentInvoker::prompt(new FakeResearcher, $invocation, 'unit-run');
 
     expect($requests)->toHaveCount(2)
         ->and($requests[1])->toEqual($requests[0])
@@ -554,7 +554,7 @@ test('recovered tools resolve once immediately before invocation', function () {
     expect(NativeSettingsTool::$constructions)->toBe(0);
 
     FakeResearcher::fake(['done']);
-    NativeAgentInvoker::prompt(new FakeResearcher, $invocation);
+    NativeAgentInvoker::prompt(new FakeResearcher, $invocation, 'unit-run');
 
     expect(NativeSettingsTool::$constructions)->toBe(1);
 });
@@ -651,7 +651,7 @@ test('recovered tool references fail before the provider request when they no lo
     $invocation = $recovered->nativeInvocation('parallel:0', 'inspect');
     FakeResearcher::fake(['provider-was-called']);
 
-    expect(fn () => NativeAgentInvoker::prompt(new FakeResearcher, $invocation))
+    expect(fn () => NativeAgentInvoker::prompt(new FakeResearcher, $invocation, 'unit-run'))
         ->toThrow(SwarmException::class, 'cannot be reconstructed from its declared arguments');
     FakeResearcher::assertNeverPrompted();
 });
@@ -722,7 +722,7 @@ test('reconstructed workers continue an authorized native conversation', functio
     app(NativeInputManager::class)->admit($context, Topology::Parallel, ExecutionMode::Queue);
     $invocation = RunContext::fromPayload($context->toQueuePayload())
         ->nativeInvocation('parallel:0', 'continue', new NativeAgentSettingsAttempt);
-    NativeAgentInvoker::prompt(new ConversationAgent, $invocation);
+    NativeAgentInvoker::prompt(new ConversationAgent, $invocation, 'unit-run');
 
     ConversationAgent::assertPrompted(fn (AgentPrompt $prompt): bool => $prompt->prompt === 'continue'
         && $prompt->agent->currentConversation() === $conversationId
@@ -772,7 +772,7 @@ test('explicit empty native overrides survive request-local and reconstructed ex
     expect($recoverable->nativeInput()?->formatVersion())->toBe(NativeInputManifest::SETTINGS_VERSION)
         ->and($invocation->toolsConfigured)->toBeTrue()
         ->and($invocation->messagesConfigured)->toBeTrue();
-    NativeAgentInvoker::prompt(new DeclaredNativeSettingsToolAgent, $invocation);
+    NativeAgentInvoker::prompt(new DeclaredNativeSettingsToolAgent, $invocation, 'unit-run');
     DeclaredNativeSettingsToolAgent::assertPrompted(fn (AgentPrompt $prompt): bool => $prompt->prompt === 'reconstructed'
         && $prompt->tools === []
         && $prompt->messages === []);

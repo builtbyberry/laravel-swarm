@@ -92,7 +92,7 @@ class ParallelRunner
                         ->resolve($swarmClass, $agentClass, $index, $adHoc);
                     $startedAt = MonotonicTime::now();
                     $invocation = $workerContext->nativeInvocation("parallel:{$index}", $input, $attempt);
-                    $response = NativeAgentInvoker::prompt($agent, $invocation);
+                    $response = NativeAgentInvoker::prompt($agent, $invocation, $runId);
                     Container::getInstance()->make(NativeOutcomeValidator::class)->validateResponse($response);
 
                     return [

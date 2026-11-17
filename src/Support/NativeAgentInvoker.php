@@ -15,11 +15,11 @@ use ReflectionClass;
 /** @internal */
 final class NativeAgentInvoker
 {
-    public static function prompt(Agent $agent, NativeAgentInvocation $invocation): AgentResponse
+    public static function prompt(Agent $agent, NativeAgentInvocation $invocation, string $runId): AgentResponse
     {
         $agent = self::configured($agent, $invocation);
         ActiveRunContext::resetDeclinedToolCalls();
-        ActiveRunContext::invoking($agent);
+        ActiveRunContext::invoking($runId, $agent);
 
         try {
             if ($invocation->timeout !== null) {
@@ -40,14 +40,16 @@ final class NativeAgentInvoker
         }
     }
 
-    public static function stream(Agent $agent, NativeAgentInvocation $invocation): StreamableAgentResponse
+    public static function stream(Agent $agent, NativeAgentInvocation $invocation, string $runId): StreamableAgentResponse
     {
         $agent = self::configured($agent, $invocation);
         ActiveRunContext::resetDeclinedToolCalls();
 
-        // Set, and deliberately not cleared: a streamed invocation's tool calls
-        // run while the consumer iterates, long after this method returns.
-        ActiveRunContext::invoking($agent);
+        // Set on $runId's own frame, and deliberately not cleared: a streamed
+        // invocation's tool calls run while the consumer iterates, long after
+        // this method returns. The run is named because another run's frame can
+        // sit above this one by then -- see ActiveRunContext::invoking().
+        ActiveRunContext::invoking($runId, $agent);
 
         if ($invocation->timeout !== null) {
             return $agent->stream($invocation->prompt, [], $invocation->provider, $invocation->model, $invocation->timeout);

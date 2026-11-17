@@ -78,6 +78,50 @@ class NativeCapabilityWire
     }
 
     /**
+     * Re-emit one of the bodies above as a streamed SSE turn.
+     *
+     * The streamed path is where interleaved consumption matters: a stream's
+     * tool calls run as the consumer iterates, so two streams advanced
+     * round-robin have both runs live at once. Same output, event-by-event.
+     *
+     * Covers function calls and output text only. It does NOT emit
+     * `response.output_item.done`, which the real gateway uses for reasoning
+     * items and provider-tool completion (see laravel/ai's
+     * `Gateway/OpenAi/Concerns/HandlesTextGeneration.php`), so a test that
+     * depends on either must build its own wire rather than reach for this.
+     *
+     * @param  array<string, mixed>  $body
+     */
+    public static function sse(array $body): string
+    {
+        /** @var list<array<string, mixed>> $output */
+        $output = $body['output'];
+        $events = [['type' => 'response.created', 'response' => $body]];
+
+        foreach ($output as $index => $item) {
+            $events[] = ['type' => 'response.output_item.added', 'item' => $item, 'output_index' => $index];
+
+            if ($item['type'] === 'function_call') {
+                $events[] = ['type' => 'response.function_call_arguments.done', 'item_id' => $item['id'], 'arguments' => $item['arguments']];
+
+                continue;
+            }
+
+            /** @var list<array{text: string}> $content */
+            $content = $item['content'];
+            $events[] = ['type' => 'response.output_text.delta', 'item_id' => $item['id'], 'delta' => $content[0]['text']];
+            $events[] = ['type' => 'response.output_text.done', 'item_id' => $item['id'], 'text' => $content[0]['text']];
+        }
+
+        $events[] = ['type' => 'response.completed', 'response' => $body];
+
+        return implode('', array_map(
+            fn (array $event): string => 'data: '.json_encode($event, JSON_THROW_ON_ERROR)."\n\n",
+            $events,
+        ));
+    }
+
+    /**
      * @param  array<int, array<string, mixed>>  $output
      * @return array<string, mixed>
      */
