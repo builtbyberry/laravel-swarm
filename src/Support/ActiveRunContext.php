@@ -39,9 +39,13 @@ use Laravel\Octane\Contracts\OperationTerminated;
  * pairs {@see enter()} with {@see exit()} in a finally, so under normal flow
  * (including exceptions) the stack returns to empty. On a long-lived worker
  * (queue, Octane) an abnormal termination that bypasses the finally — a hard
- * timeout or fatal — can leave a stale frame, but it is never *read*:
- * {@see current()} returns the top, and the next run's {@see enter()} pushes a
- * fresh frame above it, so there is no correctness or cross-run-bleed concern.
+ * timeout or fatal — can leave a stale frame. For the readers that only ask
+ * "which run am I in", that is harmless: {@see current()} returns the top, and
+ * the next run's {@see enter()} pushes a fresh frame above it. One reader does
+ * treat a frame's mere presence as "a swarm run is executing" — the native
+ * tool-failure propagation listener in {@see SwarmServiceProvider} — so on such
+ * a worker a stale frame can make one non-swarm tool failure propagate as
+ * though it were in-run.
  * The only residue is a single retained {@see RunContext} reference until the
  * worker recycles. Under Laravel Octane this residue is cleared eagerly: when
  * the package detects Octane is installed, {@see SwarmServiceProvider} wires an

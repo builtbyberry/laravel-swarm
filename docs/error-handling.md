@@ -45,9 +45,10 @@ which behavior you get:
 | `propagate` (default) | The handler's own exception is rethrown and the swarm run fails, on every supported `laravel/ai` version. |
 | `recover` | Defer to `laravel/ai`. On >= 1.4 the failure is reported and returned to the model and the run continues; on 1.0–1.3 `laravel/ai` has no such recovery, so this behaves as `propagate`. |
 
-An unrecognised value falls back to `propagate`, and is warned about once at boot
-rather than from inside the failure path. The value is re-read on each failure, so
-a runtime change is honored **within that process** — but see
+An unrecognised value falls back to `propagate`. The read itself stays quiet,
+because it happens inside the failure path — `swarm:health` is where the
+effective policy and an unrecognised value are reported. The value is re-read on
+each failure, so a runtime change is honored **within that process** — but see
 [Where the policy is read](#where-the-policy-is-read) before relying on that.
 
 Under `propagate` the exception that reaches your handler is the one your tool
@@ -63,6 +64,13 @@ prompts directly, with no swarm involved, keep `laravel/ai`'s own behavior — o
 >= 1.4 that means they still recover. Installing Swarm does not change how the
 rest of your application handles tool failures.
 
+Swarm decides "inside a swarm run" from the process-local run frame its runners
+enter around each agent invocation. On a long-lived non-Octane worker, a run
+terminated abnormally enough to bypass its `finally` can leave a stale frame
+behind, and a non-swarm tool failure in that worker would then be treated as
+in-run and propagate. Octane workers are flushed on every operation reset, so
+this is confined to a worker that has already died mid-run without unwinding.
+
 ### Two cases where a failing tool does not fail the run
 
 Both hold on every supported `laravel/ai` version, so neither is introduced by
@@ -75,11 +83,16 @@ the policy:
   validation messages to the model as a corrective result, so the model can fix
   its arguments and retry, and the run continues.
 
-A tool that wants the run to continue while its result reads as failed should
-return a message rather than throw. Swarm then records the call `failed` in the
-step's `nativeResult->tools` (see [Native Step Results](native-step-results.md)
-for that field). A per-tool "failed but non-terminal" result is not on Swarm's
-public surface today; `swarm.native_tool_failure_policy` is the only lever.
+**There is no per-tool way to say "failed, but keep going."** A `laravel/ai` tool
+can only return a string — which is recorded as a **successful** result, with
+`status: succeeded` in the step's `nativeResult->tools` (see
+[Native Step Results](native-step-results.md) for that field) — or throw, which
+the policy above decides the consequence of. Swarm's own memory tools mark a call
+failed through an `@internal` mechanism that is not available to application
+tools. So a tool that must not fail the run should return a string describing
+what went wrong and let the model read it, accepting that the recorded status
+says `succeeded`; `swarm.native_tool_failure_policy` is the only lever that
+changes what throwing does, and it is global rather than per-tool.
 
 ### When `propagate` does not apply
 
@@ -112,10 +125,13 @@ Two further things are worth knowing, neither of which disables propagation:
   and no exception surfaces from the flush.
 
 The listener ordering above is observed framework behavior rather than a
-documented Laravel guarantee. Swarm's own test suite pins it, so a change in
-Laravel fails Swarm's tests rather than silently changing your application — but
-do not build anything load-bearing on listener order. Use `SwarmFailed` or
-Swarm telemetry to observe run failures.
+documented Laravel guarantee. Swarm's test suite pins the part that matters for
+your listeners — that an exact-name `ToolFailed` listener is reached before
+Swarm's wildcard — so a change there fails Swarm's tests rather than silently
+changing your application. The registration *timing* (Swarm registers from
+`booted()`, after other providers' `boot()`) is not pinned by a test. Either way,
+do not build anything load-bearing on listener order: use `SwarmFailed` or Swarm
+telemetry to observe run failures.
 
 ### Where the policy is read
 

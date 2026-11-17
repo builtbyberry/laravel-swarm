@@ -199,20 +199,22 @@ it('defers to laravel/ai when the policy is recover', function () {
 
 it('leaves laravel/ai recovery in place when the dispatch does not reach Swarm', function (Closure $arrange) {
     // The preconditions documented in docs/error-handling.md#when-propagate-does-not-apply.
-    // Each is only observable on >= 1.4, where laravel/ai has a recovery to
-    // leave in place; below it the run fails either way.
+    nativeToolFailureTurns([class_basename(FailingTool::class)]);
+    $arrange();
+
+    $run = fn () => app(SwarmRunner::class)->agent(new CapabilityAgent([new FailingTool]))->prompt('task');
+
     if (! nativeToolFailureRecoveryExists()) {
-        expect(true)->toBeTrue();
+        // Below 1.4 there is no recovery to leave in place, so the handler's
+        // exception propagates whether or not Swarm's listener was reached.
+        // Assert that rather than nothing: the lane must not run empty.
+        expect($run)->toThrow(RuntimeException::class, FailingTool::MESSAGE);
+        expect(FailingTool::$calls)->toBe(1);
 
         return;
     }
 
-    nativeToolFailureTurns([class_basename(FailingTool::class)]);
-    $arrange();
-
-    $response = app(SwarmRunner::class)->agent(new CapabilityAgent([new FailingTool]))->prompt('task');
-
-    expect($response->output)->toBe('workflow-complete')
+    expect($run()->output)->toBe('workflow-complete')
         ->and(FailingTool::$calls)->toBe(1);
 })->with([
     'a bare Event::fake() dispatches nothing' => [fn () => Event::fake()],

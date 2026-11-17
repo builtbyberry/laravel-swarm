@@ -102,9 +102,10 @@ class SwarmHealthCommand extends Command
             }
 
             // Governed-by-default checks: the single-agent/inline front door promises
-            // that globally-configured guardrails, the audit sink, and the capture
-            // policy are wired up. These are container-only checks (no database), so
-            // they run on a bare `swarm:health` alongside the persistence checks.
+            // that globally-configured guardrails, the audit sink, the capture policy
+            // and the native tool-failure policy are wired up. These are
+            // container-only checks (no database), so they run on a bare
+            // `swarm:health` alongside the persistence checks.
             $results[] = $this->runGuardrailResolutionCheck($app, $config);
             $results[] = $this->runAuditSinkCheck($app);
             $results[] = $this->runCapturePolicyCheck($app);

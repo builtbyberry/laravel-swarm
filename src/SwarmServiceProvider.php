@@ -657,10 +657,13 @@ class SwarmServiceProvider extends ServiceProvider
      * listeners are reached first: `Illuminate\Events\Dispatcher` merges
      * exact-name listeners ahead of wildcard ones, and wildcards run in
      * registration order. That ordering is observed framework behaviour rather
-     * than a documented guarantee, and NativeToolFailurePropagationTest pins
-     * it. The rethrow still ends the dispatch, so listeners ordered after this
-     * one do not run -- see docs/error-handling.md#native-tool-failures, which
-     * is the single copy of the preconditions and their costs.
+     * than a documented guarantee. NativeToolFailurePropagationTest pins the
+     * half that matters to an application -- that an exact-name listener is
+     * reached before this wildcard -- but not the `booted()` timing, which a
+     * single-provider test harness cannot observe. The rethrow still ends the
+     * dispatch, so listeners ordered after this one do not run -- see
+     * docs/error-handling.md#native-tool-failures, the single copy of the
+     * preconditions and their costs.
      */
     protected function registerNativeToolFailurePropagation(): void
     {

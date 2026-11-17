@@ -116,8 +116,9 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   `laravel/ai`, which from v1.4.0 reports the failure and hands it to the model
   as a failed tool result so the agent can carry on; on `laravel/ai` 1.0–1.3
   there is no such recovery upstream, so `recover` behaves as `propagate` there.
-  An unrecognised value falls back to `propagate` and is warned about once at
-  boot. The policy covers swarm runs only — agents your application prompts
+  An unrecognised value falls back to `propagate`, and `swarm:health` reports
+  the effective policy so the fallback is visible. The policy covers swarm runs
+  only — agents your application prompts
   directly keep `laravel/ai`'s own behaviour. See
   [Error Handling](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/error-handling.md#native-tool-failures).
 

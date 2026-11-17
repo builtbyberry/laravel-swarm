@@ -51,8 +51,9 @@ return [
     // laravel/ai, which from v1.4.0 reports the failure and hands the model
     // "The tool call failed: <message>" so the agent can carry on; on 1.0-1.3
     // laravel/ai has no such recovery, so 'recover' behaves as 'propagate'
-    // there. An unrecognised value falls back to 'propagate' and is warned
-    // about once at boot.
+    // there. An unrecognised value falls back to 'propagate'; `swarm:health`
+    // reports the effective policy, so the fallback is visible rather than
+    // silent.
     //
     // Scoped to swarm runs: agents your application prompts directly keep
     // laravel/ai's own behaviour. 'propagate' also holds only while the

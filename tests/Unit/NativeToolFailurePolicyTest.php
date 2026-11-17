@@ -24,10 +24,11 @@ it('parses both policies, case-insensitively and ignoring surrounding space', fu
 it('flags an unrecognised string invalid but still resolves it, never throwing', function () {
     // tryFromConfig() is called from inside the tool-failure path: throwing a
     // ValueError on a typo'd config value there would mask the tool's own
-    // exception. The flag it reports is consumed once at boot, by the service
-    // provider, so the typo is not silent. Non-string values are guarded at the
-    // call site, not here -- the parameter is deliberately ?string, and
-    // NativeToolFailurePropagationTest covers the reachable non-string cases.
+    // exception. The flag it reports is what `swarm:health` reads to tell an
+    // operator their configured value was never in effect, so the typo is not
+    // silent. Non-string values are guarded at the call site, not here -- the
+    // parameter is deliberately ?string, and NativeToolFailurePropagationTest
+    // covers the reachable non-string cases.
     expect(NativeToolFailurePolicy::parse('not-a-policy'))
         ->toBe(['policy' => NativeToolFailurePolicy::Propagate, 'invalid' => true])
         ->and(NativeToolFailurePolicy::tryFromConfig('not-a-policy'))

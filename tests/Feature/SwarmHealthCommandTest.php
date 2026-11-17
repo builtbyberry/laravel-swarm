@@ -1244,7 +1244,7 @@ describe('capture policy check', function (): void {
 });
 
 describe('governance checks in --json output', function (): void {
-    test('the three governance checks appear with the standard shape in --json', function (): void {
+    test('the governance checks appear with the standard shape in --json', function (): void {
         $exitCode = Artisan::call('swarm:health', ['--json' => true]);
 
         $payload = json_decode(Artisan::output(), true);
@@ -1258,7 +1258,7 @@ describe('governance checks in --json output', function (): void {
             ->and($components)->toContain('Capture policy');
     });
 
-    test('the three governance checks are skipped under --audit (audit-outbox scope only)', function (): void {
+    test('the governance checks are skipped under --audit (audit-outbox scope only)', function (): void {
         $output = Artisan::call('swarm:health', ['--audit' => true]);
 
         expect($output)->toBe(0);

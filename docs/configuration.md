@@ -192,8 +192,10 @@ carry on.
 | `swarm.native_tool_failure_policy` | string | `propagate` | `SWARM_NATIVE_TOOL_FAILURE_POLICY` |
 
 Accepted values are `propagate` and `recover`, matched case-insensitively. An
-unrecognised value falls back to `propagate` rather than throwing, and is warned
-about once at boot.
+unrecognised value falls back to `propagate` rather than throwing. `swarm:health`
+reports the effective policy and says when the configured value was not
+recognised, so the fallback is visible rather than silent — the read itself stays
+quiet because it happens inside the failure path.
 
 [Error Handling](error-handling.md#native-tool-failures) is the single reference
 for the rest: that the policy covers swarm runs only, the two cases where a
