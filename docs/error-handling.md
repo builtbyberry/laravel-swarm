@@ -65,27 +65,35 @@ prompts directly, with no swarm involved, keep `laravel/ai`'s own behavior — o
 rest of your application handles tool failures.
 
 Swarm decides this by the agent it is invoking, not by whether a swarm is
-somewhere on the call stack. So an application agent prompted from inside a
-`foreach` over a swarm stream — while that run is genuinely mid-flight, because a
-stream's tool calls run as the consumer iterates — still gets `laravel/ai`'s
-behaviour, as does one prompted after a run was abandoned. The one case Swarm
-cannot tell apart is an application prompting **the very same agent instance**
-Swarm is currently invoking; pass a separate instance if you need the two to
-behave differently.
+somewhere on the call stack, and it looks at every run in flight rather than only
+the most recent — so two swarm streams consumed in an interleaved way both keep
+their contract. An application agent prompted from inside a `foreach` over a
+swarm stream — while that run is genuinely mid-flight, because a stream's tool
+calls run as the consumer iterates — still gets `laravel/ai`'s behaviour.
 
-### Two cases where a failing tool does not fail the run
+The case Swarm cannot tell apart is an application prompting **the very same
+agent instance** Swarm is invoking. That includes after a streamed run was
+abandoned: the invocation is recorded for the frame's lifetime, deliberately,
+because a stream's tool calls arrive long after the call that started it. If the
+same instance can be reached both ways — a container singleton, or an `agents()`
+method handing back a shared instance — pass a separate instance to the
+application's own calls.
 
-Both hold on every supported `laravel/ai` version, so neither is introduced by
-the policy:
+### When a failing tool does not fail the run
 
-- **A tool that throws inside a nested sub-agent.** `laravel/ai`'s `AgentTool`
-  degrades any child-run failure to `Agent failed: <message>` and returns it as
-  the tool's result, so the parent swarm run continues. Verified on `laravel/ai`
-  1.0–1.4.0; on 1.4.1 the test that proves it fails for an unrelated upstream
-  reason, so this is unconfirmed there.
 - **A tool that throws a `ValidationException`.** `laravel/ai` returns the
   validation messages to the model as a corrective result, so the model can fix
-  its arguments and retry, and the run continues.
+  its arguments and retry, and the run continues. True on every supported
+  version.
+- **A tool that throws inside a nested sub-agent — version-dependent.** On
+  `laravel/ai` 1.0–1.4.0, `AgentTool` caught any child-run failure and returned
+  `Agent failed: <message>` as the tool's result, so the parent swarm run
+  continued. **1.4.1 removed that catch.** A child-run failure is now an ordinary
+  tool failure, carrying the parent agent, so under `propagate` it fails the
+  parent swarm run like any other. Swarm follows `laravel/ai` here rather than
+  re-creating the old behaviour: what counts as a tool failure is `laravel/ai`'s
+  to decide. Set `recover` if you need a sub-agent failure to leave the parent
+  run alive on 1.4.1+.
 
 **There is no per-tool way to say "failed, but keep going."** A `laravel/ai` tool
 can only return a string or `Stringable` — which is recorded as a **successful**

@@ -144,17 +144,24 @@ returned to the model as a failed tool result instead of ending the run. Below
   thing this document exists to refuse.
 - **Scope, and what the override does not reach.** The policy governs tool
   failures inside a **swarm run**; agents the application prompts directly keep
-  the native behavior. Two native paths keep it even inside a swarm, on every
-  version: a tool throwing inside a nested `AgentTool` (degraded upstream to
-  `Agent failed: <message>`) and a tool throwing a `ValidationException`
-  (returned to the model as a corrective result). Both are documented in
-  [Error Handling](error-handling.md#two-cases-where-a-failing-tool-does-not-fail-the-run).
+  the native behavior. A tool throwing a `ValidationException` keeps it even
+  inside a swarm, on every version, because `laravel/ai` returns the messages to
+  the model as a corrective result. A tool throwing inside a nested `AgentTool`
+  did too on 1.0–1.4.0, where upstream degraded a child-run failure to
+  `Agent failed: <message>` — but **v1.4.1 removed that catch**, so such a
+  failure is now an ordinary tool failure carrying the parent agent, and
+  `propagate` fails the parent run. Swarm follows upstream here rather than
+  re-creating the degradation: what counts as a tool failure is `laravel/ai`'s to
+  decide. Both are documented in
+  [Error Handling](error-handling.md#when-a-failing-tool-does-not-fail-the-run).
 - **Affected modes.** Every mode drives the native text loop, so the policy
-  applies in all of them, subject to the two native paths above.
+  applies in all of them, subject to the native paths above.
 - **What the override assumes upstream.** That `ToolFailed` is dispatched from
   inside `executeTool()`'s catch before the wrap; that it carries the handler's
-  own `$exception`; and that `executedToolResult()` catches only
-  `ToolExecutionException`, so a rethrown handler exception escapes unwrapped.
+  own `$exception`; that `executedToolResult()` catches only
+  `ToolExecutionException`, so a rethrown handler exception escapes unwrapped;
+  and — added after v1.4.1 moved it — whatever `AgentTool` does with a child-run
+  failure, since that decides whether a nested failure reaches the policy at all.
   The nightly lane re-resolves `^1.0` and runs the full suite daily, so a change
   to any of the three that reaches a `laravel/ai` release surfaces within a day;
   one still on its `1.x` branch does not, since no lane tracks that branch.

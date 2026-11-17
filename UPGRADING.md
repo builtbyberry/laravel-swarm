@@ -486,6 +486,17 @@ application prompts directly, outside any swarm, keep `laravel/ai`'s own
 behaviour — installing Swarm does not change how the rest of your application
 handles tool failures.
 
+**On `laravel/ai` >= 1.4.1, a failing tool inside a nested sub-agent now fails
+the parent swarm run.** Up to and including v1.4.0, `AgentTool` caught a
+child-run failure and returned `Agent failed: <message>` to the parent as the
+tool's result, so the parent run continued regardless of this policy. v1.4.1
+removed that catch, which makes a child-run failure an ordinary tool failure
+carrying the parent agent — so `propagate` now ends the parent run. This is
+upstream's change, not Swarm's, and Swarm follows it rather than re-creating the
+old degradation. If you rely on a sub-agent failure leaving the parent run
+alive, set `SWARM_NATIVE_TOOL_FAILURE_POLICY=recover` or hold `laravel/ai` at
+`1.4.0`.
+
 **Two things to know if you listen to `ToolFailed` or defer events.** Propagation
 is implemented with a wildcard `ToolFailed` listener, so a `'*'` catch-all or a
 wildcard `ToolFailed` listener registered after Swarm's does not run for swarm

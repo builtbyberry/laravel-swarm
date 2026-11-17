@@ -95,18 +95,37 @@ final class ActiveRunContext
     }
 
     /**
-     * Whether the given agent is the one Swarm is invoking in the top frame.
+     * Whether the given agent is one Swarm is invoking in any live frame.
      *
      * This is what distinguishes a tool failure inside a swarm run from one in
      * an agent the application prompted itself. A frame alone is not enough: it
      * stays live for the whole time a consumer iterates a swarm stream, since
      * that is when the stream's tool calls run, so an application prompting its
-     * own agent from inside that loop would otherwise look in-run. Identity, not
-     * class: two instances of the same agent class are different invocations.
+     * own agent from inside that loop would otherwise look in-run.
+     *
+     * Walks the whole stack, as {@see currentMemory()} does, rather than reading
+     * the top: an application consuming two swarm streams in an interleaved way
+     * suspends one run's frame under the other's, and the lower run's tool calls
+     * still execute when its generator is resumed. Reading only the top would
+     * silently recover a genuine swarm failure, which is a worse error than the
+     * one this check exists to prevent.
+     *
+     * Identity, not class: two instances of the same agent class are different
+     * invocations. That is also the residual limit: an application prompting the
+     * very same instance Swarm is invoking is indistinguishable from the swarm's
+     * own call, including after a streamed run was abandoned, since
+     * {@see invoking()} is deliberately not cleared for a stream whose tool
+     * calls arrive after the call that started it returned.
      */
     public static function isInvoking(Agent $agent): bool
     {
-        return self::current()?->invokingAgent === $agent;
+        for ($i = array_key_last(self::$stack); $i !== null && $i >= 0; $i--) {
+            if (self::$stack[$i]->invokingAgent === $agent) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

@@ -647,11 +647,14 @@ class SwarmServiceProvider extends ServiceProvider
      * where 1.0-1.3 failed. No version check is needed, and nothing here
      * references a symbol that is absent before 1.4.
      *
-     * Scoped to Swarm's own runs by the {@see ActiveRunContext} frame every
-     * runner enters around an agent invocation. laravel/ai dispatches
-     * `ToolFailed` for every tool failure in the process, so without the frame
-     * check installing Swarm would also make failures terminal for agents the
-     * application prompts directly, which Swarm does not own.
+     * Scoped to the agent Swarm is itself invoking, which
+     * {@see ActiveRunContext::isInvoking()} answers from the invocation every
+     * runner records on its frame. laravel/ai dispatches `ToolFailed` for every
+     * tool failure in the process, so without that check installing Swarm would
+     * also make failures terminal for agents the application prompts directly,
+     * which Swarm does not own. The frame's mere presence is deliberately not
+     * the test: a frame stays live for the whole time a consumer iterates a
+     * swarm stream, because that is when the stream's tool calls run.
      *
      * Registered as a WILDCARD listener, from `booted()`, so application
      * listeners are reached first: `Illuminate\Events\Dispatcher` merges

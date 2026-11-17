@@ -228,25 +228,25 @@ it('leaves laravel/ai recovery in place when the dispatch does not reach Swarm',
     ],
 ]);
 
-it('leaves a non-swarm agent alone even while a swarm run frame is live', function (Closure $openFrame) {
-    // The gate asks which agent Swarm is invoking, not merely whether a run
-    // frame exists -- and the distinction is load-bearing, because a frame is
-    // legitimately live for the whole time a consumer iterates a swarm stream:
-    // that is when the stream's tool calls run. An application prompting its
-    // own agent from inside that loop, or while holding an abandoned iterator,
-    // must still get laravel/ai's behaviour.
+it('leaves a non-swarm agent alone while a swarm run frame names no invocation', function () {
+    // End-to-end half of the scope gate. A run frame outlives the invocation
+    // that opened it -- a runner enters it before calling the invoker, and a
+    // streamed run keeps it up for the whole time a consumer iterates, because
+    // that is when the stream's tool calls run -- so a frame on its own must
+    // never make an application's own agent look in-run.
+    //
+    // The other half, where an invocation IS live and the gate must compare the
+    // agent rather than the frame, is pinned in tests/Unit/ActiveRunContextInvokingTest.php
+    // (identity not class, and a match in a frame below the top one). Reaching
+    // that window end-to-end needs a streamed swarm over an SSE wire, which this
+    // file's fixture does not provide.
     if (! nativeToolFailureRecoveryExists()) {
-        // Below 1.4 there is no recovery to leave in place, so there is nothing
-        // for the gate to get wrong here.
+        // Below 1.4 there is no recovery to leave in place.
         expect(true)->toBeTrue();
 
         return;
     }
 
-    // One fake for both the frame-opening stream and the direct prompt, because
-    // re-faking while a stream is mid-flight does not take effect. The stream's
-    // agent carries no tools, so only the direct prompt's request mentions the
-    // failing one -- and only its first turn, so the recovered turn settles.
     $askedForTool = false;
     Http::fake(function (Request $request) use (&$askedForTool) {
         if (! $askedForTool && str_contains($request->body(), class_basename(FailingTool::class))) {
@@ -258,10 +258,11 @@ it('leaves a non-swarm agent alone even while a swarm run frame is live', functi
         return Http::response(NativeCapabilityWire::message());
     });
 
-    $release = $openFrame();
+    ActiveRunContext::enter('left-behind-run', 'LeftBehindSwarm', new RunContext('left-behind-run', 'task'));
 
     try {
-        expect(ActiveRunContext::current())->not->toBeNull();
+        expect(ActiveRunContext::current())->not->toBeNull()
+            ->and(ActiveRunContext::current()?->invokingAgent)->toBeNull();
 
         FailingTool::$calls = 0;
 
@@ -270,32 +271,7 @@ it('leaves a non-swarm agent alone even while a swarm run frame is live', functi
         expect($response->text)->toBe('workflow-complete')
             ->and(FailingTool::$calls)->toBe(1);
     } finally {
-        $release();
+        ActiveRunContext::exit();
         ActiveRunContext::flush();
     }
-})->with([
-    // An ordinary foreach over a swarm stream, paused mid-iteration.
-    'inside ordinary stream consumption' => [function (): Closure {
-        $stream = app(SwarmRunner::class)->agent(new CapabilityAgent([]))->stream('task');
-        $iterator = $stream->getIterator();
-
-        while ($iterator->valid() && ActiveRunContext::current() === null) {
-            $iterator->next();
-        }
-
-        return function () use (&$iterator, &$stream): void {
-            unset($iterator, $stream);
-        };
-    }],
-    // A frame left behind entirely, as an abandoned generator or an abnormally
-    // terminated run would leave it.
-    'with a frame left behind' => [function (): Closure {
-        ActiveRunContext::enter(
-            'stale-run-id',
-            'StaleSwarm',
-            new RunContext('stale-run-id', 'task'),
-        );
-
-        return fn () => ActiveRunContext::exit();
-    }],
-]);
+});
