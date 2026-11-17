@@ -154,8 +154,9 @@ returned to the model as a failed tool result instead of ending the run. Below
   inside `executeTool()`'s catch before the wrap; that it carries the handler's
   own `$exception`; and that `executedToolResult()` catches only
   `ToolExecutionException`, so a rethrown handler exception escapes unwrapped.
-  The nightly lane runs the full suite against moving `laravel/ai`, so a change
-  to any of the three surfaces within a day.
+  The nightly lane re-resolves `^1.0` and runs the full suite daily, so a change
+  to any of the three that reaches a `laravel/ai` release surfaces within a day;
+  one still on its `1.x` branch does not, since no lane tracks that branch.
 - **Trigger for reevaluation.** Revisit when the supported `laravel/ai` floor
   moves to >= 1.4, at which point `recover` is uniformly available and the
   version-dependent half of this limit disappears. The `propagate` **default**

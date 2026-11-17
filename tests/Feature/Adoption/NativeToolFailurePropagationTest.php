@@ -6,6 +6,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Enums\NativeToolFailurePolicy;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Tests\Feature\Adoption\Fixtures\NativeCapabilities\CapabilityAgent;
 use BuiltByBerry\LaravelSwarm\Tests\Feature\Adoption\Fixtures\NativeCapabilities\NativeCapabilityWire;
 use BuiltByBerry\LaravelSwarm\Tests\Feature\Adoption\Fixtures\NativeToolFailure\FailingTool;
@@ -227,49 +228,74 @@ it('leaves laravel/ai recovery in place when the dispatch does not reach Swarm',
     ],
 ]);
 
-it('mis-attributes a later non-swarm failure while an abandoned stream iterator is still held', function () {
-    // Pins the limitation documented in docs/error-handling.md#scope-swarm-runs-only.
-    // The scope gate reads the process-local run frame, and a generator's
-    // finally does not run until the generator is released -- so a streamed run
-    // abandoned with its iterator still referenced leaves the frame up, and the
-    // next non-swarm tool failure in that process is treated as in-run. A plain
-    // foreach/break releases the generator and is safe; this needs an explicitly
-    // held getIterator(). If this ever stops being true the limitation has been
-    // fixed, and the doc should lose its caveat.
+it('leaves a non-swarm agent alone even while a swarm run frame is live', function (Closure $openFrame) {
+    // The gate asks which agent Swarm is invoking, not merely whether a run
+    // frame exists -- and the distinction is load-bearing, because a frame is
+    // legitimately live for the whole time a consumer iterates a swarm stream:
+    // that is when the stream's tool calls run. An application prompting its
+    // own agent from inside that loop, or while holding an abandoned iterator,
+    // must still get laravel/ai's behaviour.
     if (! nativeToolFailureRecoveryExists()) {
-        // Below 1.4 a non-swarm failure propagates regardless, so the frame
-        // makes no difference and there is nothing to mis-attribute.
-        expect(ActiveRunContext::current())->toBeNull();
+        // Below 1.4 there is no recovery to leave in place, so there is nothing
+        // for the gate to get wrong here.
+        expect(true)->toBeTrue();
 
         return;
     }
 
-    nativeToolFailureTurns([class_basename(FailingTool::class)]);
+    // One fake for both the frame-opening stream and the direct prompt, because
+    // re-faking while a stream is mid-flight does not take effect. The stream's
+    // agent carries no tools, so only the direct prompt's request mentions the
+    // failing one -- and only its first turn, so the recovered turn settles.
+    $askedForTool = false;
+    Http::fake(function (Request $request) use (&$askedForTool) {
+        if (! $askedForTool && str_contains($request->body(), class_basename(FailingTool::class))) {
+            $askedForTool = true;
 
-    $stream = app(SwarmRunner::class)->agent(new CapabilityAgent([]))->stream('task');
-    $iterator = $stream->getIterator();
+            return Http::response(NativeCapabilityWire::toolCalls([class_basename(FailingTool::class)]));
+        }
+
+        return Http::response(NativeCapabilityWire::message());
+    });
+
+    $release = $openFrame();
 
     try {
-        $staleFrame = null;
+        expect(ActiveRunContext::current())->not->toBeNull();
 
-        while ($iterator->valid()) {
-            if (ActiveRunContext::current() !== null) {
-                $staleFrame = ActiveRunContext::current()?->runId;
+        FailingTool::$calls = 0;
 
-                break; // abandon the generator WITHOUT releasing $iterator
-            }
+        $response = (new CapabilityAgent([new FailingTool]))->prompt('task');
 
+        expect($response->text)->toBe('workflow-complete')
+            ->and(FailingTool::$calls)->toBe(1);
+    } finally {
+        $release();
+        ActiveRunContext::flush();
+    }
+})->with([
+    // An ordinary foreach over a swarm stream, paused mid-iteration.
+    'inside ordinary stream consumption' => [function (): Closure {
+        $stream = app(SwarmRunner::class)->agent(new CapabilityAgent([]))->stream('task');
+        $iterator = $stream->getIterator();
+
+        while ($iterator->valid() && ActiveRunContext::current() === null) {
             $iterator->next();
         }
 
-        expect($staleFrame)->not->toBeNull()
-            ->and(ActiveRunContext::current()?->runId)->toBe($staleFrame);
+        return function () use (&$iterator, &$stream): void {
+            unset($iterator, $stream);
+        };
+    }],
+    // A frame left behind entirely, as an abandoned generator or an abnormally
+    // terminated run would leave it.
+    'with a frame left behind' => [function (): Closure {
+        ActiveRunContext::enter(
+            'stale-run-id',
+            'StaleSwarm',
+            new RunContext('stale-run-id', 'task'),
+        );
 
-        // A direct agent run, nothing to do with a swarm, now propagates.
-        expect(fn () => (new CapabilityAgent([new FailingTool]))->prompt('task'))
-            ->toThrow(RuntimeException::class, FailingTool::MESSAGE);
-    } finally {
-        unset($iterator, $stream);
-        ActiveRunContext::flush();
-    }
-});
+        return fn () => ActiveRunContext::exit();
+    }],
+]);

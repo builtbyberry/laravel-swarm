@@ -7,6 +7,7 @@ namespace BuiltByBerry\LaravelSwarm\Support;
 use BuiltByBerry\LaravelSwarm\Concerns\RemembersRunContext;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use Illuminate\Support\Facades\Context;
+use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\Contracts\Conversational;
 use Laravel\Octane\Contracts\OperationTerminated;
 
@@ -44,10 +45,11 @@ use Laravel\Octane\Contracts\OperationTerminated;
  * the generator's finally does not run until it is released. For the readers
  * that only ask "which run am I in", that is harmless: {@see current()} returns
  * the top, and the next run's {@see enter()} pushes a fresh frame above it.
- * One reader treats a frame's mere presence as "a swarm run is executing" — the
- * native tool-failure propagation listener in {@see SwarmServiceProvider} — and
- * for that one a stale frame mis-attributes a later non-swarm tool failure as
- * in-run. Proven by the held-iterator case in
+ * No reader treats a frame's mere presence as "a swarm run is executing": the
+ * native tool-failure propagation listener in {@see SwarmServiceProvider} asks
+ * {@see isInvoking()} instead, precisely because a frame is legitimately live
+ * while a consumer iterates a swarm stream — that is when its tool calls run —
+ * and may be left behind by an abandoned one. Proven by the live-frame cases in
  * NativeToolFailurePropagationTest.
  * Beyond that, the residue is a single retained {@see RunContext} reference
  * until the worker recycles. Under Laravel Octane it is cleared eagerly: when
@@ -76,6 +78,35 @@ final class ActiveRunContext
     public static function current(): ?ActiveRunRecord
     {
         return self::$stack === [] ? null : self::$stack[array_key_last(self::$stack)];
+    }
+
+    /**
+     * Record the Laravel AI agent Swarm is invoking in the top frame. Called by
+     * {@see NativeAgentInvoker} for every prompted and streamed invocation, with
+     * the configured instance that is actually invoked. A no-op without a frame.
+     */
+    public static function invoking(Agent $agent): void
+    {
+        $top = self::current();
+
+        if ($top !== null) {
+            $top->invokingAgent = $agent;
+        }
+    }
+
+    /**
+     * Whether the given agent is the one Swarm is invoking in the top frame.
+     *
+     * This is what distinguishes a tool failure inside a swarm run from one in
+     * an agent the application prompted itself. A frame alone is not enough: it
+     * stays live for the whole time a consumer iterates a swarm stream, since
+     * that is when the stream's tool calls run, so an application prompting its
+     * own agent from inside that loop would otherwise look in-run. Identity, not
+     * class: two instances of the same agent class are different invocations.
+     */
+    public static function isInvoking(Agent $agent): bool
+    {
+        return self::current()?->invokingAgent === $agent;
     }
 
     /**

@@ -675,9 +675,13 @@ class SwarmServiceProvider extends ServiceProvider
                     return;
                 }
 
-                // Only Swarm's own runs: a frame means a runner is invoking an
-                // agent. Outside one, laravel/ai keeps its own behaviour.
-                if (ActiveRunContext::current() === null) {
+                // Only the agent Swarm is invoking. A run frame alone is not
+                // enough: it stays live while a consumer iterates a swarm
+                // stream, because that is when the stream's tool calls run, so
+                // an application prompting its own agent from inside that loop
+                // would otherwise be caught. Outside Swarm's own invocation,
+                // laravel/ai keeps its own behaviour.
+                if (! ActiveRunContext::isInvoking($failed->agent)) {
                     return;
                 }
 

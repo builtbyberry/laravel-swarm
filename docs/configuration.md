@@ -191,6 +191,9 @@ carry on.
 | --- | --- | --- | --- |
 | `swarm.native_tool_failure_policy` | string | `propagate` | `SWARM_NATIVE_TOOL_FAILURE_POLICY` |
 
+Anything that is not a string is treated the same as an unrecognised value —
+`SWARM_NATIVE_TOOL_FAILURE_POLICY=false` arrives as a boolean, for instance.
+
 Accepted values are `propagate` and `recover`, matched case-insensitively. An
 unrecognised value falls back to `propagate` rather than throwing. `swarm:health`
 reports the effective policy and says when the configured value was not

@@ -19,6 +19,7 @@ final class NativeAgentInvoker
     {
         $agent = self::configured($agent, $invocation);
         ActiveRunContext::resetDeclinedToolCalls();
+        ActiveRunContext::invoking($agent);
 
         try {
             if ($invocation->timeout !== null) {
@@ -43,6 +44,10 @@ final class NativeAgentInvoker
     {
         $agent = self::configured($agent, $invocation);
         ActiveRunContext::resetDeclinedToolCalls();
+
+        // Set, and deliberately not cleared: a streamed invocation's tool calls
+        // run while the consumer iterates, long after this method returns.
+        ActiveRunContext::invoking($agent);
 
         if ($invocation->timeout !== null) {
             return $agent->stream($invocation->prompt, [], $invocation->provider, $invocation->model, $invocation->timeout);
