@@ -182,9 +182,9 @@ duplicating it:
 Each of these is documented in place with a reopen trigger; none is a silent drop.
 
 - **CI compatibility advisories (release readiness `CI-COMPAT-ADVISORY`,
-  `CI-L1316-ADV`) — closed in realtime-dispatch.** At v0.28.0 the
-  `PHP 8.4/8.5 - Laravel 13.16 compatibility (Pest 4)` lane passed with a
-  lane-scoped ignore of advisories `PKSA-d5tc-s1qs-h781`, `PKSA-b41t-wbzk-9q51`
+  `CI-L1316-ADV`) — closed in realtime-dispatch.** The retired
+  `PHP 8.4/8.5 - Laravel 13.16 compatibility (Pest 4)` lane was configured with
+  lane-scoped ignores for advisories `PKSA-d5tc-s1qs-h781`, `PKSA-b41t-wbzk-9q51`
   and `PKSA-4hy6-m98j-dz9f`. Its reopen trigger fired: the declared Laravel floor
   moved to 13.40.0, a release none of those advisories affects. The lane and
   every advisory ignore were removed, and the lowest-dependency jobs now prove

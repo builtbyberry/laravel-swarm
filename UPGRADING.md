@@ -35,25 +35,27 @@ processes:
 - **Swarm itself writes nothing to a worker's standard output**, and text an
   agent *returns* travels as data. A model cannot affect the result through its
   answer alone.
-- **Anything written to standard output inside the worker broke the run.** One
+- **A stray byte on the worker's standard output broke the run.** One
   byte from an `echo` in an agent failed the swarm with
   `ErrorException: Trying to access array offset on null`. With PHP's
   `display_errors` set to standard output, a PHP deprecation notice alone did
   the same before any agent ran.
-- **A crafted write replaced the result.** A complete result envelope followed
-  by the bytes `\x1f\x8b`, written by code running in the worker, made the
-  parent process build a PHP object from those bytes, and a parallel swarm
-  returned the forged text as both agents' output. We wrote those bytes from
+- **A crafted write replaced the result.** We ran two, each a complete result
+  envelope followed by the bytes `\x1f\x8b`, written by code running in the
+  worker. One carried a serialized object: the parent process built that object
+  from the worker's output, then the run failed with a `TypeError`. The other
+  carried a result row: a parallel swarm returned its forged text as both
+  agents' output. We wrote those bytes from
   agent code; we did not test whether a model's input can make a tool write
   them, so treat any agent or tool code that writes to standard output as
   enough.
 - **Live parallel streaming was not open to the replacement.** Its results
-  travel over an authenticated loopback socket; the same writes ended the stream
-  with a `SwarmException` ("returned an invalid process result envelope") and no
-  object was built.
+  travel over an authenticated loopback socket; the stray byte and the object
+  envelope each ended the stream with a `SwarmException` ("returned an invalid
+  process result envelope") and no object was built.
 
-On Laravel 13.43.0 the same writes were ignored on every path and each run
-returned its real result. A test now holds the parallel-swarm path at the floor
+On Laravel 13.43.0 each of those runs returned its real result and built no
+object. A test now holds the parallel-swarm path at the floor
 itself: the lowest-dependency CI jobs run it on exactly 13.40.0. The
 hierarchical and streaming paths were measured by hand on 13.43.0 and are not
 pinned by that test.

@@ -131,11 +131,13 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   13.40.0): the `process` concurrency driver treated everything a worker wrote
   to standard output as its result. Swarm writes nothing there itself, but it
   runs your agents and tools inside those workers. Measured on 13.16.0, one
-  stray byte written by an agent failed a parallel run, and a crafted write
-  made the parent build an object from the worker's output and return forged
-  text as the agents' output. Live parallel streaming, also on 13.16.0, ended
-  with an error on either write instead. On 13.43.0 the same writes were
-  ignored on every path. Run
+  stray byte written by an agent failed a parallel run. A crafted envelope
+  carrying an object made the parent build that object before the run failed
+  with a `TypeError`, and a separate crafted envelope carrying a result row
+  made the run return forged text as both agents' output. Live parallel
+  streaming, also on 13.16.0, ended with an error on the stray byte and on the
+  object envelope, and built no object. On 13.43.0 each of those runs returned
+  its real result. Run
   `composer update laravel/framework` first if your lock is below 13.40. See
   [Laravel 13.40 is now the minimum](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#laravel-1340-is-now-the-minimum).
 
