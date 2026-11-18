@@ -141,6 +141,18 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   `composer update laravel/framework` first if your lock is below 13.40. See
   [Laravel 13.40 is now the minimum](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#laravel-1340-is-now-the-minimum).
 
+- **Anthropic web-search citations follow `laravel/ai` 1.4.1 (#641).** Swarm
+  reports the citations `laravel/ai` reports, and its projection is unchanged.
+  `laravel/ai` v1.4.1 changed what it reports for Anthropic web search: `prompt()`
+  no longer reports a search result the answer does not cite (1.0.0 and 1.4.0
+  reported one carried under a `search_results` key), and a streamed turn reports
+  a URL the answer cites more than once a single time instead of once per mention.
+  Swarm does not rebuild citations from the search payload `laravel/ai` still
+  keeps. The citation test that asserted the old `search_results` behaviour now
+  asserts what holds on 1.0.0, 1.4.0 and 1.4.1, and gates only the streamed
+  duplicate count on the installed version. See
+  [Anthropic web-search citations](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#anthropic-web-search-citations-on-laravelai-141).
+
 - **Durable resume retries and checkpoint boundaries (#621).** Review the
   [application transaction, extension and rollout changes](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#concurrent-wait-creation-and-resume).
 

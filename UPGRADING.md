@@ -2,6 +2,35 @@
 
 ## Upgrading to realtime-dispatch
 
+### Anthropic web-search citations on `laravel/ai` 1.4.1
+
+Swarm reports the citations `laravel/ai` reports. `laravel/ai` v1.4.1 changed two
+things about Anthropic web search, so what you see depends on which `laravel/ai`
+you resolve, not on this Swarm release. Swarm's own code did not change. Check
+which one you have:
+
+```bash
+composer show laravel/ai
+```
+
+Measured on `laravel/ai` 1.0.0, 1.4.0 and 1.4.1:
+
+- **`prompt()`: a search result the answer does not cite.** On 1.0.0 and
+  1.4.0 it was reported as a citation when the response carried it under a
+  `search_results` key; on 1.4.1 it is not. If your code reads citations by
+  position, the cited source can move to an earlier index. `laravel/ai`'s own
+  tests put search results under a `content` list instead, and a result there was
+  never reported, on any of the three versions.
+- **`stream()`: a source the answer cites more than once.** On 1.0.0 and 1.4.0 a
+  streamed turn reported the URL once per mention, with one `swarm_citation` event
+  each. On 1.4.1 it reports the URL once. `prompt()` reported it once on all
+  three.
+
+A fetched page is still reported on all three. Review code that depends on which
+Anthropic sources are reported, their positions, or how many times each occurs.
+See
+[Anthropic web search](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/citations.md#anthropic-web-search).
+
 ### Laravel 13.40 is now the minimum
 
 Swarm now requires `illuminate/concurrency` `^13.40`, so the minimum Laravel is
