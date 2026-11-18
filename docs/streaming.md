@@ -416,9 +416,11 @@ redacted and skipped capture, including database replay. Redaction removes paylo
 values, not these outcome flags. The native streamed `successful`
 classification remains unchanged; error text still follows the capture policy
 (unchanged under Full, redacted under Redact, absent under Skip). Swarm does not
-classify an error-looking result string as an exception. In official Laravel AI, tool validation errors and caught nested
-`AgentTool` failures can be ordinary text results, while a max-step result can be
-failed without invoking the tool. Unsupported native approvals still fail at the
+classify an error-looking result string as an exception. In official Laravel AI, tool validation errors can be ordinary text results, as
+can a nested `AgentTool` child-run failure while upstream still catches it (it
+did up to v1.4.0; v1.4.1 does not — see
+[Error Handling](error-handling.md#a-sub-agents-own-run-failure)), while a
+max-step result can be failed without invoking the tool. Unsupported native approvals still fail at the
 [approval boundary](native-outcome-boundary.md).
 
 Laravel AI 1.0 can emit several cumulative results for the same tool call.

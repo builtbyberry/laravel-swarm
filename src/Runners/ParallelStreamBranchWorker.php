@@ -148,7 +148,7 @@ final class ParallelStreamBranchWorker
             $startedAt = MonotonicTime::now();
             try {
                 $invocation = $workerContext->nativeInvocation($branchId, $input, $attempt);
-                $stream = NativeAgentInvoker::stream($agent, $invocation);
+                $stream = NativeAgentInvoker::stream($agent, $invocation, $runId);
                 foreach ($stream as $event) {
                     $mapped = $mapper->map($event, $state, $index, $agent, $accumulator);
                     if ($mapped !== null) {
@@ -195,7 +195,7 @@ final class ParallelStreamBranchWorker
             return ['branch_id' => $branchId, 'terminal_sent' => true];
         } finally {
             if (($activeContextEntered ?? false) === true) {
-                ActiveRunContext::exit();
+                ActiveRunContext::exit($runId);
             }
             if (is_resource($socket)) {
                 fclose($socket);

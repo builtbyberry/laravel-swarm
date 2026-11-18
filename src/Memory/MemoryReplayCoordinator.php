@@ -122,7 +122,7 @@ final class MemoryReplayCoordinator
             try {
                 return $callback($existing, $replay);
             } finally {
-                ActiveRunContext::exit();
+                ActiveRunContext::exit($runId);
             }
         }
 

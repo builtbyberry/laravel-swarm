@@ -73,6 +73,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmOperator;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmTelemetrySink;
+use BuiltByBerry\LaravelSwarm\Enums\NativeToolFailurePolicy;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Memory\CacheMemoryStore;
 use BuiltByBerry\LaravelSwarm\Memory\ConversationPropagationPolicy;
@@ -167,6 +168,7 @@ use Illuminate\Contracts\Foundation\CachesConfiguration;
 use Illuminate\Encryption\Encrypter;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
+use Laravel\Ai\Events\ToolFailed;
 use Laravel\Octane\Contracts\OperationTerminated;
 use Psr\Log\LoggerInterface;
 
@@ -556,6 +558,8 @@ class SwarmServiceProvider extends ServiceProvider
             Event::subscribe(SwarmTelemetryEventListener::class);
         }
 
+        $this->registerNativeToolFailurePropagation();
+
         $this->registerOctaneStateReset();
 
         if ($this->app->runningInConsole()) {
@@ -628,6 +632,80 @@ class SwarmServiceProvider extends ServiceProvider
 
         Event::listen($operationTerminated, static function (): void {
             ActiveRunContext::flush();
+        });
+    }
+
+    /**
+     * Preserve Swarm's documented tool-failure contract on laravel/ai >= 1.4.
+     *
+     * laravel/ai v1.4.0 (laravel/ai#1191) stopped a throwing tool from ending
+     * the run: the handler's exception is wrapped internally and the model is
+     * handed a failed tool result instead. Swarm promises the pre-1.4
+     * behaviour, so this rethrows the handler's own exception from inside
+     * laravel/ai's `catch (Throwable)` in `InvokesTools::executeTool()`, where
+     * `ToolFailed` is dispatched before the wrap -- the same program point
+     * where 1.0-1.3 failed. No version check is needed, and nothing here
+     * references a symbol that is absent before 1.4.
+     *
+     * Scoped to the agent Swarm is itself invoking, which
+     * {@see ActiveRunContext::isInvoking()} answers from the invocation each
+     * runner records on the frame of its OWN run -- named rather than assumed
+     * to be the top one, because two swarm runs can be live at once. laravel/ai dispatches `ToolFailed` for every
+     * tool failure in the process, so without that check installing Swarm would
+     * also make failures terminal for agents the application prompts directly,
+     * which Swarm does not own. The frame's mere presence is deliberately not
+     * the test: a frame stays live for the whole time a consumer iterates a
+     * swarm stream, because that is when the stream's tool calls run.
+     *
+     * Registered as a WILDCARD listener, from `booted()`, so application
+     * listeners are reached first: `Illuminate\Events\Dispatcher` merges
+     * exact-name listeners ahead of wildcard ones, and wildcards run in
+     * registration order. That ordering is observed framework behaviour rather
+     * than a documented guarantee. NativeToolFailurePropagationTest pins the
+     * half that matters to an application -- that an exact-name listener is
+     * reached before this wildcard -- but not the `booted()` timing, which is
+     * observable with a second test provider and simply is not guarded here. The rethrow still ends the
+     * dispatch, so listeners ordered after this one do not run -- see
+     * docs/error-handling.md#native-tool-failures, the single copy of the
+     * preconditions and their costs.
+     */
+    protected function registerNativeToolFailurePropagation(): void
+    {
+        $this->app->booted(static function (): void {
+            Event::listen(ToolFailed::class.'*', static function (string $event, array $payload): void {
+                $failed = $payload[0] ?? null;
+
+                if (! $failed instanceof ToolFailed) {
+                    return;
+                }
+
+                // Only the agent Swarm is invoking. A run frame alone is not
+                // enough: it stays live while a consumer iterates a swarm
+                // stream, because that is when the stream's tool calls run, so
+                // an application prompting its own agent from inside that loop
+                // would otherwise be caught. Outside Swarm's own invocation,
+                // laravel/ai keeps its own behaviour.
+                if (! ActiveRunContext::isInvoking($failed->agent)) {
+                    return;
+                }
+
+                // Read per dispatch so a runtime change is honoured, through the
+                // helper so the closure holds no container. tryFromConfig() with
+                // an is_string() guard cannot throw: neither a typo'd value nor
+                // a non-string one (SWARM_NATIVE_TOOL_FAILURE_POLICY=false
+                // arrives as a bool) may mask the tool's own exception.
+                $configured = config('swarm.native_tool_failure_policy');
+
+                $policy = NativeToolFailurePolicy::tryFromConfig(
+                    is_string($configured) ? $configured : null,
+                );
+
+                if ($policy !== NativeToolFailurePolicy::Propagate) {
+                    return;
+                }
+
+                throw $failed->exception;
+            });
         });
     }
 

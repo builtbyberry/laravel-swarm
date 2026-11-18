@@ -296,10 +296,10 @@ class HierarchicalStreamRunner extends StaticHierarchicalStreamRunner
             try {
                 $this->evidenceStorage->check();
                 $invocation = $context->nativeInvocation('generated:coordinator', $context->input, $state->nativeSettingsAttempt);
-                $coordinatorResponse = NativeAgentInvoker::prompt($coordinator, $invocation);
+                $coordinatorResponse = NativeAgentInvoker::prompt($coordinator, $invocation, $context->runId);
                 $this->outcomes->validateResponse($coordinatorResponse);
             } finally {
-                ActiveRunContext::exit();
+                ActiveRunContext::exit($context->runId);
             }
 
             $coordinatorOutput = AgentResponseOutput::text($coordinatorResponse);

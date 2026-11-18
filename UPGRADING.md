@@ -454,6 +454,80 @@ ran a release without the rule in [A branch join waits for open waits](#a-branch
   can still deadlock with a wait closer. Retry the whole aborted transaction, and
   avoid holding a run's row across branch completion or resume.
 
+### Native tool failures on `laravel/ai` 1.4
+
+`laravel/ai` v1.4.0 ([laravel/ai#1191](https://github.com/laravel/ai/pull/1191))
+changed what a throwing tool does: instead of ending the run, the exception is
+wrapped internally, reported, and returned to the model as
+`The tool call failed: <message>` so the agent can recover. Swarm's documented
+contract is the pre-1.4 one — a tool call failure surfaces at the
+agent-execution boundary — so **Swarm preserves propagation by default**, scoped
+to swarm runs.
+
+**Whether anything changes for you depends on which `laravel/ai` you resolve.**
+The constraint has been `^1.0` since before v0.28.1, so both populations exist:
+
+- **On `laravel/ai` 1.0–1.3, nothing changes.** A failing tool failed the run
+  before and still does.
+- **On `laravel/ai` >= 1.4, behaviour changes back.** If you were already running
+  Swarm v0.28.1 with 1.4 installed, swarm runs whose tool threw have been
+  *completing successfully* — the model was handed the failure and answered
+  around it. After this upgrade those runs fail again. To find out whether this
+  affects you before upgrading, look in your error tracker for reported tool
+  exceptions on runs your history records as `completed`: `laravel/ai` reports
+  each recovered tool failure, so those are the runs that will now fail.
+
+If you want to upgrade first and change behaviour second, set
+`SWARM_NATIVE_TOOL_FAILURE_POLICY=recover`, which keeps `laravel/ai`'s behaviour
+for swarm runs, then remove it when you are ready.
+
+**Scope.** The policy governs tool failures inside a swarm run. Agents your
+application prompts directly, outside any swarm, keep `laravel/ai`'s own
+behaviour — installing Swarm does not change how the rest of your application
+handles tool failures.
+
+**On `laravel/ai` >= 1.4.1, a sub-agent held directly as a tool of your swarm's
+agent now fails the swarm run when its own run fails.** Up to and including
+v1.4.0, `AgentTool` caught that failure and returned `Agent failed: <message>` as
+the tool's result, so the run continued regardless of this policy. v1.4.1 removed
+that catch, which makes the child's exception an ordinary tool failure of the
+swarm-invoked agent's own call — so `propagate` now ends the run. This is
+upstream's change, not Swarm's, and Swarm follows it rather than re-creating the
+old degradation. If you rely on a failing sub-agent leaving the run alive, set
+`SWARM_NATIVE_TOOL_FAILURE_POLICY=recover` or hold `laravel/ai` at `1.4.0`;
+`recover` restores only that, so the tool result reads
+`The tool call failed: <message>` rather than `Agent failed: ...`.
+
+**Only the first level is affected.** With a sub-agent nested inside another
+sub-agent, a failing innermost run surfaces as a tool failure carrying the
+intermediate agent, which Swarm is not invoking, so `laravel/ai` recovers it
+there and the swarm run still completes — on 1.4.0 and 1.4.1 alike. If your
+sub-agents are nested more than one level deep, this upgrade changes no run
+outcome for them, and neither `recover` nor pinning is needed on their account.
+It does change what the intermediate agent's model is shown:
+`The tool call failed: <message>` instead of `Agent failed: <message>`.
+
+**This is not the same as a tool throwing *inside* a sub-agent**, which v1.4.1
+did not change: that `ToolFailed` carries the child agent, which Swarm is not
+invoking, so `laravel/ai` recovers it inside the child and the parent receives
+the child's text as a successful result.
+
+**Two things to know if you listen to `ToolFailed` or defer events.** Propagation
+is implemented with a wildcard `ToolFailed` listener, so a `'*'` catch-all or a
+wildcard `ToolFailed` listener registered after Swarm's does not run for swarm
+runs, on every supported version — register `ToolFailed` listeners by exact name
+and they always fire. A bare `Event::fake()`, or a listener reached before
+Swarm's that returns `false`, leaves `laravel/ai`'s recovery in place.
+
+**If you publish `config/swarm.php` and run `config:cache`,** add
+`'native_tool_failure_policy' => env('SWARM_NATIVE_TOOL_FAILURE_POLICY', 'propagate'),`
+to your published copy and re-cache, or the environment variable has no effect.
+
+Full reference, including what `recover` changes for exception-message handling,
+audit evidence and durable retry:
+[Error Handling](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/error-handling.md#native-tool-failures) and
+[Configuration](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/configuration.md#native-tool-failures).
+
 ## Upgrading to v0.28.1
 
 This patch deliberately departs from the additive-only patch policy stated

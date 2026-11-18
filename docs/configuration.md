@@ -179,6 +179,38 @@ explicitly marked `partial`; the projector never stores a truncated JSON string.
 
 ---
 
+## Native tool failures
+
+What a failing native tool does to a swarm run. `propagate` keeps Swarm's
+documented contract — the handler's own exception surfaces and the run fails — on
+every supported `laravel/ai` version. `recover` defers to `laravel/ai`, which
+from v1.4.0 reports the failure and returns it to the model so the agent can
+carry on.
+
+| Key | Type | Default | Env Var |
+| --- | --- | --- | --- |
+| `swarm.native_tool_failure_policy` | string | `propagate` | `SWARM_NATIVE_TOOL_FAILURE_POLICY` |
+
+Anything that is not a string is treated the same as an unrecognised value —
+`SWARM_NATIVE_TOOL_FAILURE_POLICY=false` arrives as a boolean, for instance.
+
+Accepted values are `propagate` and `recover`, matched case-insensitively. An
+unrecognised value falls back to `propagate` rather than throwing. `swarm:health`
+reports the effective policy and says when the configured value was not
+recognised, so the fallback is visible rather than silent — the read itself stays
+quiet because it happens inside the failure path.
+
+[Error Handling](error-handling.md#native-tool-failures) is the single reference
+for the rest: that the policy covers swarm runs only, when a failing tool does
+not fail the run (a tool throwing *inside* a nested sub-agent is one such case,
+and is distinct from a sub-agent's own run failure, which `laravel/ai` v1.4.1
+changed), the preconditions under which
+`propagate` holds, where the value is read from (parallel branches, queue workers
+and `config:cache` each matter), and what `recover` changes besides the control
+flow.
+
+---
+
 ## Limits
 
 Hard limits on payload sizes. All limits default to `null` (uncapped). Enforced at run start across all execution modes.

@@ -53,6 +53,7 @@ records preserved contracts, exact removal scope and unsupported new integration
 | `CallbackDrainResult` | Result of a `CallbackDeliveryOutbox::drain()` invocation — `dispatched`, `deadLettered`, `failed`, `claimed`, `reclaimed`. (v0.28.0+) | [Error Handling](error-handling.md#terminal-workflow-callbacks) |
 | `SwarmTerminalContext` | The settled-terminal summary passed to a delivered queue/durable `then()`/`catch()` callback — `runId`, `slot`, `swarmClass`, `topology`, and (for `catch`) redacted `exceptionClass`/`exceptionMessage`; `succeeded()`/`failed()`. (v0.28.0+) | [Error Handling](error-handling.md#terminal-workflow-callbacks) |
 | `ReplayMode` | Enum used by `#[MemoryReplay]` and `swarm.memory.replay_mode`. Cases: `FrozenView` (the default; retry reads use the frozen snapshot, and accepted Run-scope writes and forgets are saved after invocation, guardrails, and step recording succeed) and `FreshExecution` (live memory, no snapshot guard). (v0.9.0+) | [Swarm Memory](memory.md#replay-semantics) |
+| `NativeToolFailurePolicy` | Enum used by `swarm.native_tool_failure_policy`: `Propagate` (the default) or `Recover`. (realtime-dispatch+) | [Error Handling](error-handling.md#native-tool-failures) |
 
 ## Attributes
 
@@ -334,6 +335,7 @@ when callbacks are disabled and when the sync queue is used.
 | `swarm.queue.timeout` | `null` (inherit worker `--timeout`) | `SWARM_QUEUE_TIMEOUT` | Hard timeout (seconds) for queued swarm jobs. `null` inherits the worker's `--timeout` — set explicitly only when you need a hard ceiling. | v0.12.2+ |
 | `swarm.compaction.lease_seconds` | `300` | `SWARM_COMPACTION_LEASE_SECONDS` | How long a per-run compaction lease is held. The lease expires naturally if the job process dies. | v0.15.0+ |
 | `swarm.context_growth.policy` | `degrade_to_cold` | `SWARM_CONTEXT_GROWTH_POLICY` | Framework default growth-policy rung when a swarm declares no `#[ContextGrowthPolicy]`. | v0.15.0+ |
+| `swarm.native_tool_failure_policy` | `propagate` | `SWARM_NATIVE_TOOL_FAILURE_POLICY` | What a failing native tool does to a swarm run: `propagate` fails the run with the handler's own exception (Swarm's documented contract, every supported `laravel/ai`), `recover` defers to `laravel/ai`'s own recovery on >= 1.4. | realtime-dispatch+ |
 | `swarm.context_growth.budget_events` | `null` (inert) | `SWARM_CONTEXT_GROWTH_BUDGET_EVENTS` | Soft budget in hot stream events. `null` leaves the policy inert; supplying a number activates the default `degrade_to_cold` behaviour unless an author declares another rung. | v0.15.0+ |
 | `swarm.context_growth.hard_cap_events` | `null` (disabled) | `SWARM_CONTEXT_GROWTH_HARD_CAP_EVENTS` | Absolute ceiling that clamps author intent — a breach refuses the run regardless of declared policy (even `ignore`). Best-effort governance, not a correctness invariant. | v0.15.0+ |
 | `swarm.context_growth.backpressure_delay_ms` | `250` | `SWARM_CONTEXT_GROWTH_BACKPRESSURE_DELAY_MS` | Bounded delay inserted at a step boundary under the `backpressure` rung. Clamped to a safe maximum. | v0.15.0+ |

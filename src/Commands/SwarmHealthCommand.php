@@ -17,6 +17,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamStepCheckpointStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
+use BuiltByBerry\LaravelSwarm\Enums\NativeToolFailurePolicy;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableOutbox;
 use BuiltByBerry\LaravelSwarm\Streaming\Parallel\ParallelProcessStreamTransport;
 use BuiltByBerry\LaravelSwarm\Streaming\Parallel\ParallelStreamLimits;
@@ -101,12 +102,14 @@ class SwarmHealthCommand extends Command
             }
 
             // Governed-by-default checks: the single-agent/inline front door promises
-            // that globally-configured guardrails, the audit sink, and the capture
-            // policy are wired up. These are container-only checks (no database), so
-            // they run on a bare `swarm:health` alongside the persistence checks.
+            // that globally-configured guardrails, the audit sink, the capture policy
+            // and the native tool-failure policy are wired up. These are
+            // container-only checks (no database), so they run on a bare
+            // `swarm:health` alongside the persistence checks.
             $results[] = $this->runGuardrailResolutionCheck($app, $config);
             $results[] = $this->runAuditSinkCheck($app);
             $results[] = $this->runCapturePolicyCheck($app);
+            $results[] = $this->runNativeToolFailurePolicyCheck($config);
 
             if ($this->option('parallel-streaming') === true
                 || (bool) $config->get('swarm.streaming.parallel.enabled', false)) {
@@ -434,6 +437,64 @@ class SwarmHealthCommand extends Command
             'details' => $total === 0
                 ? 'no global guardrails configured (swarm.guardrails.input/step/output empty)'
                 : "{$total} global guardrail ref(s) resolve from the container",
+        ];
+    }
+
+    /**
+     * Report the effective native tool-failure policy.
+     *
+     * The per-failure read defaults silently, because it runs inside the
+     * failure path — so this is where an operator finds out which policy is in
+     * effect, whether their configured value was recognised, and whether the
+     * installed laravel/ai even has a recovery to defer to. Without it, "my
+     * tool failed but the run succeeded" has three indistinguishable causes.
+     *
+     * @return array{component: string, driver: string, store: string, status: string, details: string}
+     */
+    protected function runNativeToolFailurePolicyCheck(ConfigRepository $config): array
+    {
+        /** @var mixed $configured */
+        $configured = $config->get('swarm.native_tool_failure_policy');
+
+        // A non-string is as unusable as a typo'd one, and more likely:
+        // SWARM_NATIVE_TOOL_FAILURE_POLICY=false arrives as a real bool. The
+        // listener has to coerce it silently (throwing there would mask the
+        // tool's own exception); this check is not in the failure path, so it
+        // says so instead.
+        $unusableType = $configured === null || is_string($configured)
+            ? null
+            : get_debug_type($configured);
+
+        $parsed = NativeToolFailurePolicy::parse(is_string($configured) ? $configured : null);
+        $invalid = $unusableType !== null || $parsed['invalid'];
+        $recoveryAvailable = class_exists('Laravel\\Ai\\Exceptions\\ToolExecutionException');
+
+        $details = "effective policy=[{$parsed['policy']->value}]";
+
+        $details .= $recoveryAvailable
+            ? '; installed laravel/ai recovers tool failures, so the policy is what decides'
+            : '; installed laravel/ai has no tool-failure recovery, so a failing tool fails the run either way';
+
+        if ($invalid) {
+            $because = $unusableType === null
+                ? 'is not a recognised policy'
+                : "is a [{$unusableType}], not a policy string";
+
+            return [
+                'component' => 'Native tool failures',
+                'driver' => 'n/a',
+                'store' => 'n/a',
+                'status' => 'warning',
+                'details' => 'swarm.native_tool_failure_policy '.$because.'; '.$details.'. Set it to propagate or recover.',
+            ];
+        }
+
+        return [
+            'component' => 'Native tool failures',
+            'driver' => 'n/a',
+            'store' => 'n/a',
+            'status' => 'ok',
+            'details' => $details,
         ];
     }
 

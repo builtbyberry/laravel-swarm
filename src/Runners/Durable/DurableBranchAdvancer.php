@@ -228,12 +228,12 @@ class DurableBranchAdvancer
                             // dropped. Both shapes return [output, usage, snapshot].
                             if ($this->nodeStream->streamingActive($durableStreaming)) {
                                 $sink = $this->nodeStream->sinkFor($runId, $branchNodeId, $branchEpoch);
-                                [$output, $usage, $snapshot, $citationEvidence, $nativeResult] = $this->streamBranchAgent($state, $agent, $branch, $snapshot, $sink);
+                                [$output, $usage, $snapshot, $citationEvidence, $nativeResult] = $this->streamBranchAgent($state, $agent, $branch, $snapshot, $sink, $runId);
                             } else {
-                                [$output, $usage, $snapshot, $citationEvidence, $nativeResult] = $this->promptBranchAgent($state, $agent, $branch, $snapshot);
+                                [$output, $usage, $snapshot, $citationEvidence, $nativeResult] = $this->promptBranchAgent($state, $agent, $branch, $snapshot, $runId);
                             }
                         } finally {
-                            ActiveRunContext::exit();
+                            ActiveRunContext::exit($runId);
                         }
                         $durationMs = MonotonicTime::elapsedMilliseconds($startedAt);
 
@@ -392,13 +392,13 @@ class DurableBranchAdvancer
      * @param  array<string, mixed>  $branch
      * @return array{0: string, 1: array<string, mixed>, 2: MemorySnapshot, 3: CitationEvidence, 4: NativeStepResult}
      */
-    protected function promptBranchAgent(SwarmExecutionState $state, Agent $agent, array $branch, MemorySnapshot $snapshot): array
+    protected function promptBranchAgent(SwarmExecutionState $state, Agent $agent, array $branch, MemorySnapshot $snapshot, string $branchFrameRunId): array
     {
         $recipient = is_string($branch['node_id'] ?? null)
             ? ($state->topology === Topology::StaticHierarchical ? 'static:' : 'generated:').$branch['node_id']
             : 'parallel:'.(int) $branch['step_index'];
         $invocation = $state->context->nativeInvocation($recipient, (string) $branch['input'], $state->nativeSettingsAttempt);
-        $response = NativeAgentInvoker::prompt($agent, $invocation);
+        $response = NativeAgentInvoker::prompt($agent, $invocation, $branchFrameRunId);
         $this->outcomes->validateResponse($response);
 
         foreach (SnapshotToolCallNormalizer::fromResponse($response) as $toolCall) {
@@ -426,7 +426,7 @@ class DurableBranchAdvancer
      * @param  callable(SwarmStreamEvent): void  $sink
      * @return array{0: string, 1: array<string, mixed>, 2: MemorySnapshot, 3: CitationEvidence, 4: NativeStepResult}
      */
-    protected function streamBranchAgent(SwarmExecutionState $state, Agent $agent, array $branch, MemorySnapshot $snapshot, callable $sink): array
+    protected function streamBranchAgent(SwarmExecutionState $state, Agent $agent, array $branch, MemorySnapshot $snapshot, callable $sink, string $branchFrameRunId): array
     {
         // A structured-output branch worker cannot be streamed (#321) — fail loud
         // before consuming the stream. Mirrors the node_id ?? branch_id labelling
@@ -444,7 +444,7 @@ class DurableBranchAdvancer
                 ? ($state->topology === Topology::StaticHierarchical ? 'static:' : 'generated:').$branch['node_id']
                 : 'parallel:'.(int) $branch['step_index'];
             $invocation = $state->context->nativeInvocation($recipient, (string) $branch['input'], $state->nativeSettingsAttempt);
-            $stream = NativeAgentInvoker::stream($agent, $invocation);
+            $stream = NativeAgentInvoker::stream($agent, $invocation, $branchFrameRunId);
             foreach ($stream as $event) {
                 $swarmEvent = $this->mapper->map($event, $state, (int) $branch['step_index'], $agent, $accumulator);
 

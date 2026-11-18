@@ -108,6 +108,20 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   it once its waits have closed. See
   [UPGRADING](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#a-branch-join-waits-for-open-waits).
 
+- **`swarm.native_tool_failure_policy` chooses what a failing native tool does to
+  a swarm run (#634).** `propagate` (the default,
+  `SWARM_NATIVE_TOOL_FAILURE_POLICY`) keeps Swarm's documented contract on every
+  supported `laravel/ai` version: the tool handler's own exception surfaces at
+  the agent-execution boundary and the run fails. `recover` defers to
+  `laravel/ai`, which from v1.4.0 reports the failure and hands it to the model
+  as a failed tool result so the agent can carry on; on `laravel/ai` 1.0–1.3
+  there is no such recovery upstream, so `recover` behaves as `propagate` there.
+  An unrecognised value falls back to `propagate`, and `swarm:health` reports
+  the effective policy so the fallback is visible. The policy covers swarm runs
+  only — agents your application prompts
+  directly keep `laravel/ai`'s own behaviour. See
+  [Error Handling](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/error-handling.md#native-tool-failures).
+
 ### Changed
 
 - **Durable resume retries and checkpoint boundaries (#621).** Review the
@@ -174,6 +188,39 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   check keeps letting a stray resume job run the continuation early. The
   protected `DatabaseRunHistoryStore::isQueueHierarchicalParallelRun()` is removed.
   See [UPGRADING](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#a-queued-hierarchical-resume-runs-only-once-its-join-is-released).
+
+- **A failing native tool still fails a swarm run on `laravel/ai` 1.4 (#634).**
+  `laravel/ai` v1.4.0 (laravel/ai#1191, "Let agents recover from tool failures")
+  stopped a throwing tool from ending the run: the exception is wrapped
+  internally, reported, and returned to the model as
+  `The tool call failed: <message>`. Left alone, a swarm whose native tool failed
+  would have completed successfully with output the model produced after being
+  told the tool failed, and the four native-capability tests the moving-dev lanes
+  were pinned away from in #603 stayed red. Swarm now rethrows the handler's own
+  exception from inside `InvokesTools::executeTool()`'s catch, where `ToolFailed`
+  is dispatched before the wrap — the same program point where 1.0–1.3 failed —
+  so the contract is unchanged on upgrade, the exception a caller sees is the
+  tool's own rather than `laravel/ai`'s internal wrapper, and a sibling tool call
+  in the same step does not run its side effect first. Those four tests now pass
+  on `laravel/ai` 1.4.0 and 1.4.1 under the default policy. The rethrow is scoped to swarm
+  runs, and `ToolFailed` is still dispatched to application listeners registered
+  by exact name. One consequence is upstream's, not this change's: up to v1.4.0,
+  `AgentTool` caught the **own run failure** of a sub-agent held directly as a
+  tool of the swarm-invoked agent and returned `Agent failed: <message>`, so it
+  never reached this policy; **v1.4.1 removed that catch**, which makes the
+  child's exception an ordinary tool failure of that agent's own call, so
+  `propagate` now fails the swarm run. Only the first level is affected: one
+  `AgentTool` deeper, the failure carries the intermediate agent, which Swarm is
+  not invoking, so upstream recovers it there and the run still completes. Swarm follows `laravel/ai` rather than
+  re-creating the old degradation. A tool throwing *inside* a sub-agent is a
+  different case and is unchanged: that `ToolFailed` carries the child agent,
+  which Swarm is not invoking, so `laravel/ai` recovers it inside the child.
+  For the preconditions under which propagation holds, and what
+  `recover` changes for exception-message handling, audit evidence and durable
+  retry, see
+  [Error Handling](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/error-handling.md#native-tool-failures)
+  and
+  [UPGRADING](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#native-tool-failures-on-laravelai-14).
 
 ### Fixed
 
