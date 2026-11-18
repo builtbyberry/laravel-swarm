@@ -203,7 +203,9 @@ it('preserves full Pest 5 coverage and proves the Laravel floor on the lowest la
             ->not->toContain("glob(app_path('Ai/");
     }
 
-    // The lowest matrix rows are the floor proof: no separate lane, and no advisory is ignored anywhere.
+    // The lowest matrix rows are the floor proof. A second job here used to pin an older Laravel
+    // with advisories ignored (CVE-2026-128083 ended that); a new job belongs in its own workflow,
+    // or this list is updated on purpose.
     expect(array_keys($workflow['jobs']))->toBe(['tests']);
     $runs = array_values(array_filter(array_column($normal['steps'], 'run')));
     $ordered = [
@@ -220,7 +222,11 @@ it('preserves full Pest 5 coverage and proves the Laravel floor on the lowest la
         expect($position)->toBeGreaterThan($previous);
         $previous = $position;
     }
-    $workflowFiles = glob(dirname(__DIR__, 3).'/.github/workflows/*.yml') ?: [];
+    // No workflow may ignore a security advisory or bring back the retired 13.16 floor.
+    $workflowFiles = array_merge(
+        glob(dirname(__DIR__, 3).'/.github/workflows/*.yml') ?: [],
+        glob(dirname(__DIR__, 3).'/.github/workflows/*.yaml') ?: [],
+    );
     expect(count($workflowFiles))->toBeGreaterThan(1);
     foreach ($workflowFiles as $workflowFile) {
         // One needle per call: a negated multi-needle toContain passes when any needle is absent.

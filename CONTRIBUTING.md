@@ -77,8 +77,12 @@ installed exactly Laravel **13.40.0** and Laravel AI **1.0.0** from their
 official source commits. No job ignores a security advisory. If an advisory is
 later published against 13.40.0, Composer resolves a newer release and that
 verification fails on purpose: the declared floor is then no longer installable,
-and the fix is to decide the new floor (constraint, verifier pin, `UPGRADING.md`),
-not to add an advisory ignore.
+and the fix is to decide the new floor, not to add an advisory ignore. The floor
+lives in the `illuminate/concurrency` constraint in `composer.json`, the expected
+constraint and the exact version and commit in `verify-adoption-dependencies.php`,
+the fixtures in `tests/Unit/Adoption/DependencyProofTest.php`, the requirements
+lines in `README.md` and `docs/getting-started.md`, and a new `UPGRADING.md`
+section; move them together.
 
 The four normal Pest 5 jobs use Xdebug, `memory_limit=1G`, four concurrent test
 workers with a fresh worker for every parallel test-file assignment, the

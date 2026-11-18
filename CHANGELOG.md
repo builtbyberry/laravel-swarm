@@ -133,8 +133,9 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   runs your agents and tools inside those workers. Measured on 13.16.0, one
   stray byte written by an agent failed a parallel run, and a crafted write
   made the parent build an object from the worker's output and return forged
-  text as the agents' output; on 13.43.0 the same writes were ignored. Live
-  parallel streaming failed closed on both. Run
+  text as the agents' output. Live parallel streaming, also on 13.16.0, ended
+  with an error on either write instead. On 13.43.0 the same writes were
+  ignored on every path. Run
   `composer update laravel/framework` first if your lock is below 13.40. See
   [Laravel 13.40 is now the minimum](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#laravel-1340-is-now-the-minimum).
 

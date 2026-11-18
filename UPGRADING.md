@@ -5,7 +5,13 @@
 ### Laravel 13.40 is now the minimum
 
 Swarm now requires `illuminate/concurrency` `^13.40`, so the minimum Laravel is
-**13.40.0**. It was 13.16. Update Laravel before or together with Swarm:
+**13.40.0**. It was 13.16. Check what you have installed:
+
+```bash
+composer show laravel/framework
+```
+
+If it is below 13.40.0, update Laravel before or together with Swarm:
 
 ```bash
 composer update laravel/framework builtbyberry/laravel-swarm
@@ -37,17 +43,20 @@ processes:
 - **A crafted write replaced the result.** A complete result envelope followed
   by the bytes `\x1f\x8b`, written by code running in the worker, made the
   parent process build a PHP object from those bytes, and a parallel swarm
-  returned the forged text as both agents' output. Agents and tools act on
-  model-chosen arguments and on tool results, so anything in the worker that
-  writes to standard output is enough.
+  returned the forged text as both agents' output. We wrote those bytes from
+  agent code; we did not test whether a model's input can make a tool write
+  them, so treat any agent or tool code that writes to standard output as
+  enough.
 - **Live parallel streaming was not open to the replacement.** Its results
   travel over an authenticated loopback socket; the same writes ended the stream
   with a `SwarmException` ("returned an invalid process result envelope") and no
   object was built.
 
 On Laravel 13.43.0 the same writes were ignored on every path and each run
-returned its real result. A test now holds that at the floor itself: the
-lowest-dependency CI jobs run it on exactly 13.40.0.
+returned its real result. A test now holds the parallel-swarm path at the floor
+itself: the lowest-dependency CI jobs run it on exactly 13.40.0. The
+hierarchical and streaming paths were measured by hand on 13.43.0 and are not
+pinned by that test.
 
 Composer's default advisory policy already refuses the affected versions when
 it resolves dependencies: with Composer 2.11.1, resolving Swarm's previous
@@ -744,6 +753,9 @@ Laravel 13.16 through 13.29 are affected by advisory
 `PKSA-d5tc-s1qs-h781` / CVE-2026-102279, fixed in Laravel 13.30.0. Laravel
 Swarm's declared floor remains `^13.16`; applications should run Laravel 13.30
 or later.
+
+> This describes v0.28.0. The minimum has since moved to Laravel 13.40; see
+> [Laravel 13.40 is now the minimum](#laravel-1340-is-now-the-minimum).
 
 ### Companion packages
 

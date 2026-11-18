@@ -64,7 +64,7 @@ decisions remain outside this input surface. See
 ## Requirements
 
 - PHP **^8.4**
-- Laravel **^13.40** (requires `illuminate/concurrency` **^13.40**)
+- Laravel **^13.40** (requires `illuminate/concurrency` **^13.40**; [why 13.40](UPGRADING.md#laravel-1340-is-now-the-minimum))
 - `laravel/ai` **^1.0**
 
 PHP **^8.4** is supported alongside PHP 8.5. As of **v0.27.0**, the official `laravel/ai` requirement is **^1.0**. Upgrade the dependency and Swarm together; see [UPGRADING.md](UPGRADING.md#upgrading-to-v0270).

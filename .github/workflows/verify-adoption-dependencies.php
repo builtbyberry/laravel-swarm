@@ -11,8 +11,9 @@ function adoptionDependencyErrors(array $manifest, array $lock, array $installed
         $errors[] = 'Production requires PHP ^8.4 and official Laravel AI ^1.0.';
     }
     foreach (['bus', 'cache', 'concurrency', 'console', 'container', 'contracts', 'database', 'events', 'filesystem', 'json-schema', 'queue', 'support', 'view'] as $package) {
-        // illuminate/concurrency carries the floor: Laravel 13.40.0 is the first release whose
-        // process driver authenticates a worker's result instead of trusting its stdout.
+        // illuminate/concurrency carries the floor: Laravel 13.40.0 is the first release not
+        // affected by PKSA-yxbx-3c9s-cjt9 (CVE-2026-128083), where the process driver took
+        // whatever a worker wrote to standard output as its result. See UPGRADING.md.
         $expected = match ($package) {
             'concurrency' => '^13.40',
             'json-schema' => '^13.16',
