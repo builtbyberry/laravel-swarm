@@ -26,8 +26,9 @@ Measured on `laravel/ai` 1.0.0, 1.4.0 and 1.4.1:
   each. On 1.4.1 it reports the URL once. `prompt()` reported it once on all
   three.
 
-A fetched page is still reported on all three. Nothing to change unless your code
-counts or indexes Anthropic citations. See
+A fetched page is still reported on all three. Review code that depends on which
+Anthropic sources are reported, their positions, or how many times each occurs.
+See
 [Anthropic web search](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/citations.md#anthropic-web-search).
 
 ### Laravel 13.40 is now the minimum

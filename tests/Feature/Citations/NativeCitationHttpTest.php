@@ -102,9 +102,10 @@ function expectCitationsMatchEvents(object $result, array $events): void
 
 /*
  * Swarm reports the sources laravel/ai reports; it does not read Anthropic's
- * payload itself. laravel/ai reports a fetched page and each source the answer
- * cites. It does not report a web search result the answer never cites, even
- * though that result is still in the provider-tool payload it keeps.
+ * payload itself. On laravel/ai 1.0.0, 1.4.0 and 1.4.1 that is the fetched page
+ * and the source the answer cites. The uncited result in this fixture's
+ * `content` list is not reported on any of the three; on 1.4.1 laravel/ai
+ * retains that payload in the step's provider-tool calls.
  */
 it('preserves the Anthropic sources laravel/ai reports and adds none of its own', function (bool $streamed) {
     $cited = ['type' => 'web_search_result_location', 'url' => 'https://source.example/anthropic', 'title' => 'Native source'];
@@ -130,9 +131,10 @@ it('preserves the Anthropic sources laravel/ai reports and adds none of its own'
 })->with([false, true]);
 
 /*
- * laravel/ai 1.4.1 emits a URL once per streamed turn; earlier releases emit it
- * once per mention. Swarm keeps every occurrence it is given, so the count
- * follows the installed laravel/ai. prompt() has always reported it once.
+ * For a URL the answer cites twice, stream() emitted one occurrence on
+ * laravel/ai 1.4.1 and two on the measured 1.0.0 and 1.4.0 installs. For these
+ * fixtures Swarm preserves each distinct citation event laravel/ai emits.
+ * prompt() reported the URL once on 1.0.0, 1.4.0 and 1.4.1.
  */
 it('reports a source the answer cites twice as often as laravel/ai reports it', function (bool $streamed) {
     $cited = ['type' => 'web_search_result_location', 'url' => 'https://source.example/anthropic', 'title' => 'Native source'];
