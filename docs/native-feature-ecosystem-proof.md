@@ -182,13 +182,14 @@ duplicating it:
 Each of these is documented in place with a reopen trigger; none is a silent drop.
 
 - **CI compatibility advisories (release readiness `CI-COMPAT-ADVISORY`,
-  `CI-L1316-ADV`).** The `PHP 8.4/8.5 - Laravel 13.16 compatibility (Pest 4)`
-  lane passes with a lane-scoped ignore of only advisories `PKSA-d5tc-s1qs-h781`
-  (PR #555; fixed in 13.30.0), `PKSA-b41t-wbzk-9q51` (fixed in 13.29.0) and
-  `PKSA-4hy6-m98j-dz9f` (fixed in 13.27.0); any other advisory still fails that
-  exact-floor lane. Reopen when the declared Laravel floor moves to a fixed
-  release or an advisory's status changes, then remove its ignore and rerun the
-  floor proof.
+  `CI-L1316-ADV`) — closed in realtime-dispatch.** At v0.28.0 the
+  `PHP 8.4/8.5 - Laravel 13.16 compatibility (Pest 4)` lane passed with a
+  lane-scoped ignore of advisories `PKSA-d5tc-s1qs-h781`, `PKSA-b41t-wbzk-9q51`
+  and `PKSA-4hy6-m98j-dz9f`. Its reopen trigger fired: the declared Laravel floor
+  moved to 13.40.0, a release none of those advisories affects. The lane and
+  every advisory ignore were removed, and the lowest-dependency jobs now prove
+  the floor at exactly 13.40.0. See
+  [UPGRADING.md](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#laravel-1340-is-now-the-minimum).
 - **Companion `^0.28` support (release readiness `P12-ECO1`).** The shipped companions
   capped core at `^0.27`; this component's four sanctioned siblings add `^0.28`. Until
   those siblings are merged, tagged, and published, a default-Packagist five-package

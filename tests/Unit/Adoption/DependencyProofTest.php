@@ -12,13 +12,9 @@ function adoptionProofInputs(string $lane = 'minimum'): array
     $manifest = json_decode(file_get_contents(dirname(__DIR__, 3).'/composer.json'), true, flags: JSON_THROW_ON_ERROR);
     $packages = [
         ['name' => 'laravel/ai', 'version' => 'v1.0.0', 'source' => ['type' => 'git', 'url' => 'https://github.com/laravel/ai.git', 'reference' => '101c7ea33cd8569d82570f753fbf38e48b7d3d95']],
-        ['name' => 'laravel/framework', 'version' => $lane === 'moving-dev' ? '13.x-dev' : 'v13.16.0', 'source' => ['type' => 'git', 'url' => 'https://github.com/laravel/framework.git', 'reference' => str_repeat('a', 40)]],
+        // Stable lanes carry the exact floor release; the moving lane carries the captured branch head.
+        ['name' => 'laravel/framework', 'version' => $lane === 'moving-dev' ? '13.x-dev' : 'v13.40.0', 'source' => ['type' => 'git', 'url' => 'https://github.com/laravel/framework.git', 'reference' => $lane === 'moving-dev' ? str_repeat('a', 40) : '1449bf241017087fbd38c118ecaabef3f6797fdc']],
     ];
-    if ($lane === 'laravel-13.16') {
-        $packages[1]['source']['reference'] = '66d5cdac5afd508dc6519ca59f5cc9b2c93a2b67';
-        $packages[] = ['name' => 'pestphp/pest', 'version' => 'v4.7.0', 'source' => ['type' => 'git', 'url' => 'https://github.com/pestphp/pest.git', 'reference' => str_repeat('b', 40)]];
-        $packages[] = ['name' => 'pestphp/pest-plugin-laravel', 'version' => 'v4.1.0', 'source' => ['type' => 'git', 'url' => 'https://github.com/pestphp/pest-plugin-laravel.git', 'reference' => str_repeat('c', 40)]];
-    }
 
     // Expected observations are fixture inputs independent of the lock under test.
     return [$manifest, ['packages' => $packages], ['packages' => $packages], $lane, [
@@ -28,50 +24,54 @@ function adoptionProofInputs(string $lane = 'minimum'): array
 
 it('accepts only the official supported production manifest and matching installed locks', function (string $lane) {
     expect(adoptionDependencyErrors(...adoptionProofInputs($lane)))->toBe([]);
-})->with(['minimum', 'current', 'moving-dev', 'laravel-13.16']);
+})->with(['minimum', 'current', 'moving-dev']);
 
-it('rejects compatibility proof with drifted runtime or test toolchain', function (string $mutation, string $expected) {
-    $args = adoptionProofInputs('laravel-13.16');
+it('rejects a minimum lane that does not execute the exact declared floor', function (string $mutation, string $expected) {
+    $args = adoptionProofInputs('minimum');
     match ($mutation) {
-        'framework-version' => $args[1]['packages'][1]['version'] = 'v13.23.0',
+        'framework-version' => $args[1]['packages'][1]['version'] = 'v13.41.0',
+        'framework-below-floor' => $args[1]['packages'][1]['version'] = 'v13.39.0',
         'framework-ref' => $args[1]['packages'][1]['source']['reference'] = str_repeat('a', 40),
         'framework-source' => $args[1]['packages'][1]['source']['url'] = 'https://github.com/fork/framework.git',
         'ai-version' => $args[1]['packages'][0]['version'] = 'v1.0.1',
         'ai-ref' => $args[1]['packages'][0]['source']['reference'] = str_repeat('a', 40),
-        'pest-major' => $args[1]['packages'][2]['version'] = 'v5.2.1',
-        'pest-floor' => $args[1]['packages'][2]['version'] = 'v4.6.0',
-        'plugin-major' => $args[1]['packages'][3]['version'] = 'v5.0.0',
-        'plugin-floor' => $args[1]['packages'][3]['version'] = 'v4.0.0',
-        'pest-source' => $args[1]['packages'][2]['source']['url'] = 'https://github.com/fork/pest.git',
-        'plugin-ref' => $args[1]['packages'][3]['source']['reference'] = 'moving',
         'unrestored-pest' => $args[0]['require-dev']['pestphp/pest'] = '^4.7',
         'unrestored-plugin' => $args[0]['require-dev']['pestphp/pest-plugin-laravel'] = '^4.1',
-        'unrestored-framework' => $args[0]['require-dev']['laravel/framework'] = '13.16.0',
+        'unrestored-framework' => $args[0]['require-dev']['laravel/framework'] = '13.40.0',
     };
     // Matching installed metadata cannot rescue an invalid lock identity.
     $args[2] = $args[1];
     expect(implode(' ', adoptionDependencyErrors(...$args)))->toContain($expected);
 })->with([
-    ['framework-version', 'exact official Laravel v13.16.0'],
-    ['framework-ref', 'exact official Laravel v13.16.0'],
+    ['framework-version', 'exact official Laravel v13.40.0'],
+    ['framework-below-floor', 'exact official Laravel v13.40.0'],
+    ['framework-ref', 'exact official Laravel v13.40.0'],
     ['framework-source', 'official source'],
     ['ai-version', 'exact official AI v1.0.0'], ['ai-ref', 'exact official AI v1.0.0'],
-    ['pest-major', 'supported Pest 4'], ['pest-floor', 'supported Pest 4'],
-    ['plugin-major', 'supported Pest 4'], ['plugin-floor', 'supported Pest 4'],
-    ['pest-source', 'official source'], ['plugin-ref', 'full commit'],
     ['unrestored-pest', 'restore the normal Pest 5'], ['unrestored-plugin', 'restore the normal Pest 5'],
     ['unrestored-framework', 'restore the normal Pest 5'],
 ]);
 
-it('requires every compatibility dependency to be installed from its verified lock', function (int $package, string $mutation) {
-    $args = adoptionProofInputs('laravel-13.16');
+it('holds only the minimum lane to the exact floor release', function () {
+    $args = adoptionProofInputs('current');
+    $args[1]['packages'][1]['version'] = 'v13.43.0';
+    $args[1]['packages'][1]['source']['reference'] = str_repeat('f', 40);
+    $args[2] = $args[1];
+    expect(adoptionDependencyErrors(...$args))->toBe([]);
+
+    $args[3] = 'minimum';
+    expect(adoptionDependencyErrors(...$args))->toBe(['Minimum lane must execute the exact official Laravel v13.40.0 release.']);
+});
+
+it('requires every minimum dependency to be installed from its verified lock', function (int $package, string $mutation) {
+    $args = adoptionProofInputs('minimum');
     if ($mutation === 'missing') {
         unset($args[2]['packages'][$package]);
     } else {
         $args[2]['packages'][$package]['source']['reference'] = str_repeat('d', 40);
     }
     expect(implode(' ', adoptionDependencyErrors(...$args)))->toContain('installed package must match');
-})->with([0, 1, 2, 3])->with(['missing', 'mismatch']);
+})->with([0, 1])->with(['missing', 'mismatch']);
 
 it('fails closed on a stable lock masquerading as moving development', function () {
     $args = adoptionProofInputs();
@@ -86,6 +86,8 @@ it('rejects changed production constraints and non official resolutions', functi
         'ai-floor' => $args[0]['require']['laravel/ai'] = '^0.10.3',
         'illuminate' => $args[0]['require']['illuminate/contracts'] = '^12.0',
         'json-schema' => $args[0]['require']['illuminate/json-schema'] = '^13.0',
+        'concurrency' => $args[0]['require']['illuminate/concurrency'] = '^13.0',
+        'concurrency-old-floor' => $args[0]['require']['illuminate/concurrency'] = '^13.16',
         'repositories' => $args[0]['repositories'] = [['type' => 'vcs', 'url' => 'fork']],
         'patches' => $args[0]['extra']['patches'] = ['laravel/ai' => ['patch']],
         'stability' => $args[0]['minimum-stability'] = 'dev',
@@ -100,7 +102,8 @@ it('rejects changed production constraints and non official resolutions', functi
     expect(implode(' ', adoptionDependencyErrors(...$args)))->toContain($expected);
 })->with([
     ['php', 'PHP ^8.4'], ['ai-floor', 'AI ^1.0'], ['illuminate', 'Illuminate constraint'],
-    ['json-schema', 'Illuminate constraint'], ['repositories', 'repository or patch'], ['patches', 'repository or patch'],
+    ['json-schema', 'Illuminate constraint'], ['concurrency', 'Illuminate constraint: concurrency'],
+    ['concurrency-old-floor', 'Illuminate constraint: concurrency'], ['repositories', 'repository or patch'], ['patches', 'repository or patch'],
     ['stability', 'stable official'], ['prefer-stable', 'stable official'], ['version', 'Stable AI'],
     ['source', 'official source'], ['reference', 'exact official'], ['installed', 'installed package'],
     ['framework', 'Laravel 13'], ['unknown', 'Unknown dependency lane'],
@@ -141,7 +144,7 @@ it('parses the actual nightly workflow and requires hard gates after verified mo
     }
 });
 
-it('preserves full Pest 5 coverage and unconditional Laravel 13.16 compatibility gates', function () {
+it('preserves full Pest 5 coverage and proves the Laravel floor on the lowest lane without advisory overrides', function () {
     $workflow = Yaml::parseFile(dirname(__DIR__, 3).'/.github/workflows/tests.yml');
     expect($workflow['on'])->toHaveKeys(['push', 'pull_request']);
     $normal = $workflow['jobs']['tests'];
@@ -200,36 +203,13 @@ it('preserves full Pest 5 coverage and unconditional Laravel 13.16 compatibility
             ->not->toContain("glob(app_path('Ai/");
     }
 
-    $job = $workflow['jobs']['laravel-13-16'];
-    expect($job['strategy']['matrix'])->toBe(['php' => ['8.4', '8.5']]);
-    expect($job)->not->toHaveKeys(['if', 'continue-on-error']);
-    $runs = [];
-    foreach ($job['steps'] as $step) {
-        expect($step)->not->toHaveKeys(['if', 'continue-on-error']);
-        if (isset($step['run'])) {
-            $runs[] = $step['run'];
-        }
-        if (str_starts_with($step['uses'] ?? '', 'shivammathur/setup-php@')) {
-            expect($step['with'])->toMatchArray(['php-version' => '${{ matrix.php }}', 'coverage' => 'none', 'ini-values' => 'memory_limit=1G']);
-        }
-    }
-    $commands = implode("\n", $runs);
-    $advisoryIgnoreCommands = array_values(array_filter(
-        $runs,
-        fn (string $run): bool => str_starts_with($run, 'composer config policy.advisories.ignore-id '),
-    ));
-    expect($advisoryIgnoreCommands)->toBe([
-        'composer config policy.advisories.ignore-id PKSA-d5tc-s1qs-h781 PKSA-b41t-wbzk-9q51 PKSA-4hy6-m98j-dz9f',
-    ]);
-    expect($commands)->not->toContain('|| true', '--ignore-platform', '--no-security-blocking', '--coverage', 'policy.advisories.block', 'policy.advisories.ignore laravel/framework');
+    // The lowest matrix rows are the floor proof: no separate lane, and no advisory is ignored anywhere.
+    expect(array_keys($workflow['jobs']))->toBe(['tests']);
+    $runs = array_values(array_filter(array_column($normal['steps'], 'run')));
     $ordered = [
-        'cp composer.json /tmp/swarm-production-composer.json',
-        'composer config policy.advisories.ignore-id PKSA-d5tc-s1qs-h781 PKSA-b41t-wbzk-9q51 PKSA-4hy6-m98j-dz9f',
-        'composer require --no-update --dev "pestphp/pest:^4.7" "pestphp/pest-plugin-laravel:^4.1" "laravel/framework:13.16.0"',
         'composer update --with laravel/ai:1.0.0 --prefer-lowest --prefer-stable --prefer-dist --no-interaction --no-progress',
-        'cp /tmp/swarm-production-composer.json composer.json',
-        'php .github/workflows/verify-adoption-dependencies.php laravel-13.16 "$PWD" /tmp/swarm-production-composer.json',
-        'composer test',
+        "php .github/workflows/verify-adoption-dependencies.php \${{ matrix.dependencies == 'lowest' && 'minimum' || 'current' }}",
+        'composer test:coverage:ci',
         'composer test:process-concurrency:ci',
         'composer analyse',
     ];
@@ -239,6 +219,15 @@ it('preserves full Pest 5 coverage and unconditional Laravel 13.16 compatibility
         $position = array_search($command, $runs, true);
         expect($position)->toBeGreaterThan($previous);
         $previous = $position;
+    }
+    $workflowFiles = glob(dirname(__DIR__, 3).'/.github/workflows/*.yml') ?: [];
+    expect(count($workflowFiles))->toBeGreaterThan(1);
+    foreach ($workflowFiles as $workflowFile) {
+        // One needle per call: a negated multi-needle toContain passes when any needle is absent.
+        expect(file_get_contents($workflowFile))
+            ->not->toContain('policy.advisories')
+            ->not->toContain('--no-security-blocking')
+            ->not->toContain('13.16');
     }
 });
 
@@ -307,7 +296,7 @@ it('rejects production aliases replacements and leftover job manifests in every 
     };
 
     expect(adoptionDependencyErrors(...$args))->not->toBe([]);
-})->with(['minimum', 'current', 'moving-dev', 'laravel-13.16'])->with(['require-alias', 'replace', 'provide', 'patch-plugin', 'lock-alias', 'pest', 'plugin', 'framework', 'pinned-ai']);
+})->with(['minimum', 'current', 'moving-dev'])->with(['require-alias', 'replace', 'provide', 'patch-plugin', 'lock-alias', 'pest', 'plugin', 'framework', 'pinned-ai']);
 
 function adoptionProofInTemporaryDirectory(Closure $callback): void
 {

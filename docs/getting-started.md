@@ -15,7 +15,7 @@ the manual equivalent of every step the installer performs.
 ## Prerequisites
 
 - PHP **^8.4**
-- Laravel **^13.16** (requires `illuminate/json-schema` **^13.16**)
+- Laravel **^13.40** (requires `illuminate/concurrency` **^13.40**)
 - `laravel/ai` **^1.0** (a transitive dependency, installed by Composer)
 
 PHP **^8.4** is supported alongside PHP 8.5. As of **v0.27.0**, the official
