@@ -71,23 +71,27 @@ isolation. If workflow runtime becomes prohibitive, maintainers may split
 **lowest**-resolution lint, coverage, or process-concurrency into a nightly job;
 until then, pull requests validate both matrices equally.
 
-**Laravel 13.16 compatibility** — separate PHP **8.4** and **8.5** jobs pin
-Laravel **13.16.0** and Laravel AI **1.0.0**, using temporary Pest `^4.7` and
-Laravel plugin `^4.1` development requirements. The job restores `composer.json`
-before tests and verifies official source commits against both the lock and
-installed packages. These jobs run `composer test`,
-`composer test:process-concurrency:ci`, and `composer analyse` unconditionally.
-Pest 5's Laravel plugin excludes Laravel 13.16, so its lowest resolution alone
-cannot prove that compatibility. Swarm's production requirements remain unchanged.
+**Laravel floor proof** — the two **lowest** jobs are the proof of the declared
+floor. `verify-adoption-dependencies.php minimum` fails unless they resolved and
+installed exactly Laravel **13.40.0** and Laravel AI **1.0.0** from their
+official source commits. No job ignores a security advisory. If an advisory is
+later published against 13.40.0, Composer resolves a newer release and that
+verification fails on purpose: the declared floor is then no longer installable,
+and the fix is to decide the new floor, not to add an advisory ignore. The floor
+lives in the `illuminate/concurrency` constraint in `composer.json`, the expected
+constraint and the exact version and commit in `verify-adoption-dependencies.php`,
+the fixtures in `tests/Unit/Adoption/DependencyProofTest.php`, the requirements
+lines in `README.md` and `docs/getting-started.md`, and a new `UPGRADING.md`
+section; move them together.
 
 The four normal Pest 5 jobs use Xdebug, `memory_limit=1G`, four concurrent test
 workers with a fresh worker for every parallel test-file assignment, the
 complete source filter, and the **80% aggregate** coverage floor, followed by
 the fresh serial `ci-serial` behavior-verification process described above.
 The scheduled mutation baseline uses the
-same driver because mutation requires coverage data. The separate compatibility
-jobs and moving-development nightly load no coverage driver: they run the full
-suite without collecting coverage. PHPStan retains its separate existing
+same driver because mutation requires coverage data. The moving-development
+nightly loads no coverage driver: it runs the full suite without collecting
+coverage. PHPStan retains its separate existing
 `--memory-limit=2G` setting.
 
 **Moving development proof** — PR/nightly and real-database canaries resolve

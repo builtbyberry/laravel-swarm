@@ -124,6 +124,23 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
 
 ### Changed
 
+- **BREAKING: the minimum Laravel is 13.40 (#640).** `illuminate/concurrency` is
+  now required at `^13.40`; it was `^13.0`, with an effective floor of 13.16.
+  Laravel 13.0 through 13.39 are affected by `PKSA-yxbx-3c9s-cjt9`
+  (CVE-2026-128083, "Task Output Injection - Concurrency Process", fixed in
+  13.40.0): the `process` concurrency driver treated everything a worker wrote
+  to standard output as its result. Swarm writes nothing there itself, but it
+  runs your agents and tools inside those workers. Measured on 13.16.0, one
+  stray byte written by an agent failed a parallel run. A crafted envelope
+  carrying an object made the parent build that object before the run failed
+  with a `TypeError`, and a separate crafted envelope carrying a result row
+  made the run return forged text as both agents' output. Live parallel
+  streaming, also on 13.16.0, ended with an error on the stray byte and on the
+  object envelope, and built no object. On 13.43.0 each of those runs returned
+  its real result. Run
+  `composer update laravel/framework` first if your lock is below 13.40. See
+  [Laravel 13.40 is now the minimum](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#laravel-1340-is-now-the-minimum).
+
 - **Durable resume retries and checkpoint boundaries (#621).** Review the
   [application transaction, extension and rollout changes](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#concurrent-wait-creation-and-resume).
 
@@ -416,13 +433,12 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   so that output changes from `"[]"` to the model's text there too. A populated
   payload is recorded exactly as before. The `laravel/ai` constraint stays
   `^1.0`.
-- The Laravel 13.16 compatibility lane also ignores advisories
-  `PKSA-b41t-wbzk-9q51` (CVE-2026-114509, fixed upstream in Laravel 13.29.0) and
-  `PKSA-4hy6-m98j-dz9f` (CVE-2026-114508, fixed in 13.27.0) in its temporary lane
-  manifest. Both were published on 2026-10-23 and stopped the lane from installing
-  the exact 13.16.0 release that proves the declared floor. The package's
-  requirements and advisory policy are unchanged, and any other advisory against
-  13.16.0 still fails the lane.
+- CI no longer ignores any security advisory (#640). The Laravel 13.16
+  compatibility lane, which ignored three advisories and needed a fourth to keep
+  installing the release it proved, is removed along with its ignores. The lowest-dependency
+  jobs are the floor proof instead, and their dependency verification fails
+  unless they ran exactly Laravel 13.40.0, so the floor can no longer drift
+  upward unnoticed when an advisory excludes it.
 - CI's moving-development lanes (the PR/nightly lane and the moving-dev rows of
   the real-database jobs) now run Laravel `13.x-dev` with the latest stable
   `laravel/ai` 1.x release, instead of `laravel/ai`'s unreleased `1.x` branch.

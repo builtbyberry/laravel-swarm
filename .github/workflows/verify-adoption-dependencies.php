@@ -11,14 +11,22 @@ function adoptionDependencyErrors(array $manifest, array $lock, array $installed
         $errors[] = 'Production requires PHP ^8.4 and official Laravel AI ^1.0.';
     }
     foreach (['bus', 'cache', 'concurrency', 'console', 'container', 'contracts', 'database', 'events', 'filesystem', 'json-schema', 'queue', 'support', 'view'] as $package) {
-        if (($require['illuminate/'.$package] ?? null) !== ($package === 'json-schema' ? '^13.16' : '^13.0')) {
+        // illuminate/concurrency carries the floor: Laravel 13.40.0 is the first release not
+        // affected by PKSA-yxbx-3c9s-cjt9 (CVE-2026-128083), where the process driver took
+        // whatever a worker wrote to standard output as its result. See UPGRADING.md.
+        $expected = match ($package) {
+            'concurrency' => '^13.40',
+            'json-schema' => '^13.16',
+            default => '^13.0',
+        };
+        if (($require['illuminate/'.$package] ?? null) !== $expected) {
             $errors[] = 'Unexpected production Illuminate constraint: '.$package;
         }
     }
     if (($manifest['minimum-stability'] ?? null) !== 'stable' || ($manifest['prefer-stable'] ?? null) !== true || ! empty($manifest['repositories']) || ! empty($manifest['extra']['patches']) || isset($require['cweagans/composer-patches']) || isset($manifest['require-dev']['cweagans/composer-patches']) || ! empty($manifest['replace']) || ! empty($manifest['provide'])) {
         $errors[] = 'Production manifest must retain stable official resolution without repository or patch overrides.';
     }
-    if (! in_array($lane, ['minimum', 'current', 'moving-dev', 'laravel-13.16'], true)) {
+    if (! in_array($lane, ['minimum', 'current', 'moving-dev'], true)) {
         $errors[] = 'Unknown dependency lane.';
     }
     if (! empty($lock['aliases'])) {
@@ -29,9 +37,6 @@ function adoptionDependencyErrors(array $manifest, array $lock, array $installed
     $sources = ['laravel/ai' => 'https://github.com/laravel/ai.git', 'laravel/framework' => 'https://github.com/laravel/framework.git'];
     if (($manifest['require-dev']['pestphp/pest'] ?? null) !== '^5.2.1' || ($manifest['require-dev']['pestphp/pest-plugin-laravel'] ?? null) !== '^5.0' || isset($manifest['require-dev']['laravel/framework'])) {
         $errors[] = 'Dependency lanes must restore the normal Pest 5 development manifest.';
-    }
-    if ($lane === 'laravel-13.16') {
-        $sources += ['pestphp/pest' => 'https://github.com/pestphp/pest.git', 'pestphp/pest-plugin-laravel' => 'https://github.com/pestphp/pest-plugin-laravel.git'];
     }
     foreach ($sources as $name => $url) {
         foreach (['lock' => array_merge($lock['packages'] ?? [], $lock['packages-dev'] ?? []), 'installed' => $installed['packages'] ?? []] as $kind => $entries) {
@@ -48,11 +53,7 @@ function adoptionDependencyErrors(array $manifest, array $lock, array $installed
         if (($runtime[$name]['source']['type'] ?? null) !== 'git' || ($runtime[$name]['version'] ?? null) !== $version || ($runtime[$name]['source']['reference'] ?? null) !== $ref || ($runtime[$name]['source']['url'] ?? null) !== $url) {
             $errors[] = $name.' installed package must match the verified lock.';
         }
-        if (str_starts_with($name, 'pestphp/')) {
-            if (! preg_match('/^v?4\.\d+\.\d+$/D', $version) || version_compare(ltrim($version, 'v'), $name === 'pestphp/pest' ? '4.7.0' : '4.1.0', '<')) {
-                $errors[] = $name.' compatibility lane must execute the supported Pest 4 toolchain.';
-            }
-        } elseif ($lane === 'moving-dev' && $name === 'laravel/framework') {
+        if ($lane === 'moving-dev' && $name === 'laravel/framework') {
             // Only the framework moves: laravel/ai is held to the stable 1.x rule below, as in the current lane.
             $expected = $expectedRefs[$name] ?? '';
             if (! is_string($expected) || ! preg_match('/^[a-f0-9]{40}$/D', $expected) || $ref !== $expected) {
@@ -65,14 +66,16 @@ function adoptionDependencyErrors(array $manifest, array $lock, array $installed
             if (! preg_match('/^v?1\.\d+\.\d+$/D', $version) || version_compare(ltrim($version, 'v'), '1.0.0', '<')) {
                 $errors[] = 'Stable AI must be >=1.0.0 and <2.0.0.';
             }
-            if (in_array($lane, ['minimum', 'laravel-13.16'], true) && ($version !== 'v1.0.0' || $ref !== '101c7ea33cd8569d82570f753fbf38e48b7d3d95')) {
+            if ($lane === 'minimum' && ($version !== 'v1.0.0' || $ref !== '101c7ea33cd8569d82570f753fbf38e48b7d3d95')) {
                 $errors[] = 'Minimum lane must execute the exact official AI v1.0.0 release.';
             }
         } elseif (! preg_match('/^v?13\.\d+\.\d+$/D', $version)) {
             $errors[] = 'Stable framework must be Laravel 13.';
         }
-        if ($lane === 'laravel-13.16' && $name === 'laravel/framework' && ($version !== 'v13.16.0' || $ref !== '66d5cdac5afd508dc6519ca59f5cc9b2c93a2b67')) {
-            $errors[] = 'Compatibility lane must execute the exact official Laravel v13.16.0 release.';
+        // The lowest resolution is the floor proof. If an advisory ever excludes this release,
+        // Composer resolves a later one and this fails, instead of the floor drifting unproven.
+        if ($lane === 'minimum' && $name === 'laravel/framework' && ($version !== 'v13.40.0' || $ref !== '1449bf241017087fbd38c118ecaabef3f6797fdc')) {
+            $errors[] = 'Minimum lane must execute the exact official Laravel v13.40.0 release.';
         }
     }
 

@@ -2,6 +2,69 @@
 
 ## Upgrading to realtime-dispatch
 
+### Laravel 13.40 is now the minimum
+
+Swarm now requires `illuminate/concurrency` `^13.40`, so the minimum Laravel is
+**13.40.0**. It was 13.16. Check what you have installed:
+
+```bash
+composer show laravel/framework
+```
+
+If it is below 13.40.0, update Laravel before or together with Swarm:
+
+```bash
+composer update laravel/framework builtbyberry/laravel-swarm
+```
+
+If your `composer.lock` holds a Laravel below 13.40, Composer refuses to install
+this release until you do. Nothing else changes: there is no migration, config
+key or code change tied to this.
+
+**Why.** Laravel 13.0 through 13.39 are affected by `PKSA-yxbx-3c9s-cjt9` /
+CVE-2026-128083, "Task Output Injection - Concurrency Process", fixed in Laravel
+13.40.0. Before 13.40, Laravel's `process` concurrency driver read everything a
+worker process wrote to standard output as that worker's result. `process` is
+Laravel's default concurrency driver, and Swarm runs your agents and their tools
+inside those workers for parallel swarms and for the parallel groups of
+hierarchical swarms.
+
+We ran each of Swarm's concurrent paths against Laravel 13.16.0 with real worker
+processes:
+
+- **Swarm itself writes nothing to a worker's standard output**, and text an
+  agent *returns* travels as data. A model cannot affect the result through its
+  answer alone.
+- **A stray byte on the worker's standard output broke the run.** One
+  byte from an `echo` in an agent failed the swarm with
+  `ErrorException: Trying to access array offset on null`. With PHP's
+  `display_errors` set to standard output, a PHP deprecation notice alone did
+  the same before any agent ran.
+- **A crafted write replaced the result.** We ran two, each a complete result
+  envelope followed by the bytes `\x1f\x8b`, written by code running in the
+  worker. One carried a serialized object: the parent process built that object
+  from the worker's output, then the run failed with a `TypeError`. The other
+  carried a result row: a parallel swarm returned its forged text as both
+  agents' output. We wrote those bytes from
+  agent code; we did not test whether a model's input can make a tool write
+  them, so treat any agent or tool code that writes to standard output as
+  enough.
+- **Live parallel streaming was not open to the replacement.** Its results
+  travel over an authenticated loopback socket; the stray byte and the object
+  envelope each ended the stream with a `SwarmException` ("returned an invalid
+  process result envelope") and no object was built.
+
+On Laravel 13.43.0 each of those runs returned its real result and built no
+object. A test now holds the parallel-swarm path at the floor
+itself: the lowest-dependency CI jobs run it on exactly 13.40.0. The
+hierarchical and streaming paths were measured by hand on 13.43.0 and are not
+pinned by that test.
+
+Composer's default advisory policy already refuses the affected versions when
+it resolves dependencies: with Composer 2.11.1, resolving Swarm's previous
+requirements at their lowest selected Laravel 13.40.0. An application still on
+an older lock is the case this floor exists for.
+
 ### Wait creation at branch joins
 
 Run `php artisan migrate` before starting the new workers. The additive
@@ -692,6 +755,9 @@ Laravel 13.16 through 13.29 are affected by advisory
 `PKSA-d5tc-s1qs-h781` / CVE-2026-102279, fixed in Laravel 13.30.0. Laravel
 Swarm's declared floor remains `^13.16`; applications should run Laravel 13.30
 or later.
+
+> This describes v0.28.0. The minimum has since moved to Laravel 13.40; see
+> [Laravel 13.40 is now the minimum](#laravel-1340-is-now-the-minimum).
 
 ### Companion packages
 
