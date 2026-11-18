@@ -6,8 +6,14 @@
 
 Swarm reports the citations `laravel/ai` reports. `laravel/ai` v1.4.1 changed two
 things about Anthropic web search, so what you see depends on which `laravel/ai`
-you resolve, not on this Swarm release. Swarm's own code did not change. Measured
-on `laravel/ai` 1.0.0, 1.4.0 and 1.4.1:
+you resolve, not on this Swarm release. Swarm's own code did not change. Check
+which one you have:
+
+```bash
+composer show laravel/ai
+```
+
+Measured on `laravel/ai` 1.0.0, 1.4.0 and 1.4.1:
 
 - **`prompt()`: a search result the answer does not cite.** On 1.0.0 and
   1.4.0 it was reported as a citation when the response carried it under a
