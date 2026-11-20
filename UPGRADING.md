@@ -187,6 +187,58 @@ the locked run only when that scan found no open waits; on a mismatch, throw
 controller can retry from a fresh transaction. Never acquire a wait-row lock
 after the run lock. See [durable waits](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-waits-and-signals.md#creating-a-wait-from-application-code).
 
+### A wait closed inside an older application transaction
+
+A new migration adds a nullable `creation_generation` column to
+`swarm_durable_waits`. Each new wait records the run's `wait_generation` it
+created. When a wait closer releases the run's last visible wait, the database
+store now checks that its transaction can see every wait created on the run.
+Waits created before the migration are not stamped and are not counted.
+
+**Signals inside your own transaction (MySQL).** A `signal()` sent inside an
+application transaction that has already read can no longer move a run past a
+wait created since that read. It throws `SwarmException`, with
+`Exceptions\DurableWaitSetChangedException` as `previous`, and nothing of the
+acceptance is kept:
+
+```text
+Durable signal [<name>] for run [<run-id>] could not be accepted: a wait was opened on the run after this database transaction first read it. Nothing was recorded; send the signal again with the same idempotency key after this transaction ends.
+```
+
+Finish or roll back the transaction, then send the signal again outside it with
+the same idempotency key. `DB::transaction(..., attempts: 3)` does not retry it:
+it is not a database concurrency error. A wait that was created and has already
+closed since the first read triggers the same refusal once. Postgres and SQLite
+are not affected. With a custom store that does not implement
+`Contracts\AcceptsDurableSignals`, the signal row was recorded before the
+acceptance and survives your commit, so the message asks you to resend with a
+**new** idempotency key, or to roll your transaction back to discard it.
+
+**Custom stores.** A `DurableRunStore` that implements the wait closers
+(`releaseWaitWithSignal()`, `releaseWaitWithOutcome()`, `releaseTimedOutWait()`,
+`AcceptsDurableSignals::acceptSignal()`) or overrides `syncRunWaitSummary()` should
+apply the same rule: when the last visible wait closes and the transaction cannot
+prove it sees every wait created on the run, throw
+`DurableWaitSetChangedException` without persisting anything. A store that
+overrides `createWait()` must keep stamping `creation_generation`.
+
+**Rollout:** run the migration, then replace every process that creates or
+closes waits (web, console, queue workers and application processes) before
+relying on this guarantee. A wait created by an older version is neither counted
+in `wait_generation` nor stamped, so the store cannot see it as missing; mixed
+versions stay vulnerable.
+
+**Databases that ran an untagged `realtime-dispatch` build.** A run that had a
+wait created by a build carrying the `wait_generation` column but not
+`creation_generation` has a generation higher than its stamped waits, and its last
+wait close is then refused every time. A database upgrading from a tagged release
+has `wait_generation = 0` everywhere and is not affected. If yours ran such a
+build: stop every worker, web and console process that touches durable runs, let
+their transactions finish, run the migration, run
+`UPDATE swarm_durable_runs SET wait_generation = 0 WHERE wait_generation <> 0`
+(use your configured table name), and only then start the new version. Do not
+run that reset once the new version has created any wait.
+
 ### Durable branch fan-out cap (`swarm.durable.parallel.max_concurrent_branches`)
 
 Off by default; nothing changes until you set it. If you do:

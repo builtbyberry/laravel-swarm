@@ -326,7 +326,7 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
 
         foreach ([
             'durable_signals' => ['run_id', 'name', 'status', 'payload', 'idempotency_key', 'created_at', 'updated_at'],
-            'durable_waits' => ['run_id', 'name', 'status', 'reason', 'timeout_at', 'signal_id', 'outcome', 'metadata', 'created_at', 'updated_at'],
+            'durable_waits' => ['run_id', 'name', 'status', 'reason', 'timeout_at', 'signal_id', 'outcome', 'metadata', 'creation_generation', 'created_at', 'updated_at'],
             'durable_labels' => ['run_id', 'key', 'value_type', 'created_at', 'updated_at'],
             'durable_details' => ['run_id', 'details', 'created_at', 'updated_at'],
             'durable_progress' => ['run_id', 'branch_id', 'progress', 'last_progress_at', 'created_at', 'updated_at'],
@@ -2224,6 +2224,10 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
                 throw new SwarmException("Cannot create wait [{$name}] for durable run [{$runId}]: its wait creation generation could not advance.");
             }
 
+            // The wait carries the generation it created, read back from this
+            // transaction's own write: syncRunWaitSummary() counts these stamps.
+            $creationGeneration = $this->table()->where('run_id', $runId)->value('wait_generation');
+
             $this->waitTable()->insert([
                 'run_id' => $runId,
                 'name' => $name,
@@ -2233,6 +2237,7 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
                 'signal_id' => null,
                 'outcome' => null,
                 'metadata' => $this->encodeJson($metadata),
+                'creation_generation' => $creationGeneration,
                 'finished_at' => null,
                 'created_at' => $timestamp,
                 'updated_at' => $timestamp,
@@ -2915,6 +2920,22 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
             ->first();
 
         if ($latestOpenWait === null) {
+            // The scan found no open wait, but it reads this transaction's snapshot: an
+            // application transaction that read before it closed the wait keeps its
+            // older MySQL snapshot, and a wait created and committed since is not in it.
+            // createWait() advances wait_generation and stamps the new wait with it, in
+            // one transaction under the run lock, so the run has exactly
+            // wait_generation stamped waits. Fewer of them visible here means one is
+            // hidden, perhaps still open: refuse, writing nothing, so the caller retries
+            // from a fresh transaction. The count reads the wait rows, not the run row,
+            // which this transaction may already have written and then sees current.
+            // Postgres reads each statement fresh and SQLite's writers serialize, so
+            // there every stamped wait is visible.
+            if (in_array($run->status ?? null, ['paused', 'waiting'], true)
+                && $this->visibleCreatedWaitCount($runId) < (int) $run->wait_generation) {
+                throw new DurableWaitSetChangedException;
+            }
+
             if (($run->status ?? null) === 'paused') {
                 // A paused run stays paused when its last wait closes (a signal accepted
                 // or a child finished during the pause): resume() moves it. The summary of
@@ -2981,6 +3002,19 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
                 'wait_timeout_at' => $nextTimedWait->timeout_at ?? null,
                 'updated_at' => $timestamp,
             ]);
+    }
+
+    /**
+     * The run's waits stamped with the generation that created them, by an ordinary
+     * read in the caller's transaction (see syncRunWaitSummary()). Waits created before
+     * the stamp existed are NULL and not counted.
+     */
+    protected function visibleCreatedWaitCount(string $runId): int
+    {
+        return $this->waitTable()
+            ->where('run_id', $runId)
+            ->whereNotNull('creation_generation')
+            ->count();
     }
 
     /**

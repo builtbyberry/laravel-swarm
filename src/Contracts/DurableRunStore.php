@@ -254,7 +254,12 @@ interface DurableRunStore
      * a run waiting at a branch boundary (branch rows under its current node) stays
      * `waiting` — its join is released through releaseWaitingRunForJoin() — and any
      * other waiting run moves to `pending`. The same holds for
-     * releaseWaitWithOutcome() and releaseTimedOutWait().
+     * releaseWaitWithOutcome() and releaseTimedOutWait().     *
+     * When the run's last visible wait closes but this transaction cannot prove it sees
+     * every wait created on the run, throw
+     * \BuiltByBerry\LaravelSwarm\Exceptions\DurableWaitSetChangedException instead;
+     * nothing written by the call persists, and the caller retries from a fresh
+     * transaction.
      */
     public function releaseWaitWithSignal(string $runId, string $name, int $signalId): bool;
 

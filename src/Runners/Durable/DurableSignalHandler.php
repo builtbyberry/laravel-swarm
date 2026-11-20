@@ -10,6 +10,8 @@ use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Events\SwarmSignalled;
 use BuiltByBerry\LaravelSwarm\Events\SwarmWaiting;
+use BuiltByBerry\LaravelSwarm\Exceptions\DurableWaitSetChangedException;
+use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\DurableSignalResult;
 use BuiltByBerry\LaravelSwarm\Support\ApplicationTransactionBoundary;
@@ -116,19 +118,25 @@ class DurableSignalHandler
                 }
             }
 
-            $accepted = ApplicationTransactionBoundary::run(
-                $this->connection,
-                fn (): ?array => $this->connection->transaction(function () use ($store, $runId, $name, $capturedPayload, $idempotencyKey): ?array {
-                    $signal = $store->acceptSignal($runId, $name, $capturedPayload, $idempotencyKey);
+            try {
+                $accepted = ApplicationTransactionBoundary::run(
+                    $this->connection,
+                    fn (): ?array => $this->connection->transaction(function () use ($store, $runId, $name, $capturedPayload, $idempotencyKey): ?array {
+                        $signal = $store->acceptSignal($runId, $name, $capturedPayload, $idempotencyKey);
 
-                    if ($signal !== null && $signal['released']) {
-                        $this->publishAcceptance($runId, $name, $signal['id'], $capturedPayload);
-                    }
+                        if ($signal !== null && $signal['released']) {
+                            $this->publishAcceptance($runId, $name, $signal['id'], $capturedPayload);
+                        }
 
-                    return $signal;
-                }),
-                $this->reportRollbackFailure($runId, $name),
-            );
+                        return $signal;
+                    }),
+                    $this->reportRollbackFailure($runId, $name),
+                );
+            } catch (DurableWaitSetChangedException $changed) {
+                // The acceptance rolled back with its savepoint: no signal row, no closed
+                // wait, so the same idempotency key is free for the resend.
+                throw new SwarmException("Durable signal [{$name}] for run [{$runId}] could not be accepted: a wait was opened on the run after this database transaction first read it. Nothing was recorded; send the signal again with the same idempotency key after this transaction ends.", previous: $changed);
+            }
 
             if ($accepted !== null) {
                 $released = $accepted['released'];
@@ -171,19 +179,25 @@ class DurableSignalHandler
             return [$signal, false];
         }
 
-        $accepted = ApplicationTransactionBoundary::run(
-            $this->connection,
-            fn (): bool => $this->connection->transaction(function () use ($runId, $name, $signal, $capturedPayload): bool {
-                if (! $this->durableRuns->releaseWaitWithSignal($runId, $name, (int) $signal['id'])) {
-                    return false;
-                }
+        try {
+            $accepted = ApplicationTransactionBoundary::run(
+                $this->connection,
+                fn (): bool => $this->connection->transaction(function () use ($runId, $name, $signal, $capturedPayload): bool {
+                    if (! $this->durableRuns->releaseWaitWithSignal($runId, $name, (int) $signal['id'])) {
+                        return false;
+                    }
 
-                $this->publishAcceptance($runId, $name, (int) $signal['id'], $capturedPayload);
+                    $this->publishAcceptance($runId, $name, (int) $signal['id'], $capturedPayload);
 
-                return true;
-            }),
-            $this->reportRollbackFailure($runId, $name),
-        );
+                    return true;
+                }),
+                $this->reportRollbackFailure($runId, $name),
+            );
+        } catch (DurableWaitSetChangedException $changed) {
+            // Only the acceptance rolled back: the signal was recorded before it, so a
+            // resend with the same idempotency key would be answered as a duplicate.
+            throw new SwarmException("Durable signal [{$name}] for run [{$runId}] could not be accepted: a wait was opened on the run after this database transaction first read it. The signal was recorded but not accepted; after this transaction ends, send it again with a new idempotency key, or roll this transaction back to discard the recorded signal.", previous: $changed);
+        }
 
         return [$signal, $accepted];
     }
