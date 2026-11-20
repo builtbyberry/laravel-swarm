@@ -12,6 +12,7 @@ use BuiltByBerry\LaravelSwarm\Events\SwarmChildCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmChildFailed;
 use BuiltByBerry\LaravelSwarm\Events\SwarmChildStarted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmWaiting;
+use BuiltByBerry\LaravelSwarm\Exceptions\DurableWaitSetChangedException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\DurableChildRun;
@@ -361,44 +362,22 @@ class DurableChildSwarmCoordinator
                 continue;
             }
 
-            $released = $this->connection->transaction(function () use ($parent, $child, $waitName): bool {
-                if (! $this->durableRuns->releaseWaitWithOutcome($parent['run_id'], $waitName, 'child_'.$child['status'], [
-                    'status' => $child['status'],
+            try {
+                $released = $this->reconcileTerminalChild($parent, $child, $waitName);
+            } catch (DurableWaitSetChangedException $changed) {
+                // The store refused to close the child's wait, writing nothing: this
+                // transaction could not see every wait created on the parent. The wait stays
+                // open and swarm:recover delivers the outcome on a later sweep; the parent's
+                // other children, and the rest of the sweep, go on.
+                $this->logger->warning('laravel-swarm: a durable child outcome was not delivered because the parent\'s waits changed; swarm:recover retries it on the next sweep.', [
+                    'parent_run_id' => $parent['run_id'],
                     'child_run_id' => $child['child_run_id'],
-                    'timed_out' => false,
-                ])) {
-                    return false;
-                }
+                    'wait_name' => $waitName,
+                    'message' => $changed->getMessage(),
+                ]);
 
-                $context = $this->runs->loadContext($parent['run_id']);
-                $children = is_array($context->metadata['durable_child_runs'] ?? null) ? $context->metadata['durable_child_runs'] : [];
-                $children[$child['child_run_id']] = [
-                    'status' => $child['status'],
-                    'child_swarm_class' => $child['child_swarm_class'],
-                ];
-                $context->mergeMetadata(['durable_child_runs' => $children]);
-                $this->contextStore->put($this->capture->activeContext($context), $this->runs->ttlSeconds());
-
-                // History follows the parent: it stays waiting while another wait is open or
-                // the parent is still at its branch boundary, and is written before any join
-                // is released.
-                $updated = $this->runs->requireRun($parent['run_id']);
-                $this->historyStore->syncDurableState($parent['run_id'], $updated['status'], $this->capture->context($context), $context->metadata, $this->runs->ttlSeconds(), false);
-
-                if (! $this->durableRuns->markChildTerminalEventDispatched((string) $child['child_run_id'])) {
-                    return false;
-                }
-
-                if ($updated['status'] === 'pending') {
-                    $this->eager->enqueueStep($parent['run_id'], (int) $updated['next_step_index'], $updated['queue_connection'], $updated['queue_name']);
-                } elseif ($updated['status'] === 'waiting') {
-                    // Never inside this transaction: the join release locks the parent's other
-                    // open waits, and this transaction already holds the parent row.
-                    $this->joinRelease->releaseAfterCommit($parent['run_id']);
-                }
-
-                return true;
-            });
+                continue;
+            }
 
             if (! $released) {
                 continue;
@@ -410,6 +389,57 @@ class DurableChildSwarmCoordinator
                 $this->events->dispatch(new SwarmChildFailed($parent['run_id'], (string) $child['child_run_id'], (string) $child['child_swarm_class'], is_array($child['failure'] ?? null) ? $child['failure'] : null));
             }
         }
+    }
+
+    /**
+     * Deliver one terminal child's outcome to its parent in one transaction: close the
+     * child's wait, publish the outcome to the context and history, and continue the
+     * parent. Returns false when the wait was no longer open or the outcome was already
+     * delivered.
+     *
+     * @param  array<string, mixed>  $parent
+     * @param  array<string, mixed>  $child
+     */
+    protected function reconcileTerminalChild(array $parent, array $child, string $waitName): bool
+    {
+        return $this->connection->transaction(function () use ($parent, $child, $waitName): bool {
+            if (! $this->durableRuns->releaseWaitWithOutcome($parent['run_id'], $waitName, 'child_'.$child['status'], [
+                'status' => $child['status'],
+                'child_run_id' => $child['child_run_id'],
+                'timed_out' => false,
+            ])) {
+                return false;
+            }
+
+            $context = $this->runs->loadContext($parent['run_id']);
+            $children = is_array($context->metadata['durable_child_runs'] ?? null) ? $context->metadata['durable_child_runs'] : [];
+            $children[$child['child_run_id']] = [
+                'status' => $child['status'],
+                'child_swarm_class' => $child['child_swarm_class'],
+            ];
+            $context->mergeMetadata(['durable_child_runs' => $children]);
+            $this->contextStore->put($this->capture->activeContext($context), $this->runs->ttlSeconds());
+
+            // History follows the parent: it stays waiting while another wait is open or
+            // the parent is still at its branch boundary, and is written before any join
+            // is released.
+            $updated = $this->runs->requireRun($parent['run_id']);
+            $this->historyStore->syncDurableState($parent['run_id'], $updated['status'], $this->capture->context($context), $context->metadata, $this->runs->ttlSeconds(), false);
+
+            if (! $this->durableRuns->markChildTerminalEventDispatched((string) $child['child_run_id'])) {
+                return false;
+            }
+
+            if ($updated['status'] === 'pending') {
+                $this->eager->enqueueStep($parent['run_id'], (int) $updated['next_step_index'], $updated['queue_connection'], $updated['queue_name']);
+            } elseif ($updated['status'] === 'waiting') {
+                // Never inside this transaction: the join release locks the parent's other
+                // open waits, and this transaction already holds the parent row.
+                $this->joinRelease->releaseAfterCommit($parent['run_id']);
+            }
+
+            return true;
+        });
     }
 
     public function cancelActiveChildren(string $parentRunId, callable $cancelChild): void

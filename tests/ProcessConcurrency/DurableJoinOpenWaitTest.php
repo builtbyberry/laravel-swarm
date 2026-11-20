@@ -724,6 +724,8 @@ afterEach(function (): void {
     foreach (joinOpenWaitDbBarrierDirs(clear: true) as $dir) {
         (new Filesystem)->deleteDirectory($dir);
     }
+
+    Schema::dropIfExists('stale_wait_scan_app_marks');
 });
 
 test('a new wait winning the run lock blocks join creation without a deadlock abort (#614)', function (): void {
@@ -2182,11 +2184,15 @@ test('the creation_generation migration upgrades populated wait rows on the real
     $generation = require dirname(__DIR__, 2).'/database/migrations/2026_11_07_000001_add_wait_generation_to_swarm_durable_runs.php';
     $stamp = require dirname(__DIR__, 2).'/database/migrations/2026_11_20_000001_add_creation_generation_to_swarm_durable_waits.php';
 
-    // The state a v0.28 database reaches: both columns added to populated rows.
-    $stamp->down();
-    $generation->down();
-    $generation->up();
-    $stamp->up();
+    // The state a v0.28 database reaches: both columns added to populated rows. The
+    // schema is shared with later tests, so it is restored even if this fails midway.
+    try {
+        $stamp->down();
+        $generation->down();
+    } finally {
+        $generation->up();
+        $stamp->up();
+    }
 
     expect(DB::table('swarm_durable_waits')->where('run_id', $runId)->value('creation_generation'))->toBeNull()
         ->and((string) DB::table('swarm_durable_runs')->where('run_id', $runId)->value('wait_generation'))->toBe('0');

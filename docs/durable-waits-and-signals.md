@@ -318,7 +318,8 @@ created and has already closed since your transaction's first read is refused
 the same way, once. Postgres and SQLite read each statement afresh and do not
 refuse. Signals sent outside a transaction, including the webhook route,
 `swarm:signal` and `SwarmOperator::signal()` called on their own, are not
-affected.
+affected. A timed-out wait or a finished child whose close is refused the same
+way stays open, and the next `swarm:recover` sweep retries it.
 
 Atomic acceptance is a capability of the bundled database store
 (`Contracts\AcceptsDurableSignals`). A custom `DurableRunStore` without it, or a

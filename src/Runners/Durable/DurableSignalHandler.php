@@ -135,7 +135,7 @@ class DurableSignalHandler
             } catch (DurableWaitSetChangedException $changed) {
                 // The acceptance rolled back with its savepoint: no signal row, no closed
                 // wait, so the same idempotency key is free for the resend.
-                throw new SwarmException("Durable signal [{$name}] for run [{$runId}] could not be accepted: a wait was opened on the run after this database transaction first read it. Nothing was recorded; send the signal again with the same idempotency key after this transaction ends.", previous: $changed);
+                throw $this->waitSetChanged($runId, $name, 'Nothing was recorded; send the signal again with the same idempotency key after this transaction ends.', $changed);
             }
 
             if ($accepted !== null) {
@@ -196,10 +196,19 @@ class DurableSignalHandler
         } catch (DurableWaitSetChangedException $changed) {
             // Only the acceptance rolled back: the signal was recorded before it, so a
             // resend with the same idempotency key would be answered as a duplicate.
-            throw new SwarmException("Durable signal [{$name}] for run [{$runId}] could not be accepted: a wait was opened on the run after this database transaction first read it. The signal was recorded but not accepted; after this transaction ends, send it again with a new idempotency key, or roll this transaction back to discard the recorded signal.", previous: $changed);
+            throw $this->waitSetChanged($runId, $name, 'The signal was recorded but not accepted; after this transaction ends, send it again with a new idempotency key, or roll this transaction back to discard the recorded signal.', $changed);
         }
 
         return [$signal, $accepted];
+    }
+
+    /**
+     * The store refused the acceptance (see DurableWaitSetChangedException); $retry says
+     * what of the signal is left and how to send it again.
+     */
+    protected function waitSetChanged(string $runId, string $name, string $retry, DurableWaitSetChangedException $changed): SwarmException
+    {
+        return new SwarmException("Durable signal [{$name}] for run [{$runId}] could not be accepted: a wait was opened on the run after this database transaction first read it. {$retry}", previous: $changed);
     }
 
     /**

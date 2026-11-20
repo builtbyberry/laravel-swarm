@@ -341,7 +341,9 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   `swarm_durable_waits.creation_generation` column, new migration), and a closer
   that cannot see every wait created on the run refuses, writing nothing:
   `signal()` throws `SwarmException` asking you to send it again after your
-  transaction ends. Postgres and SQLite are not affected; signals sent outside a
+  transaction ends (with the same idempotency key; with a new one for a custom
+  store without `Contracts\AcceptsDurableSignals`), and a refused timed-out wait
+  or child outcome is retried by the next `swarm:recover` sweep. Postgres and SQLite are not affected; signals sent outside a
   transaction are never refused. Rollout requires every process that creates or
   closes waits to run this version. Real-process MySQL/Postgres and SQLite
   regressions cover the refusal, a transaction that already wrote the run row, a

@@ -190,8 +190,10 @@ after the run lock. See [durable waits](https://github.com/builtbyberry/laravel-
 ### A wait closed inside an older application transaction
 
 A new migration adds a nullable `creation_generation` column to
-`swarm_durable_waits`. Each new wait records the run's `wait_generation` it
-created. When a wait closer releases the run's last visible wait, the database
+`swarm_durable_waits` (the table named by `swarm.tables.durable_waits`). Each new
+wait records the run's `wait_generation` it created. Until the migration has run,
+the database store's readiness check fails with `Database-backed durable swarms
+require the [swarm_durable_waits] table for durable run inspection.` When a wait closer releases the run's last visible wait, the database
 store now checks that its transaction can see every wait created on the run.
 Waits created before the migration are not stamped and are not counted.
 
@@ -209,7 +211,9 @@ Finish or roll back the transaction, then send the signal again outside it with
 the same idempotency key. `DB::transaction(..., attempts: 3)` does not retry it:
 it is not a database concurrency error. A wait that was created and has already
 closed since the first read triggers the same refusal once. Postgres and SQLite
-are not affected. With a custom store that does not implement
+are not affected. A timed-out wait or a finished child whose close is refused
+stays open, and the next `swarm:recover` sweep retries it; a warning names the
+run. With a custom store that does not implement
 `Contracts\AcceptsDurableSignals`, the signal row was recorded before the
 acceptance and survives your commit, so the message asks you to resend with a
 **new** idempotency key, or to roll your transaction back to discard it.
@@ -232,8 +236,21 @@ versions stay vulnerable.
 wait created by a build carrying the `wait_generation` column but not
 `creation_generation` has a generation higher than its stamped waits, and its last
 wait close is then refused every time. A database upgrading from a tagged release
-has `wait_generation = 0` everywhere and is not affected. If yours ran such a
-build: stop every worker, web and console process that touches durable runs, let
+has `wait_generation = 0` everywhere and is not affected. To list the affected
+runs (adjust the table names to your configuration):
+
+```sql
+SELECT runs.run_id, runs.wait_generation, COUNT(waits.id) AS stamped_waits
+FROM swarm_durable_runs AS runs
+LEFT JOIN swarm_durable_waits AS waits
+  ON waits.run_id = runs.run_id AND waits.creation_generation IS NOT NULL
+WHERE runs.finished_at IS NULL
+GROUP BY runs.run_id, runs.wait_generation
+HAVING COUNT(waits.id) < runs.wait_generation;
+```
+
+The refusal's own message says the same thing for one run: it names how many of
+the run's created waits the transaction saw. If yours ran such a build: stop every worker, web and console process that touches durable runs, let
 their transactions finish, run the migration, run
 `UPDATE swarm_durable_runs SET wait_generation = 0 WHERE wait_generation <> 0`
 (use your configured table name), and only then start the new version. Do not

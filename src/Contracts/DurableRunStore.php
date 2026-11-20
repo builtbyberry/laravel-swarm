@@ -245,6 +245,11 @@ interface DurableRunStore
     public function signals(string $runId): array;
 
     /**
+     * Open a named wait on the run. A store that refuses a wait close it cannot prove
+     * complete (see releaseWaitWithSignal()) records on each new wait the run's
+     * wait_generation that its creation advanced to; the bundled database store does,
+     * in creation_generation.
+     *
      * @param  array<string, mixed>  $metadata
      */
     public function createWait(string $runId, string $name, ?string $reason = null, ?int $timeoutSeconds = null, array $metadata = []): void;
@@ -254,12 +259,15 @@ interface DurableRunStore
      * a run waiting at a branch boundary (branch rows under its current node) stays
      * `waiting` — its join is released through releaseWaitingRunForJoin() — and any
      * other waiting run moves to `pending`. The same holds for
-     * releaseWaitWithOutcome() and releaseTimedOutWait().     *
+     * releaseWaitWithOutcome() and releaseTimedOutWait().
+     *
      * When the run's last visible wait closes but this transaction cannot prove it sees
      * every wait created on the run, throw
      * \BuiltByBerry\LaravelSwarm\Exceptions\DurableWaitSetChangedException instead;
      * nothing written by the call persists, and the caller retries from a fresh
-     * transaction.
+     * transaction. Of the package's callers, a signal surfaces it as SwarmException,
+     * and a timed-out wait or a finished child is retried by the next swarm:recover
+     * sweep.
      */
     public function releaseWaitWithSignal(string $runId, string $name, int $signalId): bool;
 

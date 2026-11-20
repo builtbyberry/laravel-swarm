@@ -18,6 +18,7 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
 
 /**
  * #635: every wait carries the wait_generation that created it, and a closer whose
@@ -128,19 +129,26 @@ test('a rolled-back wait creation leaves neither its generation nor its stamp, a
         ->and(staleScanStatus($runId))->toBe('pending');
 });
 
-test('waits created before the stamp existed are not counted', function (): void {
-    // A run upgraded with an open wait: no stamp, generation zero.
+/**
+ * A run upgraded with its waits open: no stamps, generation zero.
+ */
+function staleScanMakeLegacy(string $runId): void
+{
+    DB::table('swarm_durable_waits')->where('run_id', $runId)->update(['creation_generation' => null]);
+    DB::table('swarm_durable_runs')->where('run_id', $runId)->update(['wait_generation' => 0]);
+}
+
+test('a run whose only wait predates the stamp is released when it closes', function (): void {
     $legacyOnly = staleScanRun(['approval']);
-    DB::table('swarm_durable_waits')->where('run_id', $legacyOnly)->update(['creation_generation' => null]);
-    DB::table('swarm_durable_runs')->where('run_id', $legacyOnly)->update(['wait_generation' => 0]);
+    staleScanMakeLegacy($legacyOnly);
 
     expect(app(DurableSwarmManager::class)->signal($legacyOnly, 'approval')->accepted)->toBeTrue()
         ->and(staleScanStatus($legacyOnly))->toBe('pending');
+});
 
-    // A legacy wait, then a stamped one created after the upgrade.
+test('a legacy wait and a wait stamped after the upgrade release the run once, when the last closes', function (): void {
     $mixed = staleScanRun(['approval']);
-    DB::table('swarm_durable_waits')->where('run_id', $mixed)->update(['creation_generation' => null]);
-    DB::table('swarm_durable_runs')->where('run_id', $mixed)->update(['wait_generation' => 0]);
+    staleScanMakeLegacy($mixed);
     app(DurableSwarmManager::class)->wait($mixed, 'second');
     $steps = staleScanStepRows($mixed);
 
@@ -150,8 +158,9 @@ test('waits created before the stamp existed are not counted', function (): void
         ->and(app(DurableSwarmManager::class)->signal($mixed, 'second')->accepted)->toBeTrue()
         ->and(staleScanStatus($mixed))->toBe('pending')
         ->and(staleScanStepRows($mixed))->toBe($steps + 1);
+});
 
-    // A legacy wait does not stand in for a stamped one this transaction cannot see.
+test('a legacy wait does not stand in for a stamped wait the transaction cannot see', function (): void {
     $hidden = staleScanRun(['legacy', 'approval']);
     DB::table('swarm_durable_waits')->where('run_id', $hidden)->where('name', 'legacy')->update(['creation_generation' => null, 'status' => 'signalled']);
     DB::table('swarm_durable_runs')->where('run_id', $hidden)->update(['wait_generation' => 1]);
@@ -207,6 +216,44 @@ test('a hidden creation does not stop a close on a run that is neither waiting n
         ->and(staleScanWaitStatus($runId, 'approval'))->toBe('child_completed')
         ->and(staleScanStatus($runId))->toBe($status);
 })->with(['pending', 'running']);
+
+test('the refusal names the run and how many of its created waits the transaction saw', function (): void {
+    $runId = staleScanRun(['approval']);
+    staleScanHideCreation($runId);
+
+    expect(fn () => app(DurableRunStore::class)->releaseWaitWithOutcome($runId, 'approval', 'child_completed', ['status' => 'completed']))
+        ->toThrow(DurableWaitSetChangedException::class, "Durable run [{$runId}] was not moved: this transaction sees 1 of the 2 waits created on it, so a wait created since it first read may still be open. Retry from a fresh transaction.");
+});
+
+test('a refused child outcome does not stop swarm:recover; the other parent gets its outcome and the refused one is retried later', function (): void {
+    $store = app(DurableRunStore::class);
+    $parents = [];
+
+    foreach (['refused', 'healthy'] as $label) {
+        $parentId = staleScanRun([]);
+        $childId = 'child-'.$label.'-'.Str::random(6);
+        app(DurableSwarmManager::class)->wait($parentId, "child:{$childId}");
+        $store->createChildRun($parentId, $childId, FakeSequentialSwarm::class, "child:{$childId}", []);
+        DB::table('swarm_durable_child_runs')->where('child_run_id', $childId)->update(['status' => 'completed', 'updated_at' => now()->subMinutes($label === 'refused' ? 2 : 1)]);
+        $parents[$label] = [$parentId, "child:{$childId}"];
+    }
+
+    staleScanHideCreation($parents['refused'][0]);
+
+    app(DurableSwarmManager::class)->recover();
+
+    expect(staleScanWaitStatus($parents['refused'][0], $parents['refused'][1]))->toBe('waiting')
+        ->and(staleScanStatus($parents['refused'][0]))->toBe('waiting')
+        ->and(staleScanWaitStatus($parents['healthy'][0], $parents['healthy'][1]))->toBe('child_completed')
+        ->and(staleScanStatus($parents['healthy'][0]))->toBe('pending');
+
+    // Once the creation is visible, the next sweep delivers the refused outcome.
+    staleScanUnhideCreation($parents['refused'][0]);
+    app(DurableSwarmManager::class)->recover();
+
+    expect(staleScanWaitStatus($parents['refused'][0], $parents['refused'][1]))->toBe('child_completed')
+        ->and(staleScanStatus($parents['refused'][0]))->toBe('pending');
+});
 
 test('another run\'s stamped waits do not cover a creation hidden on this run', function (): void {
     staleScanRun(['first', 'second', 'third']);

@@ -15,15 +15,32 @@ return new class extends Migration
 {
     public function up(): void
     {
-        Schema::table('swarm_durable_waits', function (Blueprint $table): void {
+        $table = $this->table();
+
+        if (! Schema::hasTable($table) || Schema::hasColumn($table, 'creation_generation')) {
+            return;
+        }
+
+        Schema::table($table, function (Blueprint $table): void {
             $table->bigInteger('creation_generation')->nullable();
         });
     }
 
     public function down(): void
     {
-        Schema::table('swarm_durable_waits', function (Blueprint $table): void {
+        $table = $this->table();
+
+        if (! Schema::hasTable($table) || ! Schema::hasColumn($table, 'creation_generation')) {
+            return;
+        }
+
+        Schema::table($table, function (Blueprint $table): void {
             $table->dropColumn('creation_generation');
         });
+    }
+
+    private function table(): string
+    {
+        return (string) config('swarm.tables.durable_waits', 'swarm_durable_waits');
     }
 };

@@ -2932,8 +2932,8 @@ class DatabaseDurableRunStore implements AcceptsDurableSignals, ChecksCitationSt
             // Postgres reads each statement fresh and SQLite's writers serialize, so
             // there every stamped wait is visible.
             if (in_array($run->status ?? null, ['paused', 'waiting'], true)
-                && $this->visibleCreatedWaitCount($runId) < (int) $run->wait_generation) {
-                throw new DurableWaitSetChangedException;
+                && ($visible = $this->visibleCreatedWaitCount($runId)) < (int) $run->wait_generation) {
+                throw new DurableWaitSetChangedException("Durable run [{$runId}] was not moved: this transaction sees {$visible} of the {$run->wait_generation} waits created on it, so a wait created since it first read may still be open. Retry from a fresh transaction.");
             }
 
             if (($run->status ?? null) === 'paused') {
