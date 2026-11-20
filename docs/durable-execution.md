@@ -407,10 +407,15 @@ by the child finishing, the join is released if the branches are done, or by the
 last branch to finish otherwise; if that hand-off cannot run (for example the
 attempt after the closer's commit fails), `swarm:recover` releases the join on a
 later sweep. A wait that is never signalled and has no timeout keeps the run
-`waiting` at its join; `php artisan swarm:inspect <run-id> --json` shows it. The one exception is `fail_run`: a branch that
-fails still fails the parent at once, open wait or not, and no join is released
-past that failure; if the failing worker dies before failing the parent,
-`swarm:recover` fails it (once any open wait has closed). See
+`waiting` at its join; `php artisan swarm:inspect <run-id> --json` shows it. The one exception is `fail_run`: no join is
+released past a branch that fails. On a store that implements
+`Contracts\ReleasesWaitingRunForFailure`, as the bundled `DatabaseDurableRunStore`
+does, the failure fails the parent at once, open wait or not. A custom or
+decorating store without it falls back: the parent is not failed while a wait is
+open, and a later `swarm:recover` sweep fails it once its waits have closed. See
+[Upgrading](../UPGRADING.md#a-branch-join-waits-for-open-waits). Either way, if
+the failing worker dies before failing the parent, `swarm:recover` fails it (once
+all open waits have closed). See
 [Durable Waits And Signals](durable-waits-and-signals.md#edge-cases).
 
 A `queue()` `multi_worker` hierarchical run is continued only by its own resume
