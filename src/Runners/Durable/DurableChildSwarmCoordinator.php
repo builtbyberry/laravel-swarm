@@ -411,7 +411,7 @@ class DurableChildSwarmCoordinator
                 return false;
             }
 
-            $context = $this->runs->loadContext($parent['run_id']);
+            $context = $this->runs->loadContextForUpdate($parent['run_id']);
             $children = is_array($context->metadata['durable_child_runs'] ?? null) ? $context->metadata['durable_child_runs'] : [];
             $children[$child['child_run_id']] = [
                 'status' => $child['status'],

@@ -426,7 +426,7 @@ class DurableRecoveryCoordinator
             }
 
             $updated = $this->runs->requireRun($wait['run_id']);
-            $context = $this->runs->loadContext($wait['run_id']);
+            $context = $this->runs->loadContextForUpdate($wait['run_id']);
             $outcomes = is_array($context->metadata['durable_wait_outcomes'] ?? null) ? $context->metadata['durable_wait_outcomes'] : [];
             $outcomes[$waitName] = ['status' => 'timed_out', 'payload' => null, 'timed_out' => true];
             $context->mergeMetadata(['durable_wait_outcomes' => $outcomes]);

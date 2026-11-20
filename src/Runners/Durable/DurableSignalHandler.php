@@ -232,7 +232,7 @@ class DurableSignalHandler
      */
     protected function publishAcceptance(string $runId, string $name, int $signalId, mixed $capturedPayload): void
     {
-        $context = $this->runs->loadContext($runId);
+        $context = $this->runs->loadContextForUpdate($runId);
         $signals = is_array($context->metadata['durable_signals'] ?? null) ? $context->metadata['durable_signals'] : [];
         $outcomes = is_array($context->metadata['durable_wait_outcomes'] ?? null) ? $context->metadata['durable_wait_outcomes'] : [];
         $signals[$name] = ['payload' => $capturedPayload, 'signal_id' => $signalId];
