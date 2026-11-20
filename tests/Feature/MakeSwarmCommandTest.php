@@ -49,18 +49,8 @@ test('make swarm generates a swarm class in app ai swarms', function () {
 });
 
 test('make swarm uses the published custom stub when present', function () {
-    $path = app_path('Ai/Swarms/CustomStubSwarm.php');
-    $stubPath = base_path('stubs/swarm.stub');
-    $stubDirectory = dirname($stubPath);
-    $original = File::exists($stubPath) ? File::get($stubPath) : null;
-
-    if (File::exists($path)) {
-        File::delete($path);
-    }
-
-    File::ensureDirectoryExists(dirname($path));
-    File::ensureDirectoryExists($stubDirectory);
-    File::put($stubPath, <<<'STUB'
+    withIsolatedBasePath(function () {
+        File::put(base_path('stubs/swarm.stub'), <<<'STUB'
 <?php
 
 namespace {{ namespace }};
@@ -71,17 +61,10 @@ class {{ class }}
 }
 STUB);
 
-    Artisan::call('make:swarm', ['name' => 'CustomStubSwarm']);
+        Artisan::call('make:swarm', ['name' => 'CustomStubSwarm']);
 
-    expect(File::get($path))->toContain('public const CUSTOM_STUB = true;');
-
-    File::delete($path);
-
-    if ($original === null) {
-        File::delete($stubPath);
-    } else {
-        File::put($stubPath, $original);
-    }
+        expect(File::get(app_path('Ai/Swarms/CustomStubSwarm.php')))->toContain('public const CUSTOM_STUB = true;');
+    });
 });
 
 test('make swarm generates a static-hierarchical stub when --topology=static-hierarchical is passed', function () {
@@ -341,18 +324,8 @@ test('make swarm stays non-interactive-safe with --no-interaction and no flags',
 });
 
 test('make swarm honors a published custom single-agent stub', function () {
-    $path = app_path('Ai/Agents/CustomStubAgent.php');
-    $stubPath = base_path('stubs/swarm.single-agent.stub');
-    $stubDirectory = dirname($stubPath);
-    $original = File::exists($stubPath) ? File::get($stubPath) : null;
-
-    if (File::exists($path)) {
-        File::delete($path);
-    }
-
-    File::ensureDirectoryExists(dirname($path));
-    File::ensureDirectoryExists($stubDirectory);
-    File::put($stubPath, <<<'STUB'
+    withIsolatedBasePath(function () {
+        File::put(base_path('stubs/swarm.single-agent.stub'), <<<'STUB'
 <?php
 
 namespace {{ namespace }};
@@ -363,17 +336,10 @@ class {{ class }}
 }
 STUB);
 
-    Artisan::call('make:swarm', ['name' => 'CustomStubAgent', '--single' => true]);
+        Artisan::call('make:swarm', ['name' => 'CustomStubAgent', '--single' => true]);
 
-    expect(File::get($path))->toContain('public const CUSTOM_SINGLE_AGENT_STUB = true;');
-
-    File::delete($path);
-
-    if ($original === null) {
-        File::delete($stubPath);
-    } else {
-        File::put($stubPath, $original);
-    }
+        expect(File::get(app_path('Ai/Agents/CustomStubAgent.php')))->toContain('public const CUSTOM_SINGLE_AGENT_STUB = true;');
+    });
 });
 
 // The non-interactive default path (no flags, no TTY → sequential swarm class)

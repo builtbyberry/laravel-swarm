@@ -54,13 +54,8 @@ test('make:swarm:agent supports nested namespaces via slash-separated names', fu
 });
 
 test('make:swarm:agent uses a published custom stub when present', function () {
-    $path = app_path('Ai/Agents/CustomStubAgent.php');
-    $stubPath = base_path('stubs/swarm.agent.stub');
-    $original = File::exists($stubPath) ? File::get($stubPath) : null;
-
-    File::ensureDirectoryExists(dirname($path));
-    File::ensureDirectoryExists(dirname($stubPath));
-    File::put($stubPath, <<<'STUB'
+    withIsolatedBasePath(function () {
+        File::put(base_path('stubs/swarm.agent.stub'), <<<'STUB'
 <?php
 
 namespace {{ namespace }};
@@ -71,17 +66,10 @@ class {{ class }}
 }
 STUB);
 
-    try {
         Artisan::call('make:swarm:agent', ['name' => 'CustomStubAgent']);
 
-        expect(File::get($path))->toContain('public const CUSTOM_AGENT_STUB = true;');
-    } finally {
-        if ($original === null) {
-            File::delete($stubPath);
-        } else {
-            File::put($stubPath, $original);
-        }
-    }
+        expect(File::get(app_path('Ai/Agents/CustomStubAgent.php')))->toContain('public const CUSTOM_AGENT_STUB = true;');
+    });
 });
 
 test('make:swarm:agent preserves the deterministic offline compatibility shape', function () {
