@@ -2190,8 +2190,16 @@ test('the creation_generation migration upgrades populated wait rows on the real
         $stamp->down();
         $generation->down();
     } finally {
-        $generation->up();
-        $stamp->up();
+        // Each restore is attempted on its own, and only where its column is missing.
+        try {
+            if (! Schema::hasColumn('swarm_durable_runs', 'wait_generation')) {
+                $generation->up();
+            }
+        } finally {
+            if (! Schema::hasColumn('swarm_durable_waits', 'creation_generation')) {
+                $stamp->up();
+            }
+        }
     }
 
     expect(DB::table('swarm_durable_waits')->where('run_id', $runId)->value('creation_generation'))->toBeNull()
