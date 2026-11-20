@@ -29,6 +29,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\ChildDispatchingSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalFullSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalParallelFailBranchSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelSwarm;
@@ -496,6 +497,91 @@ function joinOpenWaitDbSignalAfterSnapshot(string $runId, string $wait, mixed $p
             LockBarrier::signal($dir, 'fanout-done');
         }
     };
+}
+
+/**
+ * Runs swarm recovery for one run inside an application transaction whose snapshot was
+ * taken (by reading the run's context) before the other worker committed a context
+ * write, then commits. The isolation level is set, not left to the server default.
+ */
+function joinOpenWaitDbStaleSnapshotRecoverer(string $runId, string $dir): Closure
+{
+    return static function () use ($runId, $dir): array {
+        JoinOpenWaitWorker::boot();
+        $mysql = DB::connection()->getDriverName() === 'mysql';
+
+        if ($mysql) {
+            DB::statement('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+        }
+
+        DB::beginTransaction();
+
+        if (! $mysql) {
+            DB::statement('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
+        }
+
+        $markerBefore = app(ContextStore::class)->find($runId)['metadata']['fan_out_marker'] ?? null;
+        LockBarrier::signal($dir, 'snapshot-taken');
+        LockBarrier::await($dir, 'fanout-done');
+        $markerAfter = app(ContextStore::class)->find($runId)['metadata']['fan_out_marker'] ?? null;
+
+        try {
+            app(DurableSwarmManager::class)->recover(runId: $runId);
+            DB::commit();
+        } catch (Throwable $e) {
+            try {
+                DB::rollBack();
+            } catch (Throwable) {
+            }
+
+            return ['outcome' => 'aborted', 'failure' => LockBarrier::failure($e)];
+        }
+
+        return ['outcome' => 'recovered', 'marker_before' => $markerBefore, 'marker_after' => $markerAfter];
+    };
+}
+
+/**
+ * Once the other worker has its snapshot, commits what a fan-out saves to the run's
+ * context: data, metadata and an artifact the snapshot does not hold.
+ */
+function joinOpenWaitDbContextWriteAfterSnapshot(string $runId, string $dir): Closure
+{
+    return static function () use ($runId, $dir): array {
+        JoinOpenWaitWorker::boot();
+        LockBarrier::await($dir, 'snapshot-taken');
+
+        try {
+            $context = RunContext::fromPayload((array) app(ContextStore::class)->find($runId));
+            $context->mergeData(['fan_out_step' => 'fan-out-output'])
+                ->mergeMetadata(['fan_out_marker' => 'saved-by-fan-out'])
+                ->addArtifact(new SwarmArtifact(name: 'fan-out-artifact', content: 'fan-out-artifact-content'));
+            app(ContextStore::class)->put($context, 3600);
+
+            return ['outcome' => 'committed'];
+        } catch (Throwable $e) {
+            return ['outcome' => 'aborted', 'failure' => LockBarrier::failure($e)];
+        } finally {
+            LockBarrier::signal($dir, 'fanout-done');
+        }
+    };
+}
+
+/**
+ * @return array<string, mixed>
+ */
+function joinOpenWaitDbAssertFanOutContextKept(string $runId): array
+{
+    $context = (array) app(ContextStore::class)->find($runId);
+    $history = app(RunHistoryStore::class)->find($runId);
+
+    expect($context['data']['fan_out_step'] ?? null)->toBe('fan-out-output', json_encode($context))
+        ->and($context['metadata']['fan_out_marker'] ?? null)->toBe('saved-by-fan-out')
+        ->and(collect($context['artifacts'])->firstWhere('name', 'fan-out-artifact')['content'] ?? null)->toBe('fan-out-artifact-content')
+        ->and($history['context']['data']['fan_out_step'] ?? null)->toBe('fan-out-output')
+        ->and($history['metadata']['fan_out_marker'] ?? null)->toBe('saved-by-fan-out');
+
+    return $context;
 }
 
 /**
@@ -1174,6 +1260,63 @@ test('a wait closed inside an application transaction whose snapshot predates an
         ->and($metadata['durable_signals']['second']['payload'] ?? null)->toEqual(['from' => 'second-signal'])
         ->and($metadata['durable_wait_outcomes']['first']['status'] ?? null)->toBe('signalled')
         ->and($metadata['durable_wait_outcomes']['second']['status'] ?? null)->toBe('signalled');
+});
+
+test('a wait timing out in recovery inside an application transaction whose snapshot predates a context write keeps that write (#636)', function (): void {
+    $runId = FakeSequentialSwarm::make()->dispatchDurable('timeout-stale-context-task')->runId;
+    app(DurableSwarmManager::class)->wait($runId, 'timed_wait', 'Timed wait', 60);
+    DB::table('swarm_durable_waits')->where('run_id', $runId)->update(['timeout_at' => Carbon::now('UTC')->subMinute()]);
+    $dir = joinOpenWaitDbBarrierDir();
+
+    [$recoverer, $writer] = $this->app->make(ConcurrencyManager::class)->driver('process')->run([
+        joinOpenWaitDbStaleSnapshotRecoverer($runId, $dir),
+        joinOpenWaitDbContextWriteAfterSnapshot($runId, $dir),
+    ]);
+
+    // Under MySQL's REPEATABLE READ the recovering transaction still misses the write.
+    expect($writer)->toBe(['outcome' => 'committed'], json_encode($writer))
+        ->and($recoverer)->toBe([
+            'outcome' => 'recovered',
+            'marker_before' => null,
+            'marker_after' => DB::connection()->getDriverName() === 'mysql' ? null : 'saved-by-fan-out',
+        ], json_encode($recoverer))
+        ->and(DB::table('swarm_durable_waits')->where('run_id', $runId)->value('status'))->toBe('timed_out');
+
+    $context = joinOpenWaitDbAssertFanOutContextKept($runId);
+
+    expect($context['metadata']['durable_wait_outcomes']['timed_wait'] ?? null)->toEqual(['status' => 'timed_out', 'payload' => null, 'timed_out' => true]);
+});
+
+test('a finished child reconciled in recovery inside an application transaction whose snapshot predates a context write keeps that write (#636)', function (): void {
+    FakeResearcher::fake(['parent-step']);
+    $runId = ChildDispatchingSwarm::make()->dispatchDurable('child-stale-context-task')->runId;
+    $manager = app(DurableSwarmManager::class);
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+    $childRunId = (string) $manager->inspect($runId)->children[0]['child_run_id'];
+
+    expect($manager->find($runId)['status'])->toBe('waiting');
+
+    // The child finished but its parent was not reconciled yet: recovery delivers it.
+    DB::table('swarm_durable_child_runs')->where('child_run_id', $childRunId)
+        ->update(['status' => 'completed', 'updated_at' => Carbon::now('UTC')]);
+    $dir = joinOpenWaitDbBarrierDir();
+
+    [$recoverer, $writer] = $this->app->make(ConcurrencyManager::class)->driver('process')->run([
+        joinOpenWaitDbStaleSnapshotRecoverer($runId, $dir),
+        joinOpenWaitDbContextWriteAfterSnapshot($runId, $dir),
+    ]);
+
+    expect($writer)->toBe(['outcome' => 'committed'], json_encode($writer))
+        ->and($recoverer)->toBe([
+            'outcome' => 'recovered',
+            'marker_before' => null,
+            'marker_after' => DB::connection()->getDriverName() === 'mysql' ? null : 'saved-by-fan-out',
+        ], json_encode($recoverer))
+        ->and($manager->inspect($runId)->waits[0]['status'])->toBe('child_completed');
+
+    $context = joinOpenWaitDbAssertFanOutContextKept($runId);
+
+    expect($context['metadata']['durable_child_runs'][$childRunId]['status'] ?? null)->toBe('completed');
 });
 
 test('closing the last wait never waits on branch rows, so it cannot deadlock with a branch retry writing its outbox row', function (): void {

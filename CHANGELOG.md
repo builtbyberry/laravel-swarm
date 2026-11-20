@@ -263,8 +263,10 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   same read could drop the entry of another signal accepted in between. Closers
   now read the context with a locking read (`SELECT ... FOR UPDATE`), taken
   after the run row, which is the order a fan-out already uses. Postgres and
-  SQLite were not affected. No migration, configuration or contract change.
-  Context already lost before the upgrade is not restored. See
+  SQLite were not affected. No migration, configuration or public contract
+  change; a `DatabaseContextStore` subclass that changed how `find()` decodes a
+  row must move that into the new `hydrateContextRow()`. Context already lost
+  before the upgrade is not restored. See
   [upgrade guidance](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#wait-closers-read-the-context-with-a-locking-read).
 
 - **A paused run cannot resume past a concurrently created wait (#621).** Ordinary

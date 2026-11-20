@@ -55,13 +55,7 @@ class DurableRunContext
 
     public function loadContext(string $runId): RunContext
     {
-        $payload = $this->contextStore->find($runId);
-
-        if ($payload === null) {
-            throw new SwarmException("Durable run [{$runId}] is missing its persisted context.");
-        }
-
-        return RunContext::fromPayload($payload);
+        return $this->contextFromPayload($runId, $this->contextStore->find($runId));
     }
 
     /**
@@ -70,15 +64,25 @@ class DurableRunContext
      * row and not an application transaction's older MySQL snapshot. Call it inside the
      * closer's transaction, once the run row is locked.
      *
-     * Durable dispatch requires a DatabaseContextStore (DispatchValidator), so every
-     * durable run reads this way. Any other ContextStore is read with find().
+     * Durable dispatch requires a DatabaseContextStore
+     * (DispatchValidator::ensureDatabaseDurableInfrastructure()), so every durable run
+     * reads this way. Any other ContextStore is read with find(), with no lock: that is
+     * safe only while durable dispatch keeps that requirement. A change that lets
+     * another ContextStore run durable swarms must give it a locking read here, or #636
+     * (a closer erasing a fan-out's context on MySQL) returns for it.
      */
     public function loadContextForUpdate(string $runId): RunContext
     {
-        $payload = $this->contextStore instanceof DatabaseContextStore
+        return $this->contextFromPayload($runId, $this->contextStore instanceof DatabaseContextStore
             ? $this->contextStore->findForUpdate($runId)
-            : $this->contextStore->find($runId);
+            : $this->contextStore->find($runId));
+    }
 
+    /**
+     * @param  array<string, mixed>|null  $payload
+     */
+    private function contextFromPayload(string $runId, ?array $payload): RunContext
+    {
         if ($payload === null) {
             throw new SwarmException("Durable run [{$runId}] is missing its persisted context.");
         }

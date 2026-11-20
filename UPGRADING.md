@@ -264,15 +264,21 @@ inside the closer's transaction, after the run row is locked. It then merges its
 outcome into that context and writes it back with `put()`. Before, it used
 `find()`. On MySQL, `find()` inside an application transaction that had already
 read returned that transaction's older snapshot, and writing it back could erase
-context a fan-out had committed since (#636). Nothing changes for your code, and
-no migration or configuration is needed.
+context a fan-out had committed since (#636). No migration or configuration is
+needed, and code that only uses the package's public contracts needs no change.
 
-**`DatabaseContextStore` subclasses.** `find()` and `findForUpdate()` decode a row
-through one protected method, `hydrate()`. A subclass that changed how `find()`
-decodes a row should move that change into `hydrate()`, so the closers' read keeps
-it. A subclass that overrides `find()` alone is not used by the closers' read.
-A subclass that overrides `findForUpdate()` must keep it a locking read on the
-closer's connection.
+**`DatabaseContextStore` subclasses.** `DatabaseContextStore` is `@internal`; if you
+subclass it (unsupported), two things changed:
+
+- `find()` and `findForUpdate()` now decode a row through one protected method,
+  `hydrateContextRow(object $record, string $runId): array`. A subclass that
+  changed how `find()` decodes a row must move that change into
+  `hydrateContextRow()`: the closers read through `findForUpdate()`, not `find()`,
+  so an override of `find()` alone no longer applies to them. A subclass that
+  overrides `findForUpdate()` must keep it a locking read on the closer's
+  connection.
+- A subclass that already declares a method named `findForUpdate()` or
+  `hydrateContextRow()` must match the new signatures, or PHP refuses to load it.
 
 ### Durable branch fan-out cap (`swarm.durable.parallel.max_concurrent_branches`)
 

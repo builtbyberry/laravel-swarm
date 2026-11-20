@@ -8,6 +8,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseContextStore;
+use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableSignalHandler;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
@@ -68,14 +69,17 @@ function closerStaleContextFanOutAfterSnapshot(string $runId): void
     $store = closerStaleContextStore();
     $store->takeSnapshot($runId);
 
-    $context = RunContext::fromPayload((array) $store->findForUpdate($runId));
+    // A separate, plain store reads the current row, so the locking-read count below
+    // is the closer's own.
+    $context = RunContext::fromPayload((array) (new DatabaseContextStore(DB::connection(), config(), app(SwarmPersistenceCipher::class)))->find($runId));
     $context->mergeData(['fan_out_step' => 'fan-out-output'])
         ->mergeMetadata(['fan_out_marker' => 'saved-by-fan-out'])
         ->addArtifact(new SwarmArtifact(name: 'fan-out-artifact', content: 'fan-out-artifact-content'));
     $store->put($context, 3600);
 
     // The snapshot is stale now: an ordinary read still misses the fan-out.
-    expect($store->find($runId)['data'])->not->toHaveKey('fan_out_step');
+    expect($store->find($runId)['data'])->not->toHaveKey('fan_out_step')
+        ->and($store->lockingReads[$runId] ?? 0)->toBe(0);
 }
 
 /**

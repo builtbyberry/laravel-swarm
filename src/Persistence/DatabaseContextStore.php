@@ -70,7 +70,7 @@ class DatabaseContextStore implements ContextStore
         /** @var object|null $record */
         $record = $this->table()->where('run_id', $runId)->first();
 
-        return $record !== null ? $this->hydrate($record, $runId) : null;
+        return $record !== null ? $this->hydrateContextRow($record, $runId) : null;
     }
 
     /**
@@ -84,11 +84,11 @@ class DatabaseContextStore implements ContextStore
      * (REPEATABLE READ) reads that transaction's snapshot, which can predate a fan-out
      * committed since; writing it back would erase the fan-out's data, metadata and
      * artifacts. A locking read returns the latest committed row instead. Postgres
-     * (READ COMMITTED) reads each statement fresh. SQLite drops the lock clause; there
-     * the closer has already written before this read, so its connection holds the
-     * write lock.
+     * (READ COMMITTED) reads each statement fresh. SQLite drops the lock clause, so
+     * there the caller's transaction must already hold the database's write lock: it
+     * has written before this read (each wait closer has written its wait row).
      *
-     * The row is decoded exactly as find() decodes it, through hydrate().
+     * The row is decoded exactly as find() decodes it, through hydrateContextRow().
      *
      * @return array<string, mixed>|null
      */
@@ -97,7 +97,7 @@ class DatabaseContextStore implements ContextStore
         /** @var object|null $record */
         $record = $this->table()->where('run_id', $runId)->lockForUpdate()->first();
 
-        return $record !== null ? $this->hydrate($record, $runId) : null;
+        return $record !== null ? $this->hydrateContextRow($record, $runId) : null;
     }
 
     /**
@@ -106,7 +106,7 @@ class DatabaseContextStore implements ContextStore
      *
      * @return array<string, mixed>
      */
-    protected function hydrate(object $record, string $runId): array
+    protected function hydrateContextRow(object $record, string $runId): array
     {
         return [
             'run_id' => $record->run_id,
