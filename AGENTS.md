@@ -1,6 +1,6 @@
 # Laravel Swarm — Agent Context
 
-<!-- swarm-channel: laravel-swarm -->
+<!-- prymer-channel: built-by-berry/laravel-swarm -->
 
 This file is operational context for AI coding agents. Human contributors should
 start with [README.md](README.md), [CONTRIBUTING.md](CONTRIBUTING.md),

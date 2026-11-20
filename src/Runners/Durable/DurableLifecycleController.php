@@ -6,12 +6,12 @@ namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
-use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Enums\DurableLifecycleStatus;
 use BuiltByBerry\LaravelSwarm\Events\SwarmCancelled;
 use BuiltByBerry\LaravelSwarm\Events\SwarmPaused;
 use BuiltByBerry\LaravelSwarm\Events\SwarmResumed;
+use BuiltByBerry\LaravelSwarm\Exceptions\DurableWaitSetChangedException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\DurableCancelResult;
@@ -20,12 +20,19 @@ use BuiltByBerry\LaravelSwarm\Responses\DurableResumeResult;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Database\Connection;
+use Illuminate\Database\DeadlockException;
+use Illuminate\Database\DetectsConcurrencyErrors;
+use Throwable;
 
 /**
  * @internal
  */
 class DurableLifecycleController
 {
+    use DetectsConcurrencyErrors;
+
+    private const RESUME_ATTEMPTS = 3;
+
     public function __construct(
         protected DurableRunStore $durableRuns,
         protected DatabaseRunHistoryStore $historyStore,
@@ -37,7 +44,7 @@ class DurableLifecycleController
         protected DurablePayloadCapture $payloads,
         protected DurableChildSwarmCoordinator $children,
         protected SwarmAuditDispatcher $audit,
-        protected DurableOutbox $outbox,
+        protected DurableEagerDispatcher $eager,
     ) {}
 
     public function pause(string $runId): DurablePauseResult
@@ -93,49 +100,103 @@ class DurableLifecycleController
     }
 
     /**
-     * Resume a paused run. When the run resumes back into a waiting boundary,
-     * the returned run row is handed to $dispatchWaiting so the boundary is
-     * re-armed; the closure reports whether it actually re-dispatched one.
+     * Resume a paused run. When the run resumes back into a waiting boundary —
+     * branch work, an open signal wait, or a child swarm's wait — the returned
+     * run row is handed to $dispatchWaiting so the boundary is re-armed; the
+     * closure reports whether it re-armed one. Branch work is re-dispatched; a
+     * signal or child wait is re-armed by the run being `waiting` again, which
+     * is what lets a signal, the child's outcome or swarm:recover's timeout
+     * release it.
      *
      * @param  callable(array<string, mixed>): bool  $dispatchWaiting
      */
     public function resume(string $runId, callable $dispatchWaiting): DurableResumeResult
     {
+        $canRetry = $this->connection->transactionLevel() === 0;
         $run = $this->runs->requireRun($runId);
 
         if ($run['status'] !== 'paused') {
             throw new SwarmException("Durable run [{$runId}] cannot be resumed from status [{$run['status']}].");
         }
 
+        $resumed = false;
         $context = null;
         $updated = null;
 
-        $resumed = $this->connection->transaction(function () use ($runId, $run, &$context, &$updated): bool {
-            if (! $this->durableRuns->resume($runId)) {
-                return false;
+        // One budget for generation changes and database concurrency victims. Only
+        // an outermost rollback gives MySQL a fresh snapshot for the next attempt.
+        for ($attempt = 1; $attempt <= self::RESUME_ATTEMPTS; $attempt++) {
+            $context = null;
+            $updated = null;
+
+            try {
+                $resumed = $this->connection->transaction(function () use ($runId, $run, &$context, &$updated): bool {
+                    if (! $this->durableRuns->resume($runId)) {
+                        return false;
+                    }
+
+                    $updated = $this->runs->requireRun($runId);
+                    $context = $this->runs->loadContext($runId);
+                    $this->historyStore->syncDurableState($runId, $updated['status'], $this->capture->context($context), $context->metadata, $this->runs->ttlSeconds(), false);
+
+                    if ($updated['status'] === 'waiting') {
+                        return true;
+                    }
+
+                    if (! $this->runs->isQueueHierarchicalParallel($updated)) {
+                        $nextStepIndex = (int) ($updated['next_step_index'] ?? $run['next_step_index']);
+                        $this->eager->enqueueStep($runId, $nextStepIndex, $updated['queue_connection'], $updated['queue_name']);
+                    }
+
+                    return true;
+                }, attempts: 1);
+                break;
+            } catch (Throwable $exception) {
+                // The store's resume transaction is nested in ours, so Laravel rethrows a
+                // concurrency error from it as DeadlockException. That wrapper keeps an
+                // integer code only, so a Postgres serialization failure ('40001')
+                // arrives with code 0 and a message the detector does not match.
+                if (! $exception instanceof DurableWaitSetChangedException
+                    && ! $exception instanceof DeadlockException
+                    && ! $this->causedByConcurrencyError($exception)) {
+                    throw $exception;
+                }
+
+                if (! $canRetry) {
+                    if ($exception instanceof DurableWaitSetChangedException) {
+                        throw new SwarmException("Durable run [{$runId}] could not be resumed: a wait was opened on it concurrently; retry the resume outside this transaction.", previous: $exception);
+                    }
+
+                    throw $exception;
+                }
+
+                if ($attempt === self::RESUME_ATTEMPTS) {
+                    $reason = $exception instanceof DurableWaitSetChangedException
+                        ? 'waits on it kept changing'
+                        : 'the database kept reporting concurrency conflicts';
+                    throw new SwarmException("Durable run [{$runId}] could not be resumed: {$reason}; retry the resume.", previous: $exception);
+                }
+
+                if (! $exception instanceof DurableWaitSetChangedException) {
+                    $this->backoffResumeConcurrencyRetry($attempt);
+                }
             }
-
-            $updated = $this->runs->requireRun($runId);
-            $context = $this->runs->loadContext($runId);
-            $this->historyStore->syncDurableState($runId, $updated['status'], $this->capture->context($context), $context->metadata, $this->runs->ttlSeconds(), false);
-
-            if ($updated['status'] === 'waiting') {
-                return true;
-            }
-
-            if (! $this->runs->isQueueHierarchicalParallel($updated)) {
-                $this->outbox->enqueueStep(
-                    $runId,
-                    (int) ($updated['next_step_index'] ?? $run['next_step_index']),
-                    $updated['queue_connection'],
-                    $updated['queue_name'],
-                );
-            }
-
-            return true;
-        });
+        }
 
         if (! $resumed || $context === null || ! is_array($updated)) {
+            // The store's locked read found the run no longer paused. Outside an
+            // application transaction this ordinary read is current and names the
+            // status that won; inside one it can come from an older snapshot (MySQL
+            // REPEATABLE READ) and still say paused, so name no status there.
+            if (! $canRetry) {
+                throw new SwarmException("Durable run [{$runId}] could not be resumed: it is no longer paused.");
+            }
+
+            $latest = $this->durableRuns->find($runId);
+            if ($latest !== null) {
+                throw new SwarmException("Durable run [{$runId}] cannot be resumed from status [{$latest['status']}].");
+            }
+
             throw new SwarmException("Durable run [{$runId}] could not be resumed.");
         }
 
@@ -164,6 +225,11 @@ class DurableLifecycleController
             status: $waiting ? DurableLifecycleStatus::Waiting : DurableLifecycleStatus::Resumed,
             waitingBoundaryDispatched: $waitingBoundaryDispatched,
         );
+    }
+
+    protected function backoffResumeConcurrencyRetry(int $attempt): void
+    {
+        usleep(random_int(5_000, 50_000) * $attempt);
     }
 
     public function cancel(string $runId, callable $cancelChild): DurableCancelResult

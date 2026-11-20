@@ -486,10 +486,11 @@ test('swarm:health --durable warns when outbox has stale unclaimed rows', functi
     // Manually insert an outbox row (dispatchDurable uses direct dispatch, not the DB outbox)
     $outbox->enqueueStep($response->runId, 1, null, null);
 
-    // Age the outbox rows past the staleness threshold
+    // Age the outbox rows past the staleness threshold (a row is due from its
+    // available_at, which every ordinary write sets equal to created_at)
     DB::table('swarm_durable_outbox')
         ->where('run_id', $response->runId)
-        ->update(['created_at' => now()->subMinutes(5)]);
+        ->update(['created_at' => now()->subMinutes(5), 'available_at' => now()->subMinutes(5)]);
 
     $exitCode = Artisan::call('swarm:health', ['--durable' => true, '--json' => true]);
     $output = json_decode(Artisan::output(), true);
@@ -801,11 +802,19 @@ function outboxBindStubOutbox(DrainResult ...$results): void
         /** @param array<DrainResult> $results */
         public function __construct(private array $results) {}
 
-        public function enqueueStep(string $runId, int $stepIndex, ?string $connection, ?string $queue): void {}
+        public function enqueueStep(string $runId, int $stepIndex, ?string $connection, ?string $queue, bool $directDispatch = false): int
+        {
+            return 0;
+        }
 
-        public function enqueueBranch(string $runId, string $branchId, ?string $connection, ?string $queue): void {}
+        public function enqueueBranch(string $runId, string $branchId, ?string $connection, ?string $queue, bool $directDispatch = false): int
+        {
+            return 0;
+        }
 
         public function enqueueQueuedResume(string $runId, ?string $connection, ?string $queue): void {}
+
+        public function settle(int $entryId, ?string $runId = null): void {}
 
         public function drain(array $types = [], int $limit = 100): DrainResult
         {

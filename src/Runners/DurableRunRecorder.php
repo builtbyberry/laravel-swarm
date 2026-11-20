@@ -168,7 +168,7 @@ class DurableRunRecorder
             if ($withTransaction !== null) {
                 ($withTransaction)();
             }
-        });
+        }, attempts: 3);
         $this->audit->emit('durable.checkpointed_hierarchical', [
             'run_id' => $runId,
             'parent_run_id' => $context->metadata['parent_run_id'] ?? null,
@@ -196,7 +196,7 @@ class DurableRunRecorder
             if ($withTransaction !== null) {
                 ($withTransaction)();
             }
-        });
+        }, attempts: 3);
         $this->audit->emit('durable.checkpointed', [
             'run_id' => $runId,
             'parent_run_id' => $context->metadata['parent_run_id'] ?? null,

@@ -14,6 +14,8 @@ use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamStepCheckpointStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
+use BuiltByBerry\LaravelSwarm\Enums\NativeToolFailurePolicy;
+use BuiltByBerry\LaravelSwarm\Enums\RelayLane;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Memory\StreamStepCheckpoint;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheArtifactRepository;
@@ -147,8 +149,10 @@ test('swarm health durable option verifies durable database readiness', function
 test('swarm health parallel streaming option exercises the real provider-free process transport', function (): void {
     config()->set('concurrency.default', 'process');
 
-    expect(Artisan::call('swarm:health', ['--parallel-streaming' => true]))->toBe(0);
-    expect(Artisan::output())
+    $status = Artisan::call('swarm:health', ['--parallel-streaming' => true]);
+    $output = Artisan::output();
+    expect($status)->toBe(0, $output);
+    expect($output)
         ->toContain('Parallel live streaming')
         ->toContain('provider-free child bootstrap and authenticated loopback handshake passed');
 });
@@ -215,17 +219,47 @@ test('custom checkpoint citation notes do not bypass native-result readiness fai
         ->and($checkpoint['details'])->toContain('native-result readiness was checked');
 });
 
+test('swarm health reports the effective native tool-failure policy', function (): void {
+    expect(Artisan::call('swarm:health'))->toBe(0);
+
+    expect(Artisan::output())
+        ->toContain('Native tool failures')
+        ->toContain('effective policy=[propagate]');
+});
+
+test('swarm health warns for every value the policy cannot be read from', function (mixed $configured, string $because): void {
+    // The per-failure read defaults silently on purpose -- throwing inside the
+    // failure path would mask the tool's own exception -- so this row is the
+    // only place an operator finds out their value was never in effect. A
+    // non-string is the likelier mistake of the two:
+    // SWARM_NATIVE_TOOL_FAILURE_POLICY=false arrives as a real bool.
+    config()->set('swarm.native_tool_failure_policy', $configured);
+
+    Artisan::call('swarm:health');
+
+    expect(Artisan::output())
+        ->toContain($because)
+        ->toContain('effective policy=[propagate]');
+})->with([
+    'a typo' => ['recovery', 'is not a recognised policy'],
+    'bool false, as SWARM_NATIVE_TOOL_FAILURE_POLICY=false arrives' => [false, 'is a [bool], not a policy string'],
+    'bool true' => [true, 'is a [bool], not a policy string'],
+    'an int' => [1, 'is a [int], not a policy string'],
+    'the enum itself, not its value' => [NativeToolFailurePolicy::Recover, 'is a [BuiltByBerry\\LaravelSwarm\\Enums\\NativeToolFailurePolicy], not a policy string'],
+]);
+
 test('swarm health json output is structured', function (): void {
     expect(Artisan::call('swarm:health', ['--json' => true]))->toBe(0);
 
     $payload = json_decode(Artisan::output(), true);
 
-    // 5 persistence checks + native-input readiness + 3 governed-by-default checks
+    // 5 persistence checks + native-input readiness + 4 governed-by-default checks
+    // (guardrails, audit sink, capture policy, native tool-failure policy)
     // + terminal callback delivery (a note while disabled).
     expect($payload)
         ->toBeArray()
         ->and($payload['ok'])->toBeTrue()
-        ->and($payload['checks'])->toHaveCount(10)
+        ->and($payload['checks'])->toHaveCount(11)
         ->and($payload['checks'][0])->toHaveKeys(['component', 'driver', 'store', 'status', 'details']);
 
     // Every check — including the new governance checks — carries the same shape.
@@ -1220,7 +1254,7 @@ describe('capture policy check', function (): void {
 });
 
 describe('governance checks in --json output', function (): void {
-    test('the three governance checks appear with the standard shape in --json', function (): void {
+    test('the governance checks appear with the standard shape in --json', function (): void {
         $exitCode = Artisan::call('swarm:health', ['--json' => true]);
 
         $payload = json_decode(Artisan::output(), true);
@@ -1231,15 +1265,102 @@ describe('governance checks in --json output', function (): void {
             ->and($payload['ok'])->toBeTrue()
             ->and($components)->toContain('Guardrails')
             ->and($components)->toContain('Audit sink')
-            ->and($components)->toContain('Capture policy');
+            ->and($components)->toContain('Capture policy')
+            ->and($components)->toContain('Native tool failures');
     });
 
-    test('the three governance checks are skipped under --audit (audit-outbox scope only)', function (): void {
+    test('the governance checks are skipped under --audit (audit-outbox scope only)', function (): void {
         $output = Artisan::call('swarm:health', ['--audit' => true]);
 
         expect($output)->toBe(0);
         expect(Artisan::output())
             ->not->toContain('Guardrails')
-            ->not->toContain('Capture policy');
+            ->not->toContain('Capture policy')
+            ->not->toContain('Native tool failures');
     });
 });
+
+// ---------------------------------------------------------------------------
+// Relay staleness is reported per lane while relay lane leases are held
+// ---------------------------------------------------------------------------
+
+test('relay staleness is reported for the stale lane only while that lane lease is held', function (RelayLane $staleLane): void {
+    config()->set('swarm.persistence.driver', 'database');
+    config()->set('swarm.callbacks.enabled', true);
+    config()->set('swarm.callbacks.reservation_timeout_seconds', 60);
+    config()->set('swarm.callbacks.stale_warning_threshold_seconds', 120);
+    app()->forgetInstance(CallbackDeliveryOutbox::class);
+    app()->forgetInstance(ReadableCallbackDeliveryOutbox::class);
+    DB::statement('PRAGMA foreign_keys = OFF');
+
+    $aged = Carbon::now('UTC')->subMinutes(5);
+
+    match ($staleLane) {
+        RelayLane::Durable => DB::table('swarm_durable_outbox')->insert([
+            'run_id' => (string) Str::uuid(),
+            'dispatch_type' => 'step',
+            'payload' => '{}',
+            'queue_connection' => null,
+            'queue_name' => null,
+            'available_at' => $aged,
+            'reserved_at' => null,
+            'created_at' => $aged,
+        ]),
+        RelayLane::Audit => DB::table('swarm_audit_outbox')->insert([
+            'category' => 'run.failed',
+            'run_id' => 'lane-stale-audit',
+            'payload' => '{}',
+            'attempts' => 1,
+            'status' => 'pending',
+            'last_error' => null,
+            'last_attempted_at' => $aged,
+            'reserved_at' => $aged,
+            'created_at' => $aged,
+            'updated_at' => $aged,
+        ]),
+        RelayLane::Callback => DB::table('swarm_callback_deliveries')->insert([
+            'run_id' => 'lane-stale-callback',
+            'slot' => 'then',
+            'callback' => 'x',
+            'context' => null,
+            'status' => 'pending',
+            'attempts' => 1,
+            'last_error' => null,
+            'last_attempted_at' => null,
+            'claim_token' => null,
+            'reserved_at' => null,
+            'available_at' => $aged,
+            'created_at' => $aged,
+            'updated_at' => $aged,
+        ]),
+    };
+
+    $store = Cache::store((string) config('swarm.commands.overlap.store'))->getStore();
+    $lock = $store->lock($staleLane->leaseKey(), 60);
+    expect($lock->get())->toBeTrue();
+
+    try {
+        Artisan::call('swarm:health', ['--durable' => true, '--json' => true]);
+    } finally {
+        $lock->release();
+        DB::statement('PRAGMA foreign_keys = ON');
+    }
+
+    $checks = collect(json_decode(Artisan::output(), true, flags: JSON_THROW_ON_ERROR)['checks']);
+    $laneComponents = [
+        RelayLane::Durable->value => 'Outbox relay',
+        RelayLane::Audit->value => 'Audit outbox staleness',
+        RelayLane::Callback->value => 'Callback delivery',
+    ];
+
+    foreach ($laneComponents as $lane => $component) {
+        expect($checks->firstWhere('component', $component)['status'])
+            ->toBe($lane === $staleLane->value ? 'warning' : 'ok', "{$component} status");
+    }
+
+    expect($checks->firstWhere('component', 'Command overlap lease')['status'])->toBe('ok');
+})->with([
+    'durable' => [RelayLane::Durable],
+    'audit' => [RelayLane::Audit],
+    'callback' => [RelayLane::Callback],
+]);

@@ -154,6 +154,16 @@ actual provider-free child bootstrap and authenticated loopback handshake. Once
 the feature flag is enabled, bare `swarm:health` includes the same check and
 exits nonzero when the process transport is unavailable.
 
+The process transport follows the installed Laravel command's result protocol.
+On Laravel versions that sign concurrency results, each child receives its own
+random signing key through its launch environment, and Swarm verifies the
+result frame before reading the serialized terminal marker. A missing key or
+invalid signature fails the stream; it never falls back to unsigned JSON.
+Older supported Laravel versions retain their plain-JSON result format. In both
+paths, child stdout cannot instantiate application classes, and process failures withhold
+raw diagnostics. After updating Laravel, run this health probe and your parallel
+stream smoke tests again.
+
 `max_branches` is a per-stream branch-process admission limit, not a raw
 file-descriptor or application-wide ceiling. Each branch owns process pipes and
 a loopback socket. Budget aggregate capacity as concurrent live streams times
@@ -406,9 +416,11 @@ redacted and skipped capture, including database replay. Redaction removes paylo
 values, not these outcome flags. The native streamed `successful`
 classification remains unchanged; error text still follows the capture policy
 (unchanged under Full, redacted under Redact, absent under Skip). Swarm does not
-classify an error-looking result string as an exception. In official Laravel AI, tool validation errors and caught nested
-`AgentTool` failures can be ordinary text results, while a max-step result can be
-failed without invoking the tool. Unsupported native approvals still fail at the
+classify an error-looking result string as an exception. In official Laravel AI, tool validation errors can be ordinary text results, as
+can a nested `AgentTool` child-run failure while upstream still catches it (it
+did up to v1.4.0; v1.4.1 does not — see
+[Error Handling](error-handling.md#a-sub-agents-own-run-failure)), while a
+max-step result can be failed without invoking the tool. Unsupported native approvals still fail at the
 [approval boundary](native-outcome-boundary.md).
 
 Laravel AI 1.0 can emit several cumulative results for the same tool call.
@@ -505,6 +517,13 @@ return SwarmHistory::replay($runId);
 stored order as the response is iterated. If the original stream **failed**,
 replay emits stored events through `swarm_stream_error` and completes **without**
 re-throwing the original exception (informational playback).
+
+Replay reads only what has been written. A durable run with
+`#[DurableStreaming]` writes its node events as they are emitted. With
+`swarm.durable.stream_batching` on, it writes deltas in batches, so a replay read
+while a node is still streaming can trail the provider by a held batch. See
+[batched causal-log writes](durable-execution.md#batched-causal-log-writes) for
+what such a reader is guaranteed to see.
 
 Configuration for replay storage drivers and prefixes lives under
 `swarm.streaming.replay` in `config/swarm.php`. See

@@ -20,7 +20,7 @@
         "php": "^8.4",
         "illuminate/bus": "^13.0",
         "illuminate/cache": "^13.0",
-        "illuminate/concurrency": "^13.0",
+        "illuminate/concurrency": "^13.40",
         "illuminate/console": "^13.0",
         "illuminate/container": "^13.0",
         "illuminate/contracts": "^13.0",

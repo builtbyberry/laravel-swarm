@@ -5,10 +5,9 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
-use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
+use BuiltByBerry\LaravelSwarm\Contracts\ReleasesWaitingRunForFailure;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
-use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
 use BuiltByBerry\LaravelSwarm\Enums\DurableParallelFailurePolicy;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryReplayCoordinator;
@@ -39,8 +38,10 @@ class DurableHierarchicalCoordinator
         protected DurableRunContext $runs,
         protected DurableBranchCoordinator $branches,
         protected HierarchicalRunner $hierarchical,
-        protected DurableOutbox $outbox,
+        protected DurableEagerDispatcher $eager,
         protected MemoryReplayCoordinator $coordinator,
+        protected DurableBranchAdmission $admission,
+        protected DurableJoinRelease $joinRelease,
     ) {}
 
     /**
@@ -83,7 +84,9 @@ class DurableHierarchicalCoordinator
         $branches = array_map(fn (array $branch): array => $this->branches->withBranchRouting($swarm, $context, $branch, $run), $result->branches);
 
         $this->connection->transaction(function () use ($run, $token, $nextStepIndex, $context, $stepLeaseSeconds, $result, $branches, $withTransaction): void {
-            $this->historyStore->syncDurableState($run['run_id'], 'running', $this->capture->context($context), $context->metadata, $this->runs->ttlSeconds(), false, $token, $stepLeaseSeconds);
+            // waitForBranches() first, and the history row after it: nothing the wait
+            // closers write may be written before it in this transaction (the lock-order
+            // rule on DurableRunStore::waitForBranches()).
             $this->durableRuns->waitForBranches($run['run_id'], new BranchWaitPayload(
                 executionToken: $token,
                 nextStepIndex: $nextStepIndex,
@@ -95,10 +98,11 @@ class DurableHierarchicalCoordinator
                 totalSteps: $result->totalSteps,
                 branches: $branches,
             ));
+            $this->historyStore->syncDurableState($run['run_id'], 'running', $this->capture->context($context), $context->metadata, $this->runs->ttlSeconds(), false, $token, $stepLeaseSeconds);
             if ($withTransaction !== null) {
                 ($withTransaction)();
             }
-        });
+        }, 3);
     }
 
     /**
@@ -119,19 +123,9 @@ class DurableHierarchicalCoordinator
         $branches = $this->durableRuns->branchesFor($run['run_id'], $parentNodeId);
 
         if ($this->branches->branchesAreTerminal($branches)) {
-            $this->connection->transaction(function () use ($run): void {
-                if (! $this->durableRuns->releaseWaitingRunForJoin($run['run_id'], (int) $run['next_step_index'])) {
-                    return;
-                }
-
-                $updated = $this->runs->requireRun($run['run_id']);
-
-                if (($run['coordination_profile'] ?? CoordinationProfile::StepDurable->value) === CoordinationProfile::QueueHierarchicalParallel->value) {
-                    $this->outbox->enqueueQueuedResume($run['run_id'], $updated['queue_connection'], $updated['queue_name']);
-                } else {
-                    $this->outbox->enqueueStep($run['run_id'], (int) $updated['next_step_index'], $updated['queue_connection'], $updated['queue_name']);
-                }
-            });
+            // The join release owns the rest of the decision (open waits, an owed
+            // fail_run failure); it reuses the branch rows read here.
+            $this->joinRelease->releaseIfReady($run, $branches);
 
             return;
         }
@@ -140,17 +134,22 @@ class DurableHierarchicalCoordinator
             return;
         }
 
+        // Branches the fan-out cap holds are not redispatched: the reconcile below
+        // releases them into free slots (and the lease refuses them regardless).
+        $held = $this->admission->heldBranchIds($run['run_id']);
+
         foreach ($branches as $branch) {
-            if (! $this->branches->branchShouldBeRedispatched($branch)) {
+            if (! $this->branches->branchShouldBeRedispatched($branch) || in_array((string) $branch['branch_id'], $held, true)) {
                 continue;
             }
 
-            $this->outbox->enqueueBranch(
-                $run['run_id'],
-                (string) $branch['branch_id'],
-                $branch['queue_connection'] ?? $run['queue_connection'],
-                $branch['queue_name'] ?? $run['queue_name'],
-            );
+            $connection = $branch['queue_connection'] ?? $run['queue_connection'];
+            $queue = $branch['queue_name'] ?? $run['queue_name'];
+            $this->eager->enqueueBranch($run['run_id'], (string) $branch['branch_id'], $connection, $queue);
+        }
+
+        if ($held !== []) {
+            $this->admission->reconcileAfterCommit($run['run_id']);
         }
     }
 
@@ -171,7 +170,16 @@ class DurableHierarchicalCoordinator
             return;
         }
 
-        if (! $this->durableRuns->releaseWaitingRunForJoin($run['run_id'], (int) $run['next_step_index'])) {
+        // fail_run fails the parent at once, even while it has an open wait: failing is
+        // terminal, not a move past the wait. Only the successful join waits for waits.
+        // A store without the ReleasesWaitingRunForFailure capability falls back to the
+        // join release, which refuses while a wait is open; a later swarm:recover sweep
+        // can fail the parent once its waits have closed.
+        $released = $this->durableRuns instanceof ReleasesWaitingRunForFailure
+            ? $this->durableRuns->releaseWaitingRunForFailure($run['run_id'], (int) $run['next_step_index'])
+            : $this->durableRuns->releaseWaitingRunForJoin($run['run_id'], (int) $run['next_step_index']);
+
+        if (! $released) {
             return;
         }
 

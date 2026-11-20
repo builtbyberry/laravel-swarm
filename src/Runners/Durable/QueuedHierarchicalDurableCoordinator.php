@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
-use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StoresDurableCitationEvidence;
 use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
@@ -37,7 +36,7 @@ class QueuedHierarchicalDurableCoordinator
         protected DurableRunContext $runs,
         protected DurableBranchCoordinator $branches,
         protected DurableJobDispatcher $jobs,
-        protected DurableOutbox $outbox,
+        protected DurableEagerDispatcher $eager,
         protected Connection $connection,
         protected SwarmAttributeResolver $resolver,
         protected NativeInputManager $nativeInputs,
@@ -171,12 +170,9 @@ class QueuedHierarchicalDurableCoordinator
             $run = $this->runs->requireRun($runId);
 
             foreach ($this->durableRuns->branchesFor($runId, $boundary->parentParallelNodeId) as $branch) {
-                $this->outbox->enqueueBranch(
-                    $runId,
-                    (string) $branch['branch_id'],
-                    $branch['queue_connection'] ?? $run['queue_connection'],
-                    $branch['queue_name'] ?? $run['queue_name'],
-                );
+                $connection = $branch['queue_connection'] ?? $run['queue_connection'];
+                $queue = $branch['queue_name'] ?? $run['queue_name'];
+                $this->eager->enqueueBranch($runId, (string) $branch['branch_id'], $connection, $queue);
             }
         });
     }

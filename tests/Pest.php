@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Memory\MemoryEntry;
 use BuiltByBerry\LaravelSwarm\Tests\ProcessConcurrencyTestCase;
 use BuiltByBerry\LaravelSwarm\Tests\Support\RecordingSnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Tests\TestCase;
+use Illuminate\Support\Facades\File;
 
 pest()->extend(TestCase::class)->in('Feature', 'Unit');
 pest()->extend(ProcessConcurrencyTestCase::class)->in('ProcessConcurrency');
@@ -16,6 +17,39 @@ pest()->extend(ProcessConcurrencyTestCase::class)->in('ProcessConcurrency');
 // Installer tests bind their own base case via `uses(SwarmInstallerTestCase::class)`
 // inside each file so each test gets an isolated host-app skeleton — see
 // tests/Installer/README.md.
+
+/**
+ * Run a test body against a unique temporary application base path.
+ *
+ * The generator command tests run against one testbench skeleton, and the
+ * generators prefer a stub found under the application's `stubs/` directory.
+ * A test that publishes a custom stub uses this helper so the stub, and the
+ * class generated from it, are written under the temporary base path, which
+ * the helper removes afterwards.
+ */
+function withIsolatedBasePath(Closure $callback): void
+{
+    $app = app();
+    $shared = $app->basePath();
+    $isolated = sys_get_temp_dir().'/swarm-base-'.bin2hex(random_bytes(8));
+
+    try {
+        File::ensureDirectoryExists($isolated.'/stubs');
+        File::ensureDirectoryExists($isolated.'/app');
+
+        // The generators read the root namespace from the application's composer.json.
+        if (! File::copy($shared.'/composer.json', $isolated.'/composer.json')) {
+            throw new RuntimeException('Unable to prepare an isolated application base path.');
+        }
+
+        $app->setBasePath($isolated);
+
+        $callback();
+    } finally {
+        $app->setBasePath($shared);
+        File::deleteDirectory($isolated);
+    }
+}
 
 function bindMemoryCapturePolicy(MemoryCapturePolicy $policy): void
 {

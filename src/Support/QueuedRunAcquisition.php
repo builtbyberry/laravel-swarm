@@ -26,6 +26,16 @@ final class QueuedRunAcquisition
         return new self('duplicate_running');
     }
 
+    /**
+     * A queued-hierarchical continuation whose run is not released to its join: its
+     * durable row is still waiting at a boundary, paused or finished. Nothing was taken
+     * and the history row was left as it was.
+     */
+    public static function notReleased(): self
+    {
+        return new self('not_released');
+    }
+
     public static function duplicateCompleted(): self
     {
         return new self('duplicate_completed');

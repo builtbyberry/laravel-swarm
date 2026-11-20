@@ -102,9 +102,9 @@ class ComplianceParentSwarm implements Swarm, DispatchesChildSwarms
 }
 ```
 
-The declared child is converted into durable child dispatch intent after a
-checkpoint, so the parent can recover without replaying the provider call that
-created the intent.
+The declared child intent is committed with the step checkpoint, so the parent
+can recover a committed intent without replaying the provider call that created
+it. Child dispatch runs after commit.
 
 ## What Happens At Runtime
 

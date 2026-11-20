@@ -26,6 +26,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\StreamEventMapper;
 use BuiltByBerry\LaravelSwarm\Streaming\StreamStepAccumulator;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
+use BuiltByBerry\LaravelSwarm\Support\AgentResponseOutput;
 use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\NativeAgentInvoker;
@@ -207,7 +208,7 @@ class SequentialRunner
                         );
 
                     $invocation = $state->context->nativeInvocation("sequential:{$index}", $input, $state->nativeSettingsAttempt);
-                    $stream = NativeAgentInvoker::stream($agent, $invocation);
+                    $stream = NativeAgentInvoker::stream($agent, $invocation, $state->context->runId);
                     $accumulator = new StreamStepAccumulator($snapshot);
 
                     $nativeStreamFailure = null;
@@ -282,10 +283,10 @@ class SequentialRunner
                     );
 
                     $invocation = $state->context->nativeInvocation("sequential:{$index}", $input, $state->nativeSettingsAttempt);
-                    $response = NativeAgentInvoker::prompt($agent, $invocation);
+                    $response = NativeAgentInvoker::prompt($agent, $invocation, $state->context->runId);
                     $this->outcomes->validateResponse($response);
                     $citationEvidence = $this->citations->response($response, $state->context->runId, $index, $agent::class);
-                    $output = (string) $response;
+                    $output = AgentResponseOutput::text($response);
                     $stepUsage = $this->usageFromResponse($response);
                     $this->appendResponseToolCalls($snapshot, $response);
 
@@ -382,7 +383,7 @@ class SequentialRunner
                 );
             }
 
-            ActiveRunContext::exit();
+            ActiveRunContext::exit($state->context->runId);
         }
     }
 
@@ -412,13 +413,13 @@ class SequentialRunner
 
         try {
             $invocation = $state->context->nativeInvocation("sequential:{$index}", $input, $state->nativeSettingsAttempt);
-            $response = NativeAgentInvoker::prompt($agent, $invocation);
+            $response = NativeAgentInvoker::prompt($agent, $invocation, $state->context->runId);
             $this->outcomes->validateResponse($response);
             $citationEvidence = $this->citations->response($response, $state->context->runId, $index, $agent::class);
         } finally {
-            ActiveRunContext::exit();
+            ActiveRunContext::exit($state->context->runId);
         }
-        $output = (string) $response;
+        $output = AgentResponseOutput::text($response);
         $usage = $this->usageFromResponse($response);
         $this->appendResponseToolCalls($snapshot, $response);
         $mergedUsage = $this->mergeUsageReport(
@@ -496,7 +497,7 @@ class SequentialRunner
         $nativeStreamFailure = null;
         try {
             $invocation = $state->context->nativeInvocation("sequential:{$index}", $input, $state->nativeSettingsAttempt);
-            $stream = NativeAgentInvoker::stream($agent, $invocation);
+            $stream = NativeAgentInvoker::stream($agent, $invocation, $state->context->runId);
             foreach ($stream as $event) {
                 $swarmEvent = $this->mapper->map($event, $state, $index, $agent, $accumulator);
 
@@ -513,7 +514,7 @@ class SequentialRunner
                 $this->flushPendingToolCalls($accumulator);
                 $this->breadcrumbUnknownStreamEvents($accumulator->unknownEventClasses, $state->context->runId, $index);
             } finally {
-                ActiveRunContext::exit();
+                ActiveRunContext::exit($state->context->runId);
                 NativeOutcomeValidator::rethrowIfUnsupported($nativeStreamFailure);
             }
         }

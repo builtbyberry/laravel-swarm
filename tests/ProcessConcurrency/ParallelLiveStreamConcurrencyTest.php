@@ -50,6 +50,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Support\SkippingAuditCapturePolicy;
 use Illuminate\Broadcasting\AnonymousEvent;
 use Illuminate\Broadcasting\Channel;
 use Illuminate\Process\Factory as ProcessFactory;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Event;
 use Psr\Log\LoggerInterface;
 
@@ -89,6 +90,11 @@ function waitForParallelStreamProcessExit(string $pidFile, int $timeoutMilliseco
 
     return false;
 }
+
+test('provider-free parallel readiness validates the real child process result protocol', function (): void {
+    $status = Artisan::call('swarm:health', ['--parallel-streaming' => true]);
+    expect($status)->toBe(0, Artisan::output());
+});
 
 test('pre-handshake child failure includes a bounded operational diagnostic', function (): void {
     $session = app(ParallelProcessStreamTransport::class)->start([

@@ -8,6 +8,7 @@ use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
 use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
 use BuiltByBerry\LaravelSwarm\Responses\NativeStepResult;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
+use BuiltByBerry\LaravelSwarm\Support\AgentResponseOutput;
 use Laravel\Ai\Responses\Data\ToolCall as ToolCallData;
 
 /**
@@ -33,7 +34,7 @@ final class StreamStepAccumulator
     /**
      * The agent's raw (un-captured) output text, concatenated from text deltas.
      * This is the value the {@see SwarmStep}
-     * records, mirroring the blocking `prompt()` path's `(string) $response`.
+     * records, mirroring the blocking `prompt()` path's {@see AgentResponseOutput::text()}.
      */
     public string $output = '';
 

@@ -264,6 +264,10 @@ Coordinated **queue hierarchical parallel** (`multi_worker`) uses the same lease
 fields while the primary history row is `waiting` and sets metadata
 `queue_hierarchical_waiting_parallel` until branches join; continuation uses
 `acquireQueuedRunContinuationLease` before `ResumeQueuedHierarchicalSwarm` runs.
+That lease is taken only while the run's durable coordination row is `pending`,
+that is, released to its join; any other delivery is a stray or a duplicate and
+does nothing. See the
+[troubleshooting checklist](hierarchical-routing.md#troubleshooting-stuck-coordinated-queue-runs).
 
 Durable execution also requires the database driver. Durable runtime state is
 stored separately from run history, but the public inspection surface remains

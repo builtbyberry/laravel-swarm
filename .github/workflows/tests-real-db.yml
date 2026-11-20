@@ -93,13 +93,11 @@ jobs:
             printf '%s %s %s\n' "$url" "$branch" "$ref"
           }
           date -u '+Official branch refs observed at %Y-%m-%dT%H:%M:%SZ'
-          capture_ref https://github.com/laravel/ai.git refs/heads/1.x SWARM_AI_DEV_REF
           capture_ref https://github.com/laravel/framework.git refs/heads/13.x SWARM_FRAMEWORK_DEV_REF
 
       - name: Require compatible moving development dependencies
         if: matrix.dependencies == 'moving-dev'
         run: |
-          composer require --no-update "laravel/ai:1.x-dev#${SWARM_AI_DEV_REF}"
           composer require --no-update --dev "laravel/framework:13.x-dev#${SWARM_FRAMEWORK_DEV_REF}"
 
       - name: Install dependencies
@@ -214,13 +212,11 @@ jobs:
             printf '%s %s %s\n' "$url" "$branch" "$ref"
           }
           date -u '+Official branch refs observed at %Y-%m-%dT%H:%M:%SZ'
-          capture_ref https://github.com/laravel/ai.git refs/heads/1.x SWARM_AI_DEV_REF
           capture_ref https://github.com/laravel/framework.git refs/heads/13.x SWARM_FRAMEWORK_DEV_REF
 
       - name: Require compatible moving development dependencies
         if: matrix.dependencies == 'moving-dev'
         run: |
-          composer require --no-update "laravel/ai:1.x-dev#${SWARM_AI_DEV_REF}"
           composer require --no-update --dev "laravel/framework:13.x-dev#${SWARM_FRAMEWORK_DEV_REF}"
 
       - name: Install dependencies

@@ -18,7 +18,16 @@ foreach ($response->steps as $step) {
 
 `citationEvidence` is an immutable `CitationEvidence` containing `items`, `status`, and `reasons`. The readonly `citations` array is derived from its items. Existing constructor calls continue to work; append the optional `citationEvidence:` argument to supply evidence in a response or fake fixture.
 
-A native source is evidence supplied by a provider, not verification of a claim. Providers can supply search or fetch results without an inline association. Swarm preserves those sources and does not invent a passage association. It does not fetch or validate source URLs.
+A native source is evidence supplied by a provider, not verification of a claim. Swarm reports the sources Laravel AI reports, in the order it reports them, and adds none of its own: it does not read a provider's payload to find more. A source can arrive without an inline association (a page an Anthropic web fetch returned, for example), and Swarm does not invent a passage association for it. It does not fetch or validate source URLs.
+
+### Anthropic web search
+
+Which search results count as sources is Laravel AI's decision, and it changed in `laravel/ai` 1.4.1. Measured on 1.0.0, 1.4.0 and 1.4.1:
+
+- **A search result the answer does not cite is not a source.** On 1.0.0 and 1.4.0, `prompt()` reported one when the response carried it under a `search_results` key; on 1.4.1 it does not. A result in the `content` list of a `web_search_tool_result` block, the shape Laravel AI's own tests use, was not reported on any of the three, streamed or not. On 1.4.1 Laravel AI still keeps that search payload with the step's provider-tool calls. Swarm deliberately does not turn it into citations.
+- **A streamed turn reports each cited URL once on 1.4.1.** On 1.0.0 and 1.4.0 it reported the URL once per mention, with one `swarm_citation` event each. `prompt()` reports a cited URL once on all three.
+
+A fetched page is reported on all three, streamed or not.
 
 ## Which sources belong to the final output?
 
