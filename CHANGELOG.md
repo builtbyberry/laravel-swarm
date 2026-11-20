@@ -447,12 +447,12 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   `^1.0`.
 - The generator tests that publish a custom stub no longer share it with other
   test processes (#642). Five tests in four files wrote a custom stub into the
-  one testbench skeleton every parallel worker uses. With a custom
+  shared testbench skeleton used by those generator tests. With a custom
   `stubs/swarm.stub` held there by one process, a `make:swarm` test in a second
   process rendered the custom stub and failed, reproduced on demand. The tests
   that publish the single-agent, agent and memory-tool stubs wrote to the same
   skeleton in the same way; no collision was run for those three. Each of the
-  five now publishes its stub under a private temporary base path. The tests
+  five now publishes its stub under a unique temporary base path. The tests
   stay in the parallel pass and the `ci-serial` group is unchanged. Test code
   only.
 - CI no longer ignores any security advisory (#640). The Laravel 13.16
