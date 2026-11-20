@@ -331,6 +331,26 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   MySQL/PostgreSQL regression covers the stale snapshot itself and the join's
   release once the branches finish.
 
+- **A wait closed inside an older MySQL application transaction no longer
+  releases a run past a wait that is still open (#635).** When a run's last wait
+  closed, the store scanned for other open waits with an ordinary read. Inside an
+  application transaction that had already read on MySQL (`REPEATABLE READ`), the
+  scan used the older snapshot and missed a wait created since, so the run went
+  `pending` and a step ran with that wait still open. Each wait now records the
+  run's `wait_generation` it was created at (new nullable
+  `swarm_durable_waits.creation_generation` column, new migration), and a closer
+  that cannot see every wait created on the run refuses, writing nothing:
+  `signal()` throws `SwarmException` asking you to send it again after your
+  transaction ends (with the same idempotency key; with a new one for a custom
+  store without `Contracts\AcceptsDurableSignals`), and a refused timed-out wait
+  or child outcome is retried by the next `swarm:recover` sweep. Postgres and SQLite are not affected; signals sent outside a
+  transaction are never refused. Rollout requires every process that creates or
+  closes waits to run this version. Real-process MySQL/Postgres and SQLite
+  regressions cover the refusal, a transaction that already wrote the run row, a
+  second close in one transaction, and the run released once when its last wait
+  closes. See [durable waits](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-waits-and-signals.md#signals-inside-an-older-database-transaction)
+  and [upgrade guidance](UPGRADING.md#a-wait-closed-inside-an-older-application-transaction).
+
 - **Atomic concurrency-test markers (#628).** The shared lock-barrier fixture now
   publishes complete marker values through a same-directory atomic rename, so a
   reader cannot observe a newly created PID file before its contents are written.

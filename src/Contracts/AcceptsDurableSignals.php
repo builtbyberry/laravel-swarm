@@ -37,6 +37,11 @@ interface AcceptsDurableSignals
      * `released`: true when the wait was closed with it; false for a duplicate
      * idempotency key, which closes nothing and writes nothing.
      *
+     * Like releaseWaitWithSignal(), when the run's last visible wait closes but this
+     * transaction cannot prove it sees every wait created on the run, it throws
+     * \BuiltByBerry\LaravelSwarm\Exceptions\DurableWaitSetChangedException and
+     * nothing written by the call persists.
+     *
      * @return array{id: int, duplicate: bool, released: bool, ...<string, mixed>}|null
      */
     public function acceptSignal(string $runId, string $name, mixed $payload, ?string $idempotencyKey): ?array;

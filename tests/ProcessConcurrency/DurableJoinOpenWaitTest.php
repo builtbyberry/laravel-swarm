@@ -7,6 +7,8 @@ use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Events\SwarmSignalled;
+use BuiltByBerry\LaravelSwarm\Exceptions\DurableWaitSetChangedException;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostDurableLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
@@ -29,6 +31,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalFullSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalParallelFailBranchSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\JoinBoundaryChildSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\JoinBoundaryWaitSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\ProcessConcurrency\Fixtures\JoinOpenWait\JoinOpenWaitWorker;
@@ -40,7 +43,9 @@ use Illuminate\Filesystem\Filesystem;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\Schema;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -719,6 +724,8 @@ afterEach(function (): void {
     foreach (joinOpenWaitDbBarrierDirs(clear: true) as $dir) {
         (new Filesystem)->deleteDirectory($dir);
     }
+
+    Schema::dropIfExists('stale_wait_scan_app_marks');
 });
 
 test('a new wait winning the run lock blocks join creation without a deadlock abort (#614)', function (): void {
@@ -1280,13 +1287,11 @@ function joinOpenWaitDbRecoveryCandidate(string $profile): string
         joinOpenWaitDbFakeCoordinator(joinOpenWaitDbPlan());
         $runId = 'join-recovery-db-'.bin2hex(random_bytes(6));
         (new InvokeSwarm(FakeHierarchicalFullSwarm::class, RunContext::from('recovery-task', $runId)->toQueuePayload()))->handle(app(SwarmRunner::class));
-        app(DurableSwarmManager::class)->wait($runId, 'approval');
     } else {
-        [$runId] = joinOpenWaitDbParallelAtJoin(leaveLastBranch: false);
+        [$runId] = joinOpenWaitDbParallelAtJoin([], leaveLastBranch: false);
     }
 
     joinOpenWaitDbMarkBranchesCompleted($runId);
-    DB::table('swarm_durable_waits')->where('run_id', $runId)->where('name', 'approval')->delete();
     DB::table('swarm_durable_runs')->where('run_id', $runId)->update([
         'updated_at' => now('UTC')->subMinutes(10),
         'queue_connection' => 'durable-test',
@@ -1824,4 +1829,389 @@ test('wait generation migration upgrades populated run rows on the real engines 
     expect((string) DB::table('swarm_durable_runs')->where('run_id', $runId)->value('wait_generation'))->toBe('0')
         ->and(app(DurableRunStore::class)->waits($runId)[0]['name'])->toBe('legacy-open')
         ->and(app(DurableJoinRelease::class)->releaseIfReady(app(DurableRunStore::class)->find($runId)))->toBeFalse();
+});
+
+/*
+ * #635: a wait closed inside an application transaction whose MySQL snapshot predates
+ * a newer wait. The closer's scan cannot see that wait, so it must not release the run
+ * on its own say-so: the store counts the stamped waits the transaction can see against
+ * the run's locked wait_generation and refuses when one is hidden. Postgres reads each
+ * statement fresh and accepts.
+ */
+
+/**
+ * A sequential durable run whose leased step has opened the given waits, as an
+ * application's step would.
+ *
+ * @param  array<int, string>  $waits
+ */
+function staleWaitScanRun(array $waits): string
+{
+    $runId = FakeSequentialSwarm::make()->dispatchDurable('stale-wait-scan')->runId;
+    $store = app(DurableRunStore::class);
+    $token = (string) $store->acquireLease($runId, 0, 300);
+    $store->markRunning($runId, $token, 0);
+
+    foreach ($waits as $wait) {
+        app(DurableSwarmManager::class)->wait($runId, $wait);
+    }
+
+    return $runId;
+}
+
+/**
+ * A table standing in for the application's own work in its transaction, so a test can
+ * see that the application committed it after catching the refusal.
+ */
+function staleWaitScanAppTable(): void
+{
+    if (! Schema::hasTable('stale_wait_scan_app_marks')) {
+        Schema::create('stale_wait_scan_app_marks', function ($table): void {
+            $table->id();
+            $table->string('run_id')->index();
+        });
+    }
+}
+
+/**
+ * The application transaction: it reads (fixing MySQL's REPEATABLE READ snapshot),
+ * lets the other worker create waits, then signals the given waits in order. A refused
+ * signal is caught, and the application commits its own work anyway. Signal events are
+ * observed here, in the worker that dispatches them.
+ *
+ * Modes: `plain`; `routing-write` (the transaction writes the run row through
+ * updateQueueRouting() before signalling); `own-wait` (it opens wait `own` itself before
+ * signalling); `late` (its first read comes after the other worker's creation).
+ *
+ * @param  array<int, string>  $signals
+ */
+function staleWaitScanSignaller(string $runId, string $dir, array $signals, string $mode = 'plain'): Closure
+{
+    return static function () use ($runId, $dir, $signals, $mode): array {
+        JoinOpenWaitWorker::boot();
+        $events = [];
+        Event::listen(SwarmSignalled::class, static function (SwarmSignalled $event) use (&$events): void {
+            $events[] = [$event->signalName, $event->accepted];
+        });
+        $mysql = DB::connection()->getDriverName() === 'mysql';
+
+        if ($mode === 'late') {
+            LockBarrier::await($dir, 'waits-created');
+        }
+
+        if ($mysql) {
+            DB::statement('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+        }
+
+        DB::beginTransaction();
+
+        if (! $mysql) {
+            DB::statement('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
+        }
+
+        DB::table('swarm_durable_runs')->where('run_id', $runId)->value('status');
+
+        if ($mode !== 'late') {
+            LockBarrier::signal($dir, 'snapshot-taken');
+            LockBarrier::await($dir, 'waits-created');
+        }
+
+        if ($mode === 'routing-write') {
+            app(DurableRunStore::class)->updateQueueRouting($runId, 'durable-test', 'rerouted');
+        }
+
+        if ($mode === 'own-wait') {
+            app(DurableRunStore::class)->createWait($runId, 'own');
+        }
+
+        $outcomes = [];
+
+        try {
+            foreach ($signals as $name) {
+                try {
+                    $outcomes[] = ['name' => $name, 'accepted' => app(DurableSwarmManager::class)->signal($runId, $name, null, $runId.':'.$name)->accepted];
+                } catch (SwarmException $refused) {
+                    $outcomes[] = [
+                        'name' => $name,
+                        'refused' => true,
+                        'previous' => $refused->getPrevious() === null ? null : $refused->getPrevious()::class,
+                        'same_key_retry' => str_contains($refused->getMessage(), 'same idempotency key'),
+                    ];
+                }
+            }
+
+            DB::table('stale_wait_scan_app_marks')->insert(['run_id' => $runId]);
+            DB::commit();
+        } catch (Throwable $e) {
+            try {
+                DB::rollBack();
+            } catch (Throwable) {
+            }
+
+            return ['outcome' => 'aborted', 'failure' => LockBarrier::failure($e)];
+        }
+
+        return ['signals' => $outcomes, 'events' => $events];
+    };
+}
+
+/**
+ * The other worker: once the signaller has its snapshot (or straight away, for `late`),
+ * it creates the given waits, and creates-then-times-out the `closed` ones, each in its
+ * own committed transaction through the store.
+ *
+ * @param  array<int, string>  $create
+ * @param  array<int, string>  $closed
+ */
+function staleWaitScanCreator(string $runId, string $dir, array $create, array $closed = [], bool $afterSnapshot = true): Closure
+{
+    return static function () use ($runId, $dir, $create, $closed, $afterSnapshot): array {
+        JoinOpenWaitWorker::boot();
+
+        if ($afterSnapshot) {
+            LockBarrier::await($dir, 'snapshot-taken');
+        }
+
+        $store = app(DurableRunStore::class);
+
+        foreach ($create as $name) {
+            $store->createWait($runId, $name);
+        }
+
+        foreach ($closed as $name) {
+            $store->createWait($runId, $name, timeoutSeconds: -1);
+            $store->releaseTimedOutWait($runId, $name);
+        }
+
+        LockBarrier::signal($dir, 'waits-created');
+
+        return ['created' => $create, 'closed' => $closed];
+    };
+}
+
+/**
+ * @return array<int, string>
+ */
+function staleWaitScanOpenWaits(string $runId): array
+{
+    return DB::table('swarm_durable_waits')->where('run_id', $runId)->where('status', 'waiting')->orderBy('id')->pluck('name')->all();
+}
+
+function staleWaitScanSignalRows(string $runId, string $name): int
+{
+    return DB::table('swarm_durable_signals')->where('run_id', $runId)->where('idempotency_key', $runId.':'.$name)->count();
+}
+
+/**
+ * @param  array<int, Closure>  $workers
+ * @return array<int, mixed>
+ */
+function staleWaitScanRunWorkers(array $workers): array
+{
+    return app(ConcurrencyManager::class)->driver('process')->run($workers);
+}
+
+/**
+ * @return array<string, mixed>
+ */
+function staleWaitScanRefused(string $name): array
+{
+    return ['name' => $name, 'refused' => true, 'previous' => DurableWaitSetChangedException::class, 'same_key_retry' => true];
+}
+
+test('a wait closed inside an application transaction whose snapshot predates a second wait leaves the run waiting and queues no step (#635)', function (): void {
+    staleWaitScanAppTable();
+    $runId = staleWaitScanRun(['approval']);
+    $steps = joinOpenWaitDbStepRows($runId);
+    $dir = joinOpenWaitDbBarrierDir();
+
+    [$signaller, $creator] = staleWaitScanRunWorkers([
+        staleWaitScanSignaller($runId, $dir, ['approval']),
+        staleWaitScanCreator($runId, $dir, ['second']),
+    ]);
+
+    expect($creator)->toBe(['created' => ['second'], 'closed' => []]);
+
+    if (DB::connection()->getDriverName() === 'mysql') {
+        // Refused: nothing of the acceptance survives the application's commit, while the
+        // application's own work does.
+        expect($signaller)->toBe(['signals' => [staleWaitScanRefused('approval')], 'events' => []], json_encode($signaller))
+            ->and(staleWaitScanOpenWaits($runId))->toBe(['approval', 'second'])
+            ->and(staleWaitScanSignalRows($runId, 'approval'))->toBe(0)
+            ->and(app(ContextStore::class)->find($runId)['metadata']['durable_signals'] ?? [])->not->toHaveKey('approval');
+
+        // The application resends it, with the same key, outside its transaction.
+        expect(app(DurableSwarmManager::class)->signal($runId, 'approval', null, $runId.':approval')->accepted)->toBeTrue();
+    } else {
+        expect($signaller)->toBe(['signals' => [['name' => 'approval', 'accepted' => true]], 'events' => [['approval', true]]], json_encode($signaller));
+    }
+
+    expect(DB::table('stale_wait_scan_app_marks')->where('run_id', $runId)->count())->toBe(1)
+        ->and(staleWaitScanOpenWaits($runId))->toBe(['second'])
+        ->and(joinOpenWaitDbRunStatus($runId))->toBe('waiting')
+        ->and(app(RunHistoryStore::class)->find($runId)['status'])->toBe('waiting')
+        ->and(joinOpenWaitDbStepRows($runId))->toBe($steps);
+
+    // Released once, when the second wait closes.
+    expect(app(DurableSwarmManager::class)->signal($runId, 'second')->accepted)->toBeTrue()
+        ->and(joinOpenWaitDbRunStatus($runId))->toBe('pending')
+        ->and(joinOpenWaitDbStepRows($runId))->toBe($steps + 1);
+});
+
+test('a transaction that wrote the run row before closing the wait is still refused when a newer wait is hidden (#635)', function (): void {
+    staleWaitScanAppTable();
+    $runId = staleWaitScanRun(['approval']);
+    $steps = joinOpenWaitDbStepRows($runId);
+    $dir = joinOpenWaitDbBarrierDir();
+
+    [$signaller] = staleWaitScanRunWorkers([
+        staleWaitScanSignaller($runId, $dir, ['approval'], 'routing-write'),
+        staleWaitScanCreator($runId, $dir, ['second']),
+    ]);
+
+    $mysql = DB::connection()->getDriverName() === 'mysql';
+    expect($signaller['signals'] ?? $signaller)->toBe([$mysql ? staleWaitScanRefused('approval') : ['name' => 'approval', 'accepted' => true]], json_encode($signaller))
+        ->and(staleWaitScanOpenWaits($runId))->toBe($mysql ? ['approval', 'second'] : ['second'])
+        ->and(joinOpenWaitDbRunStatus($runId))->toBe('waiting')
+        ->and(joinOpenWaitDbStepRows($runId))->toBe($steps);
+});
+
+test('a second close in the same transaction is refused while a newer wait is hidden; the first stays accepted (#635)', function (): void {
+    staleWaitScanAppTable();
+    $runId = staleWaitScanRun(['approval', 'legal']);
+    $steps = joinOpenWaitDbStepRows($runId);
+    $dir = joinOpenWaitDbBarrierDir();
+
+    [$signaller] = staleWaitScanRunWorkers([
+        staleWaitScanSignaller($runId, $dir, ['approval', 'legal']),
+        staleWaitScanCreator($runId, $dir, ['second']),
+    ]);
+
+    $mysql = DB::connection()->getDriverName() === 'mysql';
+    expect($signaller)->toBe([
+        'signals' => [['name' => 'approval', 'accepted' => true], $mysql ? staleWaitScanRefused('legal') : ['name' => 'legal', 'accepted' => true]],
+        'events' => $mysql ? [['approval', true]] : [['approval', true], ['legal', true]],
+    ], json_encode($signaller))
+        ->and(staleWaitScanSignalRows($runId, 'approval'))->toBe(1)
+        ->and(staleWaitScanSignalRows($runId, 'legal'))->toBe($mysql ? 0 : 1)
+        ->and(staleWaitScanOpenWaits($runId))->toBe($mysql ? ['legal', 'second'] : ['second'])
+        ->and(joinOpenWaitDbRunStatus($runId))->toBe('waiting')
+        ->and(joinOpenWaitDbStepRows($runId))->toBe($steps);
+});
+
+test('closing a newer wait the snapshot could not see does not hide an older newer wait (#635)', function (): void {
+    staleWaitScanAppTable();
+    $runId = staleWaitScanRun(['approval']);
+    $steps = joinOpenWaitDbStepRows($runId);
+    $dir = joinOpenWaitDbBarrierDir();
+
+    // `third` is closed first (its UPDATE makes it visible) and the run row is written;
+    // `second` stays hidden when `approval`, the last visible wait, closes.
+    [$signaller] = staleWaitScanRunWorkers([
+        staleWaitScanSignaller($runId, $dir, ['third', 'approval']),
+        staleWaitScanCreator($runId, $dir, ['second', 'third']),
+    ]);
+
+    $mysql = DB::connection()->getDriverName() === 'mysql';
+    expect($signaller['signals'] ?? $signaller)->toBe([['name' => 'third', 'accepted' => true], $mysql ? staleWaitScanRefused('approval') : ['name' => 'approval', 'accepted' => true]], json_encode($signaller))
+        ->and(staleWaitScanOpenWaits($runId))->toBe($mysql ? ['approval', 'second'] : ['second'])
+        ->and(joinOpenWaitDbRunStatus($runId))->toBe('waiting')
+        ->and(joinOpenWaitDbStepRows($runId))->toBe($steps);
+});
+
+test('a wait the transaction opened and closed itself does not hide a newer wait (#635)', function (): void {
+    staleWaitScanAppTable();
+    $runId = staleWaitScanRun(['approval']);
+    $steps = joinOpenWaitDbStepRows($runId);
+    $dir = joinOpenWaitDbBarrierDir();
+
+    [$signaller] = staleWaitScanRunWorkers([
+        staleWaitScanSignaller($runId, $dir, ['own', 'approval'], 'own-wait'),
+        staleWaitScanCreator($runId, $dir, ['second']),
+    ]);
+
+    $mysql = DB::connection()->getDriverName() === 'mysql';
+    expect($signaller['signals'] ?? $signaller)->toBe([['name' => 'own', 'accepted' => true], $mysql ? staleWaitScanRefused('approval') : ['name' => 'approval', 'accepted' => true]], json_encode($signaller))
+        ->and(staleWaitScanOpenWaits($runId))->toBe($mysql ? ['approval', 'second'] : ['second'])
+        ->and(joinOpenWaitDbRunStatus($runId))->toBe('waiting')
+        ->and(joinOpenWaitDbStepRows($runId))->toBe($steps);
+});
+
+test('a newer wait that already closed is refused once on MySQL; the resend outside the transaction releases the run once (#635)', function (): void {
+    staleWaitScanAppTable();
+    $runId = staleWaitScanRun(['approval']);
+    $steps = joinOpenWaitDbStepRows($runId);
+    $dir = joinOpenWaitDbBarrierDir();
+
+    [$signaller] = staleWaitScanRunWorkers([
+        staleWaitScanSignaller($runId, $dir, ['approval']),
+        staleWaitScanCreator($runId, $dir, [], ['second']),
+    ]);
+
+    if (DB::connection()->getDriverName() === 'mysql') {
+        expect($signaller['signals'] ?? $signaller)->toBe([staleWaitScanRefused('approval')], json_encode($signaller))
+            ->and(joinOpenWaitDbStepRows($runId))->toBe($steps)
+            ->and(app(DurableSwarmManager::class)->signal($runId, 'approval', null, $runId.':approval')->accepted)->toBeTrue();
+    } else {
+        expect($signaller['signals'] ?? $signaller)->toBe([['name' => 'approval', 'accepted' => true]], json_encode($signaller));
+    }
+
+    expect(staleWaitScanOpenWaits($runId))->toBe([])
+        ->and(joinOpenWaitDbRunStatus($runId))->toBe('pending')
+        ->and(joinOpenWaitDbStepRows($runId))->toBe($steps + 1);
+});
+
+test('a wait created before the transaction first read does not trip the fence (#635)', function (): void {
+    staleWaitScanAppTable();
+    $runId = staleWaitScanRun(['approval']);
+    $steps = joinOpenWaitDbStepRows($runId);
+    $dir = joinOpenWaitDbBarrierDir();
+
+    [$signaller] = staleWaitScanRunWorkers([
+        staleWaitScanSignaller($runId, $dir, ['approval'], 'late'),
+        staleWaitScanCreator($runId, $dir, ['second'], afterSnapshot: false),
+    ]);
+
+    expect($signaller)->toBe(['signals' => [['name' => 'approval', 'accepted' => true]], 'events' => [['approval', true]]], json_encode($signaller))
+        ->and(staleWaitScanOpenWaits($runId))->toBe(['second'])
+        ->and(joinOpenWaitDbRunStatus($runId))->toBe('waiting')
+        ->and(joinOpenWaitDbStepRows($runId))->toBe($steps);
+});
+
+test('the creation_generation migration upgrades populated wait rows on the real engines (#635)', function (): void {
+    $runId = staleWaitScanRun(['approval']);
+    $steps = joinOpenWaitDbStepRows($runId);
+    $generation = require dirname(__DIR__, 2).'/database/migrations/2026_11_07_000001_add_wait_generation_to_swarm_durable_runs.php';
+    $stamp = require dirname(__DIR__, 2).'/database/migrations/2026_11_20_000001_add_creation_generation_to_swarm_durable_waits.php';
+
+    // The state a v0.28 database reaches: both columns added to populated rows. The
+    // schema is shared with later tests, so it is restored even if this fails midway.
+    try {
+        $stamp->down();
+        $generation->down();
+    } finally {
+        // Each restore is attempted on its own, and only where its column is missing.
+        try {
+            if (! Schema::hasColumn('swarm_durable_runs', 'wait_generation')) {
+                $generation->up();
+            }
+        } finally {
+            if (! Schema::hasColumn('swarm_durable_waits', 'creation_generation')) {
+                $stamp->up();
+            }
+        }
+    }
+
+    expect(DB::table('swarm_durable_waits')->where('run_id', $runId)->value('creation_generation'))->toBeNull()
+        ->and((string) DB::table('swarm_durable_runs')->where('run_id', $runId)->value('wait_generation'))->toBe('0');
+
+    // A wait created after the upgrade is stamped; the legacy one is not counted.
+    app(DurableSwarmManager::class)->wait($runId, 'second');
+
+    expect((int) DB::table('swarm_durable_waits')->where('run_id', $runId)->where('name', 'second')->value('creation_generation'))->toBe(1)
+        ->and(app(DurableSwarmManager::class)->signal($runId, 'approval')->accepted)->toBeTrue()
+        ->and(joinOpenWaitDbRunStatus($runId))->toBe('waiting')
+        ->and(app(DurableSwarmManager::class)->signal($runId, 'second')->accepted)->toBeTrue()
+        ->and(joinOpenWaitDbRunStatus($runId))->toBe('pending')
+        ->and(joinOpenWaitDbStepRows($runId))->toBe($steps + 1);
 });

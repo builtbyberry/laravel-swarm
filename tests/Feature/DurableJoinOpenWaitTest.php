@@ -132,7 +132,7 @@ function joinWaitAgeBranches(string $runId): void
  * A top-level parallel run at its join (step-durable), every branch advanced to
  * completion while an app wait was open.
  */
-function joinWaitParallelRun(bool $completeBranches = true): string
+function joinWaitParallelRun(bool $completeBranches = true, ?string $wait = 'approval', ?int $waitTimeout = null): string
 {
     $runId = FakeParallelSwarm::make()->dispatchDurable('parallel-durable-task')->runId;
     $manager = app(DurableSwarmManager::class);
@@ -140,7 +140,9 @@ function joinWaitParallelRun(bool $completeBranches = true): string
     (new AdvanceDurableSwarm($runId, 0))->handle($manager);
     expect($manager->find($runId)['status'])->toBe('waiting');
 
-    $manager->wait($runId, 'approval', 'needs approval');
+    if ($wait !== null) {
+        $manager->wait($runId, $wait, 'needs approval', timeoutSeconds: $waitTimeout);
+    }
 
     if ($completeBranches) {
         foreach (app(DurableRunStore::class)->branchesFor($runId, 'parallel') as $branch) {
@@ -170,9 +172,9 @@ function joinWaitHierarchicalPlan(): array
 
 /**
  * A queued-hierarchical multi_worker run at its join, every branch advanced to
- * completion while an app wait was open.
+ * completion while an app wait was open (none when $wait is null).
  */
-function joinWaitQueuedRun(string $runId, bool $completeBranches = true): void
+function joinWaitQueuedRun(string $runId, bool $completeBranches = true, ?string $wait = 'approval'): void
 {
     $context = RunContext::from('queued-hierarchical-task', $runId);
     (new InvokeSwarm(FakeHierarchicalFullSwarm::class, $context->toQueuePayload()))->handle(app(SwarmRunner::class));
@@ -181,7 +183,9 @@ function joinWaitQueuedRun(string $runId, bool $completeBranches = true): void
     expect($manager->find($runId)['status'])->toBe('waiting')
         ->and(app(RunHistoryStore::class)->find($runId)['status'])->toBe('waiting');
 
-    $manager->wait($runId, 'approval', 'needs approval');
+    if ($wait !== null) {
+        $manager->wait($runId, $wait, 'needs approval');
+    }
 
     if ($completeBranches) {
         foreach (app(DurableRunStore::class)->branchesFor($runId, 'parallel_node') as $branch) {
@@ -813,13 +817,10 @@ describe('wait timeouts and child outcomes at a join', function () {
 
         if ($profile === 'qh') {
             $runId = 'join-wait-timeout-qh';
-            joinWaitQueuedRun($runId, completeBranches: false);
-            DB::table('swarm_durable_waits')->where('run_id', $runId)->delete();
-            DB::table('swarm_durable_runs')->where('run_id', $runId)->update(['wait_reason' => null, 'waiting_since' => null]);
+            joinWaitQueuedRun($runId, completeBranches: false, wait: null);
             $node = 'parallel_node';
         } else {
-            $runId = joinWaitParallelRun(completeBranches: false);
-            DB::table('swarm_durable_waits')->where('run_id', $runId)->delete();
+            $runId = joinWaitParallelRun(completeBranches: false, wait: null);
             $node = 'parallel';
         }
 
@@ -857,12 +858,10 @@ describe('wait timeouts and child outcomes at a join', function () {
 
         if ($profile === 'qh') {
             $runId = 'join-wait-child-qh-'.($branchesFirst ? 'a' : 'b');
-            joinWaitQueuedRun($runId, completeBranches: false);
-            DB::table('swarm_durable_waits')->where('run_id', $runId)->delete();
+            joinWaitQueuedRun($runId, completeBranches: false, wait: null);
             $node = 'parallel_node';
         } else {
-            $runId = joinWaitParallelRun(completeBranches: false);
-            DB::table('swarm_durable_waits')->where('run_id', $runId)->delete();
+            $runId = joinWaitParallelRun(completeBranches: false, wait: null);
             $node = 'parallel';
         }
 
@@ -991,13 +990,8 @@ describe('failure boundaries', function () {
 
         // Two runs at their join, each with a wait that times out in the same sweep; the
         // first one's outcome cannot be published.
-        $broken = joinWaitParallelRun();
-        $healthy = joinWaitParallelRun();
-
-        foreach ([$broken, $healthy] as $runId) {
-            DB::table('swarm_durable_waits')->where('run_id', $runId)->delete();
-            $manager->wait($runId, 'approval', timeoutSeconds: 60);
-        }
+        $broken = joinWaitParallelRun(waitTimeout: 60);
+        $healthy = joinWaitParallelRun(waitTimeout: 60);
 
         $this->travel(2)->minutes();
         $failPublishFor = $broken;
@@ -1059,16 +1053,14 @@ describe('recovery and dispatch boundaries', function () {
 
         // The older candidate: a failed branch (so recovery reads its context) and no
         // context row left to read.
-        $broken = joinWaitParallelRun(completeBranches: false);
-        DB::table('swarm_durable_waits')->where('run_id', $broken)->delete();
+        $broken = joinWaitParallelRun(completeBranches: false, wait: null);
         joinWaitMarkBranchesCompleted($broken);
         DB::table('swarm_durable_branches')->where('run_id', $broken)->where('branch_id', 'parallel:0')->update(['status' => 'failed', 'failure' => json_encode(['message' => 'boom'])]);
         DB::table('swarm_contexts')->where('run_id', $broken)->delete();
         DB::table('swarm_durable_runs')->where('run_id', $broken)->update(['updated_at' => now('UTC')->subMinutes(30)]);
 
         // A younger, healthy candidate in the same sweep.
-        $healthy = joinWaitParallelRun(completeBranches: false);
-        DB::table('swarm_durable_waits')->where('run_id', $healthy)->delete();
+        $healthy = joinWaitParallelRun(completeBranches: false, wait: null);
         joinWaitMarkBranchesCompleted($healthy);
         joinWaitAgeRun($healthy);
 
@@ -1083,8 +1075,7 @@ describe('recovery and dispatch boundaries', function () {
     test('a parent swarm:recover fails for an unsettled fail_run failure is not reported as redispatched', function () {
         config()->set('swarm.durable.parallel.failure_policy', 'fail_run');
         $manager = app(DurableSwarmManager::class);
-        $runId = joinWaitParallelRun(completeBranches: false);
-        DB::table('swarm_durable_waits')->where('run_id', $runId)->delete();
+        $runId = joinWaitParallelRun(completeBranches: false, wait: null);
         joinWaitMarkBranchesCompleted($runId);
         DB::table('swarm_durable_branches')->where('run_id', $runId)->where('branch_id', 'parallel:0')->update(['status' => 'failed', 'failure' => json_encode(['message' => 'boom'])]);
         joinWaitAgeRun($runId);
@@ -1204,19 +1195,17 @@ function joinRecoveryCandidate(string $profile): string
 {
     if ($profile === 'qh') {
         $runId = 'join-recovery-'.Str::uuid();
-        joinWaitQueuedRun($runId, completeBranches: false);
+        joinWaitQueuedRun($runId, completeBranches: false, wait: null);
     } elseif ($profile === 'hierarchical') {
         $runId = FakeHierarchicalFullSwarm::make()->dispatchDurable('hierarchical-task')->runId;
         $manager = app(DurableSwarmManager::class);
         (new AdvanceDurableSwarm($runId, 0))->handle($manager);
         (new AdvanceDurableSwarm($runId, 1))->handle($manager);
-        $manager->wait($runId, 'approval');
     } else {
-        $runId = joinWaitParallelRun(completeBranches: false);
+        $runId = joinWaitParallelRun(completeBranches: false, wait: null);
     }
 
     joinWaitMarkBranchesCompleted($runId);
-    DB::table('swarm_durable_waits')->where('run_id', $runId)->where('name', 'approval')->delete();
     DB::table('swarm_durable_runs')->where('run_id', $runId)->update([
         'queue_connection' => 'durable-test',
         'queue_name' => 'recovered-joins',

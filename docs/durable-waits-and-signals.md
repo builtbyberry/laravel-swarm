@@ -296,11 +296,38 @@ your own database transaction, and you catch the failure and commit. A signal
 sent when no wait of that name is open is recorded without being accepted, and
 sending the same key again returns it as a duplicate.
 
+### Signals inside an older database transaction
+
+If you send a signal inside your own database transaction after that transaction
+has read, MySQL's default `REPEATABLE READ` keeps the transaction's view from that
+first read. A wait created on the run since then is not in that view, so the store
+cannot tell whether the wait it is closing is the run's last open one. It then
+refuses rather than move the run past a wait that may still be open: `signal()`
+throws `SwarmException` (with `Exceptions\DurableWaitSetChangedException` as
+`previous`) and nothing of the acceptance is kept:
+
+```text
+Durable signal [<name>] for run [<run-id>] could not be accepted: a wait was opened on the run after this database transaction first read it. Nothing was recorded; send the signal again with the same idempotency key after this transaction ends.
+```
+
+Commit or roll back your transaction, then send the signal again outside it with
+the same idempotency key. Retrying inside the same transaction, or relying on
+`DB::transaction(..., attempts: 3)`, does not help: this is not a database
+concurrency error, and the transaction's view does not refresh. A wait that was
+created and has already closed since your transaction's first read is refused
+the same way, once. Postgres and SQLite read each statement afresh and do not
+refuse. Signals sent outside a transaction, including the webhook route,
+`swarm:signal` and `SwarmOperator::signal()` called on their own, are not
+affected. A timed-out wait or a finished child whose close is refused the same
+way stays open, and the next `swarm:recover` sweep retries it.
+
 Atomic acceptance is a capability of the bundled database store
 (`Contracts\AcceptsDurableSignals`). A custom `DurableRunStore` without it, or a
 decorating store that does not implement and forward it, records the signal
 before the acceptance: if that acceptance then fails, the signal stays recorded
-and the same key comes back as a duplicate.
+and the same key comes back as a duplicate. The refusal above says so for such a
+store, and asks for a **new** idempotency key, or for your transaction to be
+rolled back to discard the recorded signal.
 
 ## Signals While Paused
 

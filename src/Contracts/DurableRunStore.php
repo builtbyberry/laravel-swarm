@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Contracts;
 
+use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
+use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableChildSwarmCoordinator;
+use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableSignalHandler;
 use BuiltByBerry\LaravelSwarm\Support\BranchWaitPayload;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use DateTimeInterface;
@@ -245,6 +248,13 @@ interface DurableRunStore
     public function signals(string $runId): array;
 
     /**
+     * Open a named wait on the run. A store that refuses a wait close it cannot prove
+     * complete (see releaseWaitWithSignal()) must record, with each wait it creates,
+     * what it needs to tell later whether a transaction sees every wait created on the
+     * run.
+     *
+     * @see DatabaseDurableRunStore::createWait()
+     *
      * @param  array<string, mixed>  $metadata
      */
     public function createWait(string $runId, string $name, ?string $reason = null, ?int $timeoutSeconds = null, array $metadata = []): void;
@@ -255,6 +265,15 @@ interface DurableRunStore
      * `waiting` — its join is released through releaseWaitingRunForJoin() — and any
      * other waiting run moves to `pending`. The same holds for
      * releaseWaitWithOutcome() and releaseTimedOutWait().
+     *
+     * When the run's last visible wait closes but this transaction cannot prove it sees
+     * every wait created on the run, throw
+     * \BuiltByBerry\LaravelSwarm\Exceptions\DurableWaitSetChangedException instead;
+     * nothing written by the call persists, and the caller retries from a fresh
+     * transaction.
+     *
+     * @see DurableSignalHandler for a signal
+     * @see DurableChildSwarmCoordinator::reconcileTerminalChildrenForParent() for a child outcome
      */
     public function releaseWaitWithSignal(string $runId, string $name, int $signalId): bool;
 
