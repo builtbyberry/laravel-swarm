@@ -445,6 +445,14 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   so that output changes from `"[]"` to the model's text there too. A populated
   payload is recorded exactly as before. The `laravel/ai` constraint stays
   `^1.0`.
+- The generator tests that publish a custom stub no longer share it with other
+  test processes (#642). Five tests in four files wrote a custom stub into the
+  one testbench skeleton every parallel worker uses, so a `make:swarm`,
+  `make:swarm:swarm`, `make:swarm:agent` or `make:memory-tool` test running in
+  another worker at that moment could render the custom stub and fail. Each of
+  those tests now publishes its stub under a private temporary base path. The
+  tests stay in the parallel pass and the `ci-serial` group is unchanged. Test
+  code only.
 - CI no longer ignores any security advisory (#640). The Laravel 13.16
   compatibility lane, which ignored three advisories and needed a fourth to keep
   installing the release it proved, is removed along with its ignores. The lowest-dependency
