@@ -321,6 +321,11 @@ refuse. Signals sent outside a transaction, including the webhook route,
 affected. A timed-out wait or a finished child whose close is refused the same
 way stays open, and the next `swarm:recover` sweep retries it.
 
+An accepted signal is written into the run's context from the latest committed
+context, not from your transaction's older view: the closer reads it with a
+locking read once it holds the run. Context a fan-out or another signal committed
+after your first read is kept (#636).
+
 Atomic acceptance is a capability of the bundled database store
 (`Contracts\AcceptsDurableSignals`). A custom `DurableRunStore` without it, or a
 decorating store that does not implement and forward it, records the signal

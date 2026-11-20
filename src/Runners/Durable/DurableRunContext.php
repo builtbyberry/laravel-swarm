@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
 use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Persistence\DatabaseContextStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
@@ -55,6 +56,28 @@ class DurableRunContext
     public function loadContext(string $runId): RunContext
     {
         $payload = $this->contextStore->find($runId);
+
+        if ($payload === null) {
+            throw new SwarmException("Durable run [{$runId}] is missing its persisted context.");
+        }
+
+        return RunContext::fromPayload($payload);
+    }
+
+    /**
+     * The context a wait closer merges its outcome into and writes back: read with a
+     * locking read (DatabaseContextStore::findForUpdate()), so it is the latest committed
+     * row and not an application transaction's older MySQL snapshot. Call it inside the
+     * closer's transaction, once the run row is locked.
+     *
+     * Durable dispatch requires a DatabaseContextStore (DispatchValidator), so every
+     * durable run reads this way. Any other ContextStore is read with find().
+     */
+    public function loadContextForUpdate(string $runId): RunContext
+    {
+        $payload = $this->contextStore instanceof DatabaseContextStore
+            ? $this->contextStore->findForUpdate($runId)
+            : $this->contextStore->find($runId);
 
         if ($payload === null) {
             throw new SwarmException("Durable run [{$runId}] is missing its persisted context.");

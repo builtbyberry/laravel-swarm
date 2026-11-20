@@ -70,10 +70,44 @@ class DatabaseContextStore implements ContextStore
         /** @var object|null $record */
         $record = $this->table()->where('run_id', $runId)->first();
 
-        if ($record === null) {
-            return null;
-        }
+        return $record !== null ? $this->hydrate($record, $runId) : null;
+    }
 
+    /**
+     * Read the context row with a locking read, which holds the row until the caller's
+     * transaction ends. Call it inside a transaction that already holds the run row, so
+     * the context is read and then written back in the fan-out's lock order: run row,
+     * then context.
+     *
+     * A wait closer reads the context this way before it merges its outcome and writes
+     * the row back with put(). A plain find() inside an application transaction on MySQL
+     * (REPEATABLE READ) reads that transaction's snapshot, which can predate a fan-out
+     * committed since; writing it back would erase the fan-out's data, metadata and
+     * artifacts. A locking read returns the latest committed row instead. Postgres
+     * (READ COMMITTED) reads each statement fresh. SQLite drops the lock clause; there
+     * the closer has already written before this read, so its connection holds the
+     * write lock.
+     *
+     * The row is decoded exactly as find() decodes it, through hydrate().
+     *
+     * @return array<string, mixed>|null
+     */
+    public function findForUpdate(string $runId): ?array
+    {
+        /** @var object|null $record */
+        $record = $this->table()->where('run_id', $runId)->lockForUpdate()->first();
+
+        return $record !== null ? $this->hydrate($record, $runId) : null;
+    }
+
+    /**
+     * Decode one context row for find() and findForUpdate(). A subclass that changes how
+     * a row is decoded overrides this, so both reads keep the same shape.
+     *
+     * @return array<string, mixed>
+     */
+    protected function hydrate(object $record, string $runId): array
+    {
         return [
             'run_id' => $record->run_id,
             // swarm_contexts.input is the run's top-level resume prompt — operational

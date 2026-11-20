@@ -256,6 +256,24 @@ their transactions finish, run the migration, run
 (use your configured table name), and only then start the new version. Do not
 run that reset once the new version has created any wait.
 
+### Wait closers read the context with a locking read
+
+A signal, wait timeout or child outcome now reads the run's context through
+`DatabaseContextStore::findForUpdate()`, a locking read (`SELECT ... FOR UPDATE`)
+inside the closer's transaction, after the run row is locked. It then merges its
+outcome into that context and writes it back with `put()`. Before, it used
+`find()`. On MySQL, `find()` inside an application transaction that had already
+read returned that transaction's older snapshot, and writing it back could erase
+context a fan-out had committed since (#636). Nothing changes for your code, and
+no migration or configuration is needed.
+
+**`DatabaseContextStore` subclasses.** `find()` and `findForUpdate()` decode a row
+through one protected method, `hydrate()`. A subclass that changed how `find()`
+decodes a row should move that change into `hydrate()`, so the closers' read keeps
+it. A subclass that overrides `find()` alone is not used by the closers' read.
+A subclass that overrides `findForUpdate()` must keep it a locking read on the
+closer's connection.
+
 ### Durable branch fan-out cap (`swarm.durable.parallel.max_concurrent_branches`)
 
 Off by default; nothing changes until you set it. If you do:

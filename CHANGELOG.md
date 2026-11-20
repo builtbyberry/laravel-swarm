@@ -253,6 +253,20 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
 
 ### Fixed
 
+- **A wait closed inside an older application transaction no longer erases the
+  context a fan-out saved (#636, MySQL).** A signal, wait timeout or child
+  outcome writes its outcome into the run's context. On MySQL, a closer running
+  inside an application transaction that had already read loaded that context
+  from the transaction's older snapshot and wrote the whole row back. That
+  replaced the data, metadata and artifacts a fan-out committed in between,
+  for example earlier step outputs, in the run context and in its history. The
+  same read could drop the entry of another signal accepted in between. Closers
+  now read the context with a locking read (`SELECT ... FOR UPDATE`), taken
+  after the run row, which is the order a fan-out already uses. Postgres and
+  SQLite were not affected. No migration, configuration or contract change.
+  Context already lost before the upgrade is not restored. See
+  [upgrade guidance](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#wait-closers-read-the-context-with-a-locking-read).
+
 - **A paused run cannot resume past a concurrently created wait (#621).** Ordinary
   declared waits and child intents now commit with the step checkpoint. Resume
   can fail loudly inside an application transaction, leaving the run paused and
