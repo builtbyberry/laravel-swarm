@@ -19,13 +19,13 @@ pest()->extend(ProcessConcurrencyTestCase::class)->in('ProcessConcurrency');
 // tests/Installer/README.md.
 
 /**
- * Run a test body against a private application base path.
+ * Run a test body against a unique temporary application base path.
  *
- * Every test process shares one testbench skeleton, so a file written under
- * its `stubs/` directory is visible to generator commands running in other
- * parallel workers. A test that publishes a custom stub does it in here: the
- * stub, and the class generated from it, live in a temporary directory that
- * only this test can see and that is removed afterwards.
+ * The generator command tests run against one testbench skeleton, and the
+ * generators prefer a stub found under the application's `stubs/` directory.
+ * A test that publishes a custom stub uses this helper so the stub, and the
+ * class generated from it, are written under the temporary base path, which
+ * the helper removes afterwards.
  */
 function withIsolatedBasePath(Closure $callback): void
 {
