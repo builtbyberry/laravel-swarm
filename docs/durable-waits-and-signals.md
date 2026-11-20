@@ -404,7 +404,10 @@ timeout outcome and dispatches the next durable step when the run can continue.
   [Signals While Paused](#signals-while-paused) for when it is recorded instead.
 - A run waiting at a parallel join with an open wait is not released to its
   join until every wait is closed and every branch is done, whichever comes
-  last. Under `fail_run` a failing branch still fails the run at once. See
+  last. Under `fail_run` a failing branch still fails the run at once when the
+  store implements `Contracts\ReleasesWaitingRunForFailure`, as the bundled store
+  does; on a store without it, a later `swarm:recover` sweep fails the run once
+  its waits have closed. See
   [Durable Hierarchical Parallel Flow](durable-execution.md#durable-hierarchical-parallel-flow).
 - Accepting a signal while another wait is still open, or while the run is still
   waiting on its branches, leaves the run (and its history) `waiting`.
