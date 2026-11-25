@@ -62,12 +62,15 @@ function closerStaleContextStore(): StaleSnapshotContextStore
 
 /**
  * Take the run's snapshot, then commit what a fan-out saves: data, metadata and an
- * artifact the snapshot does not hold.
+ * artifact the snapshot does not hold. Returns the run's locking-read count at the
+ * snapshot: setup before it (a child intent, #650) may already have read with a lock,
+ * so the closer's own read is the increase from here.
  */
-function closerStaleContextFanOutAfterSnapshot(string $runId): void
+function closerStaleContextFanOutAfterSnapshot(string $runId): int
 {
     $store = closerStaleContextStore();
     $store->takeSnapshot($runId);
+    $lockingReads = $store->lockingReads[$runId] ?? 0;
 
     // A separate, plain store reads the current row, so the locking-read count below
     // is the closer's own.
@@ -79,13 +82,15 @@ function closerStaleContextFanOutAfterSnapshot(string $runId): void
 
     // The snapshot is stale now: an ordinary read still misses the fan-out.
     expect($store->find($runId)['data'])->not->toHaveKey('fan_out_step')
-        ->and($store->lockingReads[$runId] ?? 0)->toBe(0);
+        ->and($store->lockingReads[$runId] ?? 0)->toBe($lockingReads);
+
+    return $lockingReads;
 }
 
 /**
  * @return array<string, mixed>
  */
-function closerStaleContextAfterClose(string $runId): array
+function closerStaleContextAfterClose(string $runId, int $lockingReadsAtSnapshot): array
 {
     $store = closerStaleContextStore();
     $store->dropSnapshot($runId);
@@ -94,7 +99,7 @@ function closerStaleContextAfterClose(string $runId): array
     expect($context['data']['fan_out_step'] ?? null)->toBe('fan-out-output', json_encode($context))
         ->and($context['metadata']['fan_out_marker'] ?? null)->toBe('saved-by-fan-out')
         ->and(collect($context['artifacts'])->firstWhere('name', 'fan-out-artifact')['content'] ?? null)->toBe('fan-out-artifact-content')
-        ->and($store->lockingReads[$runId] ?? 0)->toBeGreaterThanOrEqual(1);
+        ->and($store->lockingReads[$runId] ?? 0)->toBeGreaterThan($lockingReadsAtSnapshot);
 
     $history = app(RunHistoryStore::class)->find($runId);
 
@@ -107,11 +112,11 @@ function closerStaleContextAfterClose(string $runId): array
 test('a signal accepted from a stale snapshot keeps the context a fan-out committed since, and records its payload (#636)', function (): void {
     $runId = FakeSequentialSwarm::make()->dispatchDurable('closer-stale-context-task')->runId;
     app(DurableSwarmManager::class)->wait($runId, 'approval');
-    closerStaleContextFanOutAfterSnapshot($runId);
+    $lockingReads = closerStaleContextFanOutAfterSnapshot($runId);
 
     $result = app(DurableSwarmManager::class)->signal($runId, 'approval', ['approved_by' => 'reviewer-636']);
 
-    $context = closerStaleContextAfterClose($runId);
+    $context = closerStaleContextAfterClose($runId, $lockingReads);
 
     expect($result->accepted)->toBeTrue()
         ->and($context['metadata']['durable_signals']['approval'])->toBe(['payload' => ['approved_by' => 'reviewer-636'], 'signal_id' => (int) $result->signal['id']])
@@ -121,13 +126,13 @@ test('a signal accepted from a stale snapshot keeps the context a fan-out commit
 test('a signal accepted by a store without atomic acceptance keeps the context a fan-out committed since (#636)', function (): void {
     $runId = FakeSequentialSwarm::make()->dispatchDurable('closer-stale-context-task')->runId;
     app(DurableSwarmManager::class)->wait($runId, 'approval');
-    closerStaleContextFanOutAfterSnapshot($runId);
+    $lockingReads = closerStaleContextFanOutAfterSnapshot($runId);
 
     // Not an AcceptsDurableSignals store: the signal is recorded, then accepted.
     $handler = app()->makeWith(DurableSignalHandler::class, ['durableRuns' => new DecoratingDurableRunStore(app(DurableRunStore::class))]);
     $result = $handler->signal($runId, 'approval', ['approved_by' => 'reviewer-636']);
 
-    $context = closerStaleContextAfterClose($runId);
+    $context = closerStaleContextAfterClose($runId, $lockingReads);
 
     expect($result->accepted)->toBeTrue()
         ->and($context['metadata']['durable_signals']['approval']['payload'])->toBe(['approved_by' => 'reviewer-636'])
@@ -139,11 +144,11 @@ test('a wait timing out from a stale snapshot keeps the context a fan-out commit
     $manager = app(DurableSwarmManager::class);
     $manager->wait($runId, 'timed_wait', 'Timed wait', 60);
     $this->travel(61)->seconds();
-    closerStaleContextFanOutAfterSnapshot($runId);
+    $lockingReads = closerStaleContextFanOutAfterSnapshot($runId);
 
     $manager->recover(runId: $runId);
 
-    $context = closerStaleContextAfterClose($runId);
+    $context = closerStaleContextAfterClose($runId, $lockingReads);
 
     expect(DB::table('swarm_durable_waits')->where('run_id', $runId)->value('status'))->toBe('timed_out')
         ->and($context['metadata']['durable_wait_outcomes']['timed_wait'])->toBe(['status' => 'timed_out', 'payload' => null, 'timed_out' => true]);
@@ -162,13 +167,13 @@ test('a child outcome delivered from a stale snapshot keeps the context the pare
 
     expect($manager->find($runId)['status'])->toBe('waiting');
 
-    closerStaleContextFanOutAfterSnapshot($runId);
+    $lockingReads = closerStaleContextFanOutAfterSnapshot($runId);
 
     foreach ([0, 1, 2] as $step) {
         (new AdvanceDurableSwarm($childRunId, $step))->handle($manager);
     }
 
-    $context = closerStaleContextAfterClose($runId);
+    $context = closerStaleContextAfterClose($runId, $lockingReads);
 
     expect($manager->inspect($runId)->waits[0]['status'])->toBe('child_completed')
         ->and($context['metadata']['durable_child_runs'][$childRunId]['status'])->toBe('completed');

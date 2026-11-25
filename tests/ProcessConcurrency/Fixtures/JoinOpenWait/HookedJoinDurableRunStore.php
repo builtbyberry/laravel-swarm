@@ -12,6 +12,8 @@ use Illuminate\Support\Carbon;
  * Hooks around the owning {@see DatabaseDurableRunStore} methods:
  *
  * - beforeSync / afterSync: immediately before / after parent::syncRunWaitSummary;
+ * - beforeRunLock: once, immediately before the first parent::lockRunRow call after it
+ *   is set, then cleared;
  * - afterRunLock: after parent::lockRunRow returns;
  * - afterJoinCheck: after parent::releaseWaitingRunForJoin returns, inside this
  *   fixture's surrounding transaction.
@@ -26,11 +28,20 @@ final class HookedJoinDurableRunStore extends DatabaseDurableRunStore
 
     public ?Closure $afterRunLock = null;
 
+    public ?Closure $beforeRunLock = null;
+
     public int $runLockAttempts = 0;
 
     protected function lockRunRow(string $runId): ?object
     {
         $this->runLockAttempts++;
+
+        if ($this->beforeRunLock !== null) {
+            $hook = $this->beforeRunLock;
+            $this->beforeRunLock = null;
+            $hook($runId);
+        }
+
         $run = parent::lockRunRow($runId);
         if ($this->afterRunLock !== null) {
             ($this->afterRunLock)($runId);

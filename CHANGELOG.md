@@ -253,6 +253,19 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
 
 ### Fixed
 
+- **Dispatching a durable child no longer erases parent context committed
+  just before it (#650).** Recording a child's dispatch intent merges the child
+  into the parent run's context and writes the row back. It read that context
+  before it locked the parent run, so a signal, wait timeout or child outcome on
+  another of the parent's waits, or a fan-out's data, metadata and artifacts,
+  committed in between was erased from the parent's context and history. This
+  happened on MySQL and Postgres. On MySQL, a child dispatched inside an
+  application transaction that had already read also erased anything committed
+  after that first read. Child intent now reads the parent context with a
+  locking read once it holds the parent run, the order wait closers and fan-out
+  already use. No migration, configuration or public contract change. Context
+  already lost before the upgrade is not restored.
+
 - **A wait closed inside an older application transaction no longer erases the
   context a fan-out saved (#636, MySQL).** A signal, wait timeout or child
   outcome writes its outcome into the run's context. On MySQL, a closer running

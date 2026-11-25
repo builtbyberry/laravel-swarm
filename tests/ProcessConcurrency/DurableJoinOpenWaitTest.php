@@ -481,13 +481,14 @@ function joinOpenWaitDbFanOutAfter(string $runId, string $token, string $dir, st
 
 /**
  * Signals a wait with a payload outside any transaction once the other worker has taken
- * its snapshot, then lets that worker go on (the `fanout-done` barrier it awaits).
+ * its snapshot (or reached the barrier named by `$after`), then lets that worker go on
+ * (the `fanout-done` barrier it awaits).
  */
-function joinOpenWaitDbSignalAfterSnapshot(string $runId, string $wait, mixed $payload, string $dir): Closure
+function joinOpenWaitDbSignalAfterSnapshot(string $runId, string $wait, mixed $payload, string $dir, string $after = 'snapshot-taken'): Closure
 {
-    return static function () use ($runId, $wait, $payload, $dir): array {
+    return static function () use ($runId, $wait, $payload, $dir, $after): array {
         JoinOpenWaitWorker::boot();
-        LockBarrier::await($dir, 'snapshot-taken');
+        LockBarrier::await($dir, $after);
 
         try {
             return ['outcome' => app(DurableSwarmManager::class)->signal($runId, $wait, $payload)->accepted ? 'accepted' : 'refused'];
@@ -582,6 +583,95 @@ function joinOpenWaitDbAssertFanOutContextKept(string $runId): array
         ->and($history['metadata']['fan_out_marker'] ?? null)->toBe('saved-by-fan-out');
 
     return $context;
+}
+
+/**
+ * Dispatches a durable child of the run, outside any application transaction. Just
+ * before child intent first locks the parent run, it publishes `before-parent-lock` and
+ * waits for the other worker's write (`fanout-done`) to commit (#650).
+ */
+function joinOpenWaitDbChildIntentBeforeParentLock(string $runId, string $dir): Closure
+{
+    return static function () use ($runId, $dir): array {
+        $store = JoinOpenWaitWorker::bootHooked();
+        $store->beforeRunLock = static function () use ($dir): void {
+            LockBarrier::signal($dir, 'before-parent-lock');
+            LockBarrier::await($dir, 'fanout-done');
+        };
+
+        try {
+            $child = app(DurableSwarmManager::class)->dispatchChildSwarm($runId, FakeSequentialSwarm::class, 'child-task', 'review:650');
+
+            return ['outcome' => 'dispatched', 'child_run_id' => $child->childRunId];
+        } catch (Throwable $e) {
+            return ['outcome' => 'aborted', 'failure' => LockBarrier::failure($e)];
+        }
+    };
+}
+
+/**
+ * Dispatches a durable child of the run inside an application transaction whose
+ * snapshot was taken (by reading the run's context) before the other worker committed a
+ * context write, then commits. Reports what an ordinary read saw before and after that
+ * write, inside the transaction. The isolation level is set, not left to the server
+ * default (#650).
+ */
+function joinOpenWaitDbStaleSnapshotChildIntent(string $runId, string $dir): Closure
+{
+    return static function () use ($runId, $dir): array {
+        JoinOpenWaitWorker::boot();
+        $mysql = DB::connection()->getDriverName() === 'mysql';
+
+        if ($mysql) {
+            DB::statement('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+        }
+
+        DB::beginTransaction();
+
+        if (! $mysql) {
+            DB::statement('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
+        }
+
+        $markerBefore = app(ContextStore::class)->find($runId)['metadata']['fan_out_marker'] ?? null;
+        LockBarrier::signal($dir, 'snapshot-taken');
+        LockBarrier::await($dir, 'fanout-done');
+        $markerAfter = app(ContextStore::class)->find($runId)['metadata']['fan_out_marker'] ?? null;
+
+        try {
+            $child = app(DurableSwarmManager::class)->dispatchChildSwarm($runId, FakeSequentialSwarm::class, 'child-task', 'review:650');
+            DB::commit();
+        } catch (Throwable $e) {
+            try {
+                DB::rollBack();
+            } catch (Throwable) {
+            }
+
+            return ['outcome' => 'aborted', 'failure' => LockBarrier::failure($e)];
+        }
+
+        return ['outcome' => 'dispatched', 'child_run_id' => $child->childRunId, 'marker_before' => $markerBefore, 'marker_after' => $markerAfter];
+    };
+}
+
+/**
+ * The child intent is recorded on the parent: its dedupe entry in the parent's context
+ * and history, its open wait, its lineage row and the child's own durable run.
+ *
+ * @param  array<string, mixed>  $intent
+ */
+function joinOpenWaitDbAssertChildIntentRecorded(string $runId, array $intent): void
+{
+    expect($intent['outcome'] ?? null)->toBe('dispatched', json_encode($intent));
+
+    $childRunId = (string) $intent['child_run_id'];
+    $context = (array) app(ContextStore::class)->find($runId);
+    $history = app(RunHistoryStore::class)->find($runId);
+
+    expect($context['metadata']['durable_dispatched_child_swarms']['review:650'] ?? null)->toBeTrue(json_encode($context['metadata']))
+        ->and($history['metadata']['durable_dispatched_child_swarms']['review:650'] ?? null)->toBeTrue()
+        ->and(DB::table('swarm_durable_waits')->where('run_id', $runId)->where('name', 'child:'.$childRunId)->value('status'))->toBe('waiting')
+        ->and(DB::table('swarm_durable_child_runs')->where('parent_run_id', $runId)->where('child_run_id', $childRunId)->exists())->toBeTrue()
+        ->and(DB::table('swarm_durable_runs')->where('run_id', $childRunId)->value('parent_run_id'))->toBe($runId);
 }
 
 /**
@@ -1317,6 +1407,88 @@ test('a finished child reconciled in recovery inside an application transaction 
     $context = joinOpenWaitDbAssertFanOutContextKept($runId);
 
     expect($context['metadata']['durable_child_runs'][$childRunId]['status'] ?? null)->toBe('completed');
+});
+
+test('a child intent recorded while a signal on another wait commits just before the parent is locked keeps that signal (#650)', function (): void {
+    // Two open waits, so the parent stays waiting once `approval` is signalled.
+    $runId = FakeSequentialSwarm::make()->dispatchDurable('child-intent-signal-task')->runId;
+    $manager = app(DurableSwarmManager::class);
+    $manager->wait($runId, 'approval');
+    $manager->wait($runId, 'other');
+    $dir = joinOpenWaitDbBarrierDir();
+    $payload = ['approved_by' => 'reviewer-650'];
+
+    [$intent, $signaller] = $this->app->make(ConcurrencyManager::class)->driver('process')->run([
+        joinOpenWaitDbChildIntentBeforeParentLock($runId, $dir),
+        joinOpenWaitDbSignalAfterSnapshot($runId, 'approval', $payload, $dir, 'before-parent-lock'),
+    ]);
+
+    expect($signaller)->toBe(['outcome' => 'accepted'], json_encode($signaller));
+
+    $metadata = (array) app(ContextStore::class)->find($runId)['metadata'];
+    $history = app(RunHistoryStore::class)->find($runId);
+    $signalId = (int) DB::table('swarm_durable_signals')->where('run_id', $runId)->where('name', 'approval')->value('id');
+
+    expect($metadata['durable_signals']['approval'] ?? null)->toEqual(['payload' => $payload, 'signal_id' => $signalId], json_encode($metadata))
+        ->and($metadata['durable_wait_outcomes']['approval'] ?? null)->toEqual(['status' => 'signalled', 'payload' => $payload, 'timed_out' => false])
+        ->and($history['metadata']['durable_signals']['approval']['payload'] ?? null)->toEqual($payload)
+        ->and($history['metadata']['durable_wait_outcomes']['approval']['status'] ?? null)->toBe('signalled');
+
+    joinOpenWaitDbAssertChildIntentRecorded($runId, $intent);
+});
+
+test('a child intent recorded while a fan-out commits just before the parent is locked keeps the context the fan-out saved (#650)', function (): void {
+    // A step that holds its lease and has an open application wait, about to fan out.
+    $runId = FakeParallelSwarm::make()->dispatchDurable('parallel-durable-task')->runId;
+    $store = app(DurableRunStore::class);
+    $token = (string) $store->acquireLease($runId, 0, 300);
+    $store->markRunning($runId, $token, 0);
+    app(DurableSwarmManager::class)->wait($runId, 'approval');
+    $dir = joinOpenWaitDbBarrierDir();
+
+    [$intent, $fanOut] = $this->app->make(ConcurrencyManager::class)->driver('process')->run([
+        joinOpenWaitDbChildIntentBeforeParentLock($runId, $dir),
+        joinOpenWaitDbFanOutAfter($runId, $token, $dir, 'before-parent-lock', savesContext: true),
+    ]);
+
+    expect($fanOut)->toBe(['outcome' => 'committed'], json_encode($fanOut));
+
+    joinOpenWaitDbAssertFanOutContextKept($runId);
+    $history = app(RunHistoryStore::class)->find($runId);
+
+    expect(collect($history['context']['artifacts'] ?? [])->firstWhere('name', 'fan-out-artifact')['content'] ?? null)->toBe('fan-out-artifact-content', json_encode($history['context'] ?? null))
+        ->and(DB::table('swarm_durable_branches')->where('run_id', $runId)->count())->toBe(3);
+
+    joinOpenWaitDbAssertChildIntentRecorded($runId, $intent);
+});
+
+test('a child intent recorded inside an application transaction whose snapshot predates a fan-out keeps the context the fan-out saved (#650)', function (): void {
+    $runId = FakeSequentialSwarm::make()->dispatchDurable('child-intent-snapshot-task')->runId;
+    $manager = app(DurableSwarmManager::class);
+    $manager->wait($runId, 'approval');
+    $manager->wait($runId, 'other');
+    $dir = joinOpenWaitDbBarrierDir();
+
+    [$intent, $writer] = $this->app->make(ConcurrencyManager::class)->driver('process')->run([
+        joinOpenWaitDbStaleSnapshotChildIntent($runId, $dir),
+        joinOpenWaitDbContextWriteAfterSnapshot($runId, $dir),
+    ]);
+
+    // The transaction read before the write: under MySQL's REPEATABLE READ an ordinary
+    // read still misses it afterwards, under Postgres' READ COMMITTED it sees it.
+    expect($writer)->toBe(['outcome' => 'committed'], json_encode($writer))
+        ->and($intent)->toMatchArray([
+            'outcome' => 'dispatched',
+            'marker_before' => null,
+            'marker_after' => DB::connection()->getDriverName() === 'mysql' ? null : 'saved-by-fan-out',
+        ], json_encode($intent));
+
+    joinOpenWaitDbAssertFanOutContextKept($runId);
+    $history = app(RunHistoryStore::class)->find($runId);
+
+    expect(collect($history['context']['artifacts'] ?? [])->firstWhere('name', 'fan-out-artifact')['content'] ?? null)->toBe('fan-out-artifact-content', json_encode($history['context'] ?? null));
+
+    joinOpenWaitDbAssertChildIntentRecorded($runId, $intent);
 });
 
 test('closing the last wait never waits on branch rows, so it cannot deadlock with a branch retry writing its outbox row', function (): void {
