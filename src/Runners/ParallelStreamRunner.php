@@ -246,6 +246,7 @@ final class ParallelStreamRunner
                     'max_depth' => (int) $this->config->get('swarm.provider_tools.max_depth', 32),
                 ],
                 'native_results' => $this->nativeResults->resolvedLimits(),
+                'tool_input' => $this->capture->streamsToolInput(),
             ];
             $maxAgentExecutions = $state->maxAgentExecutions;
             $adHoc = $swarm instanceof AdHocSwarm;

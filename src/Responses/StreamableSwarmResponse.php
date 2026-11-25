@@ -96,6 +96,7 @@ class StreamableSwarmResponse implements IteratorAggregate, Responsable
         protected bool $nativeChatProtocolsEnabled = false,
         protected ?Closure $topologyResolver = null,
         protected ?Closure $onNativeProtocolFailure = null,
+        protected bool $liveFinalAgent = false,
     ) {
         if (! in_array($this->replayFailurePolicy, ['fail', 'continue'], true)) {
             throw new SwarmException("Invalid swarm stream replay failure policy [{$this->replayFailurePolicy}]. Supported policies: fail, continue.");
@@ -165,6 +166,21 @@ class StreamableSwarmResponse implements IteratorAggregate, Responsable
         $this->storesForReplay = $value;
 
         return $this;
+    }
+
+    /**
+     * Whether the final-agent native projection may release this stream's final
+     * step as it arrives: the `liveFinalAgent` constructor argument (false unless
+     * the builder passes it), and only on the stream's first iteration. Iterating
+     * again replays cached events, which buffer like any replay: a replayed log
+     * must not be released live, since it can hold an abandoned attempt before a
+     * resumed one.
+     *
+     * @internal Read by the native chat protocol adapter.
+     */
+    public function streamsFinalAgentLive(): bool
+    {
+        return $this->liveFinalAgent && $this->state === self::STATE_PENDING;
     }
 
     public function usingVercelDataProtocol(

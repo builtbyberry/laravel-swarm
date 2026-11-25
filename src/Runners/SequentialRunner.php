@@ -34,6 +34,7 @@ use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use BuiltByBerry\LaravelSwarm\Support\SwarmPayloadLimits;
 use Generator;
+use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Laravel\Ai\Contracts\Agent;
 use Psr\Log\LoggerInterface;
 use Throwable;
@@ -59,7 +60,19 @@ class SequentialRunner
         protected LoggerInterface $logger,
         protected NativeOutcomeValidator $outcomes,
         protected NativeCitationEvidence $citations,
+        protected ?ConfigRepository $config = null,
     ) {}
+
+    /**
+     * Whether a FinalAgent native projection may stream a live run's final step:
+     * native protocols on and swarm.streaming.native_protocols.final_agent_live enabled (opt-in).
+     */
+    protected function finalAgentMayStreamLive(): bool
+    {
+        return $this->config !== null
+            && (bool) $this->config->get('swarm.streaming.native_protocols.enabled', false)
+            && (bool) $this->config->get('swarm.streaming.native_protocols.final_agent_live', false);
+    }
 
     public function run(SwarmExecutionState $state): SwarmResponse
     {
@@ -152,6 +165,13 @@ class SequentialRunner
                     agent: $agentName,
                     input: $this->capture->applyInput($input, $state->context),
                     timestamp: SwarmStreamEvent::timestamp(),
+                    // A native chat projection may release the final step's content
+                    // live only when no step or output guardrail can still reject it.
+                    // Decided as that step starts, after its SwarmStepStarted listeners
+                    // ran, and only when a live projection is possible at all.
+                    liveFinalStep: $isFinal
+                        && $this->finalAgentMayStreamLive()
+                        && ! $this->guardrails->canRejectStreamedOutput($state->swarm, $state->context),
                 );
 
                 $startedAt = MonotonicTime::now();

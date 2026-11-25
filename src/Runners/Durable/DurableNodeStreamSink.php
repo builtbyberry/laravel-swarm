@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Persistence\DatabaseCausalLogStore;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmReasoningDelta;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputDelta;
 use Closure;
 
 /**
@@ -16,7 +17,7 @@ use Closure;
  *
  * Every event is stamped with the attempt's node id and epoch. Without batching
  * each event is one INSERT, written as it is emitted. With batching the sink
- * holds text and reasoning deltas and writes them as one multi-row INSERT:
+ * holds text, reasoning and tool-input deltas and writes them as one multi-row INSERT:
  *
  * - the attempt's first event, and every event that is not a delta, is written
  *   at once, together with the deltas held before it, so order is unchanged;
@@ -157,6 +158,8 @@ final class DurableNodeStreamSink
 
     private static function isDelta(SwarmStreamEvent $event): bool
     {
-        return $event instanceof SwarmTextDelta || $event instanceof SwarmReasoningDelta;
+        return $event instanceof SwarmTextDelta
+            || $event instanceof SwarmReasoningDelta
+            || $event instanceof SwarmToolInputDelta;
     }
 }

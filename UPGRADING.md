@@ -256,6 +256,46 @@ their transactions finish, run the migration, run
 (use your configured table name), and only then start the new version. Do not
 run that reset once the new version has created any wait.
 
+### Tool input streaming and an opt-in live FinalAgent projection
+
+No migration. Two changes reach stream consumers (#649).
+
+**New, opt-in stream event types.** Nothing changes unless you set
+`SWARM_STREAMING_TOOL_INPUT=true` (`swarm.streaming.tool_input.enabled`). With it
+on and `laravel/ai` v1.4.2 or later, streams carry `swarm_tool_input_start`,
+`swarm_tool_input_delta` and `swarm_tool_input_error`. A consumer that switches on the event `type` should handle or ignore them; the
+broadcast channel carries them too (drop the deltas with
+`#[WithoutBroadcasting(SwarmToolInputDelta::class)]`). Under Full output capture
+the partial arguments of a tool that never ran are persisted with the run's
+stream events.
+
+Each tool-input fragment is a streamed event like a text delta: one more replay
+row, one more broadcast, and one more event counted toward
+`swarm.context_growth.budget_events` and `hard_cap_events`. A tool call's
+fragment count grows with its arguments, so if you set a hard cap, re-size it
+for swarms whose tools take large arguments before turning tool input on, or
+such a run can be refused at its cap.
+
+Upgrade readers with writers:
+
+- **Rolling Swarm back** after runs wrote these events (only with tool input
+  on): an older Swarm reading a
+  database stream log skips the types it does not know, hot and cold, so a replay
+  shows the run without the tool input, including a cut-off call. The cache store
+  returns them as `SwarmUnknownEvent`, whose `toArray()` keeps the original
+  payload.
+- **Rolling `laravel/ai` back** below v1.4.2 while keeping this Swarm: no new
+  events are produced, and replaying a log that holds them still decodes them;
+  the native chat protocols send them as custom frames, since the standard
+  tool-input frames do not exist there.
+
+**Live `FinalAgent` answers are opt-in.** Nothing changes for an existing
+`NativeProtocolProjection::FinalAgent` client: its answer is still buffered until
+the workflow succeeds. Setting `SWARM_NATIVE_CHAT_PROTOCOLS_FINAL_AGENT_LIVE=true`
+streams a live sequential run's final step as it arrives when no step or output
+guardrail applies; a failure after frames were sent then ends the stream with an
+error after them, as a plain Laravel AI agent stream does.
+
 ### Wait closers read the context with a locking read
 
 A signal, wait timeout or child outcome now reads the run's context through
@@ -267,16 +307,20 @@ read returned that transaction's older snapshot, and writing it back could erase
 context a fan-out had committed since (#636). No migration or configuration is
 needed, and code that only uses the package's public contracts needs no change.
 
+An immediate cancel and an immediate pause read the context the same way, once the
+run row is written: a cancel writes it back as the terminal context, and both publish
+history from it (#649).
+
 **`DatabaseContextStore` subclasses.** `DatabaseContextStore` is `@internal`; if you
 subclass it (unsupported), two things changed:
 
 - `find()` and `findForUpdate()` now decode a row through one protected method,
   `hydrateContextRow(object $record, string $runId): array`. A subclass that
   changed how `find()` decodes a row must move that change into
-  `hydrateContextRow()`: the closers read through `findForUpdate()`, not `find()`,
-  so an override of `find()` alone no longer applies to them. A subclass that
-  overrides `findForUpdate()` must keep it a locking read on the closer's
-  connection.
+  `hydrateContextRow()`: the closers, an immediate cancel and an immediate pause
+  read through `findForUpdate()`, not `find()`, so an override of `find()` alone no
+  longer applies to them. A subclass that overrides `findForUpdate()` must keep it a
+  locking read on the caller's connection.
 - A subclass that already declares a method named `findForUpdate()` or
   `hydrateContextRow()` must match the new signatures, or PHP refuses to load it.
 

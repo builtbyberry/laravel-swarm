@@ -60,6 +60,16 @@ class SwarmCapture
         $this->nativeResults = $nativeResults ?? new NativeStepResultProjector($config);
     }
 
+    /**
+     * Whether streams carry the tool input laravel/ai v1.4.2+ reports while a model
+     * writes a tool call's arguments (swarm.streaming.tool_input.enabled, opt-in).
+     * Off, those events are skipped: nothing is streamed, stored or broadcast.
+     */
+    public function streamsToolInput(): bool
+    {
+        return (bool) $this->config->get('swarm.streaming.tool_input.enabled', false);
+    }
+
     // ------------------------------------------------------------------
     // Per-category decisions
     // ------------------------------------------------------------------

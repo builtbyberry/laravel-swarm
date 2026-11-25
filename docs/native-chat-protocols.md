@@ -83,11 +83,41 @@ Workflow progress is emitted as AG-UI `CUSTOM` events named
 | Projection | Live topologies | Output contract | Important omissions |
 | --- | --- | --- | --- |
 | `Workflow` (default) | Sequential, enabled process-parallel, generated hierarchical, static hierarchical | Complete whitelisted workflow progress in `data-swarm` / `CUSTOM`; text remains inside custom data parts, with no standard text/tool parts; a real workflow completion is then followed by one native protocol terminal | A custom data-part renderer is required; a stock AI SDK chat UI shows an empty assistant message; reasoning content is withheld |
-| `FinalAgent` | Sequential only | Standard chat-bubble projection: buffers final-step content until the matching step and workflow both complete, then emits available text, tools, provider activity, and citations through standard native frames | No live partial answer; buffered content is discarded if a later step begins, the final step is unmatched, or the workflow fails |
+| `FinalAgent` | Sequential only | Standard chat-bubble projection of the final step's available text, tool input, tools, provider activity, and citations through standard native frames. Live (opt-in, `final_agent_live`): those frames stream as the final step produces them, when no step or output guardrail can still reject them. Buffered: emitted once the matching step and workflow both complete | Live: a failure after frames were sent ends the stream with an error after them. Buffered: no live partial answer; buffered content is discarded if a later step begins, the final step is unmatched, or the workflow fails |
 
 `FinalAgent` rejects a non-sequential response before iteration. This prevents a
-failed projection choice from abandoning or terminalizing a live run. While the
-answer is buffered, the adapter continues consuming the source lazily and emits
+failed projection choice from abandoning or terminalizing a live run.
+
+**Live or buffered.** With `swarm.streaming.native_protocols.final_agent_live`
+enabled (it is off by default), a live sequential stream marks its final step
+(`live_final_step` on that `swarm_step_start`) when no step or output guardrail
+applies, because a guardrail can reject the answer only after it has streamed.
+`FinalAgent` then sends that step's text, tool input (with
+`swarm.streaming.tool_input.enabled` on; `tool-input-start` /
+`tool-input-delta` / `tool-input-error`, or AG-UI `TOOL_CALL_START` /
+`TOOL_CALL_ARGS`, and for a cut-off call `TOOL_CALL_END` with an error
+`TOOL_CALL_RESULT`), tool calls and results as they arrive, in the order the model
+produced them, as a plain Laravel AI agent stream does. Frames already sent
+cannot be withdrawn: a later provider failure, timeout or projection error ends
+the stream with the protocol error terminal after them. The answer is buffered
+as below instead:
+
+- when a step or output guardrail is configured, when the swarm implements
+  `DefinesGuardrails` (that hook is asked again when the output is validated and
+  may add a guardrail by then), and for a child run that inherits its parent's
+  guardrails (`own_global_and_parent`). This is decided as the final step
+  starts, after its `SwarmStepStarted` listeners run; guardrail configuration
+  changed while that step is streaming is not seen;
+- with `swarm.streaming.native_protocols.final_agent_live` off (the default);
+- for a stream that does not mark its final step (a log written before this
+  release);
+- for any replay: persisted replay, and iterating a stream a second time, since
+  a replayed log can hold an abandoned attempt before a resumed one. A live stream
+still opens with `buffering` progress while earlier steps run; the final step's
+`step_started` progress carries `live_final_step: true` when its content will
+follow live.
+
+While the answer is buffered, the adapter continues consuming the source lazily and emits
 only capture-safe `projection_progress` events (`buffering`, `step_started`, and
 `step_completed`), not standard answer frames. A client disconnect can therefore
 still abandon the consumer and trigger the stream's
@@ -215,6 +245,7 @@ The public event uses these reason codes:
 | `swarm_usage_invalid` | Both | An optional aggregate usage value is present but is not a non-negative integer. |
 | `swarm_message_identity_unavailable` | `FinalAgent` | A projected text block lacks its real streamed message identity. |
 | `swarm_stream_failed` | Both | Another exception escaped while the adapter was projecting the source stream. |
+| `swarm_final_step_not_final` | `FinalAgent` | A step began after the step marked `live_final_step`, whose content had already been streamed. |
 
 Treat these values as stable machine-readable categories. New categories may be
 added in a minor release; applications should retain an unknown-code fallback.
@@ -278,6 +309,12 @@ This adapter adds no migration, persistence table, retention owner, pruning
 hook, operational command, cross-system transaction, or recovery process.
 
 ### Activation and rollback
+
+Live `FinalAgent` answers are opt-in with
+`SWARM_NATIVE_CHAT_PROTOCOLS_FINAL_AGENT_LIVE=true`; set it back to `false` to
+return to all-or-nothing answers without turning native protocols off. Like
+every key here it takes effect once cached configuration is rebuilt and
+long-lived workers are recycled.
 
 Activation is a configuration deployment, not just an environment edit:
 

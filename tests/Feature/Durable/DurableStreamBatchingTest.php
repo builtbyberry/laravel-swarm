@@ -27,6 +27,9 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolCall;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputDelta;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputError;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputStart;
 use BuiltByBerry\LaravelSwarm\Streaming\View\CausalLogView;
 use BuiltByBerry\LaravelSwarm\Streaming\View\ViewSupersession;
 use BuiltByBerry\LaravelSwarm\Streaming\View\VoidedEvent;
@@ -325,6 +328,25 @@ test('reasoning deltas are held like text deltas', function () {
     $sink->flush();
 
     expect(streamBatchingUuids('run-reasoning'))->toHaveCount(2);
+});
+
+test('tool-input deltas are held like text deltas; their start and error are written at once (#649)', function () {
+    enableStreamBatching();
+    seedStreamBatchingRun('run-tool-input');
+    $sink = batchingSink('run-tool-input');
+
+    $sink(new SwarmToolInputStart('start-1', 'run-tool-input', 0, 'Agent', 'tool-1', 'lookup', 123));
+    $sink(new SwarmToolInputDelta('delta-1', 'run-tool-input', 0, 'Agent', 'tool-1', '{"q":', 123));
+    $sink(new SwarmToolInputDelta('delta-2', 'run-tool-input', 0, 'Agent', 'tool-1', '"x"}', 123));
+
+    // The start is the attempt's first event, written at once; the deltas are held.
+    expect(streamBatchingUuids('run-tool-input'))->toHaveCount(1);
+
+    $sink(new SwarmToolInputError('error-1', 'run-tool-input', 0, 'Agent', 'tool-1', 'lookup', '{"q":"x"}', 'cut', 123));
+
+    // The error is structural: it goes out with the deltas held before it, in order.
+    expect(DB::table('swarm_stream_events')->where('run_id', 'run-tool-input')->orderBy('id')->pluck('event_type')->all())
+        ->toBe(['swarm_tool_input_start', 'swarm_tool_input_delta', 'swarm_tool_input_delta', 'swarm_tool_input_error']);
 });
 
 test('max_events writes the held deltas once that many are held', function () {
