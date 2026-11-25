@@ -6,14 +6,16 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
 
 ### Added
 
-- **Tool input streams live as it is written (#649).** With `laravel/ai`
+- **Opt-in: tool input streams live as it is written (#649).** With `laravel/ai`
   v1.4.2 and later, a provider stream reports a tool call's input while the model
-  writes it. Swarm streams it as `swarm_tool_input_start`,
+  writes it. New `swarm.streaming.tool_input.enabled` key
+  (`SWARM_STREAMING_TOOL_INPUT`, default `false`): off, Swarm skips those events,
+  so streams, replay, broadcasts and context-growth event counts are exactly as
+  before. On, Swarm streams it as `swarm_tool_input_start`,
   `swarm_tool_input_delta` (one fragment of the arguments text) and
   `swarm_tool_input_error` (a call whose input never completed, such as one the
   token limit cut off; its tool is not executed), through every streaming path,
-  persisted replay and broadcasting. Before, Swarm dropped all three, so a
-  cut-off tool call was invisible. Fragments and partial input follow output
+  persisted replay and broadcasting, which makes a cut-off tool call visible. Fragments and partial input follow output
   capture: kept under Full (including the partial arguments of a tool that never
   ran), `null` with `payload_status` `redacted` / `omitted` otherwise. The
   `FinalAgent` native chat projection sends them as standard frames (Vercel
@@ -21,9 +23,9 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   `TOOL_CALL_START` / `TOOL_CALL_ARGS`, and `TOOL_CALL_END` with an error
   `TOOL_CALL_RESULT` for a cut-off call), or as custom frames when withheld or
   when the installed `laravel/ai` predates them; the `Workflow` projection
-  carries them as `tool_input_*` workflow progress. Each fragment is one more
-  streamed event: it counts toward `swarm.context_growth` event budgets and is
-  one more replay row and broadcast. Durable stream batching holds tool-input deltas
+  carries them as `tool_input_*` workflow progress. With it on, each fragment is
+  one more streamed event: it counts toward `swarm.context_growth` event budgets
+  and is one more replay row and broadcast. Durable stream batching holds tool-input deltas
   like text deltas, and `#[WithoutBroadcasting(SwarmToolInputDelta::class)]`
   keeps them off a broadcast channel. Older `laravel/ai` versions emit none of
   these events and nothing changes there. See

@@ -31,6 +31,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\WithoutToolInputDeltaBroadca
 use Illuminate\Broadcasting\AnonymousEvent;
 use Illuminate\Broadcasting\Channel;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Psr\Log\AbstractLogger;
 use Psr\Log\LoggerInterface;
@@ -67,6 +68,7 @@ final class ToolInputCollectingLogger extends AbstractLogger
 beforeEach(function () {
     config()->set('swarm.persistence.driver', 'database');
     config()->set('swarm.streaming.replay.enabled', true);
+    config()->set('swarm.streaming.tool_input.enabled', true);
     config()->set('database.default', 'testing');
     Artisan::call('migrate:fresh', ['--database' => 'testing']);
     ToolInputStreamEditor::$withUnknown = false;
@@ -444,3 +446,16 @@ test('live FinalAgent answers are opt-in: with native protocols on and nothing e
         ->and($liveBeforeIteration)->toBeFalse()
         ->and($start->liveFinalStep)->toBeFalse();
 });
+
+test('tool input is opt-in: by default its events are skipped quietly, so nothing new is streamed, stored or counted (#649)', function (string $swarm) {
+    config()->set('swarm.streaming.tool_input.enabled', false);
+
+    $stream = $swarm::make()->stream('tool-input-task');
+    $events = iterator_to_array($stream, false);
+
+    expect(array_values(array_filter(array_map(fn (SwarmStreamEvent $event): string => $event->type(), $events), fn (string $type): bool => str_starts_with($type, 'swarm_tool_input_'))))->toBe([])
+        // The completed call and its result still stream as before.
+        ->and(array_map(fn (SwarmStreamEvent $event): string => $event->type(), toolInputToolEvents($events)))->toBe(['swarm_tool_call', 'swarm_tool_result'])
+        ->and($this->logger->breadcrumbEventTypes())->toBe([])
+        ->and(DB::table('swarm_stream_events')->where('run_id', $stream->runId)->where('event_type', 'like', 'swarm_tool_input_%')->count())->toBe(0);
+})->with('tool input chains');

@@ -260,9 +260,10 @@ run that reset once the new version has created any wait.
 
 No migration. Two changes reach stream consumers (#649).
 
-**New stream event types.** With `laravel/ai` v1.4.2 and later, streams carry
-`swarm_tool_input_start`, `swarm_tool_input_delta` and `swarm_tool_input_error`.
-A consumer that switches on the event `type` should handle or ignore them; the
+**New, opt-in stream event types.** Nothing changes unless you set
+`SWARM_STREAMING_TOOL_INPUT=true` (`swarm.streaming.tool_input.enabled`). With it
+on and `laravel/ai` v1.4.2 or later, streams carry `swarm_tool_input_start`,
+`swarm_tool_input_delta` and `swarm_tool_input_error`. A consumer that switches on the event `type` should handle or ignore them; the
 broadcast channel carries them too (drop the deltas with
 `#[WithoutBroadcasting(SwarmToolInputDelta::class)]`). Under Full output capture
 the partial arguments of a tool that never ran are persisted with the run's
@@ -272,12 +273,13 @@ Each tool-input fragment is a streamed event like a text delta: one more replay
 row, one more broadcast, and one more event counted toward
 `swarm.context_growth.budget_events` and `hard_cap_events`. A tool call's
 fragment count grows with its arguments, so if you set a hard cap, re-size it
-for swarms whose tools take large arguments before upgrading `laravel/ai` to
-v1.4.2, or such a run can now be refused at its cap.
+for swarms whose tools take large arguments before turning tool input on, or
+such a run can be refused at its cap.
 
 Upgrade readers with writers:
 
-- **Rolling Swarm back** after runs wrote these events: an older Swarm reading a
+- **Rolling Swarm back** after runs wrote these events (only with tool input
+  on): an older Swarm reading a
   database stream log skips the types it does not know, hot and cold, so a replay
   shows the run without the tool input, including a cut-off call. The cache store
   returns them as `SwarmUnknownEvent`, whose `toArray()` keeps the original

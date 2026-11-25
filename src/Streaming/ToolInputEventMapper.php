@@ -36,15 +36,19 @@ use Throwable;
 final class ToolInputEventMapper
 {
     /**
-     * Lifecycle markers Swarm emits its own equivalents for (stream and step
-     * boundaries; a text or reasoning block is opened by its first delta). They
-     * carry no content, so skipping them leaves the durable record complete.
+     * Whether the caller skips `$event` without a breadcrumb: a lifecycle marker
+     * Swarm emits its own equivalent for (stream and step boundaries; a text or
+     * reasoning block is opened by its first delta), or a tool-input event while
+     * `$capture` does not stream tool input (opt-in). Neither carries content the
+     * durable record must keep.
      */
-    public static function isIgnoredLifecycle(mixed $event): bool
+    public static function skips(mixed $event, SwarmCapture $capture): bool
     {
-        return $event instanceof StreamStart
-            || $event instanceof TextStart
-            || $event instanceof ReasoningStart;
+        if ($event instanceof StreamStart || $event instanceof TextStart || $event instanceof ReasoningStart) {
+            return true;
+        }
+
+        return ! $capture->streamsToolInput() && self::toolInputType($event) !== null;
     }
 
     /**
@@ -58,23 +62,13 @@ final class ToolInputEventMapper
         int $stepIndex,
         string $agentClass,
     ): ?SwarmStreamEvent {
-        if (! $event instanceof StreamEvent) {
+        $type = self::toolInputType($event);
+
+        if ($type === null || ! $event instanceof StreamEvent) {
             return null;
         }
 
-        // An unrecognised event's toArray() is foreign code; if it throws, the event
-        // falls through to the caller's never-throw unknown-event breadcrumb.
-        try {
-            $payload = $event->toArray();
-        } catch (Throwable) {
-            return null;
-        }
-
-        $type = $payload['type'] ?? null;
-
-        if (! in_array($type, ['tool_input_start', 'tool_input_delta', 'tool_input_error'], true)) {
-            return null;
-        }
+        $payload = $event->toArray();
 
         $decision = $capture->outputsDecision($context);
         $availability = PayloadAvailability::fromCaptureDecision($decision);
@@ -128,6 +122,26 @@ final class ToolInputEventMapper
         }
 
         return $swarmEvent;
+    }
+
+    /**
+     * The tool-input wire type of `$event`, or null for anything else. An
+     * unrecognised event's toArray() is foreign code; if it throws, the event is
+     * not tool input and falls through to the caller's never-throw breadcrumb.
+     */
+    private static function toolInputType(mixed $event): ?string
+    {
+        if (! $event instanceof StreamEvent) {
+            return null;
+        }
+
+        try {
+            $type = $event->toArray()['type'] ?? null;
+        } catch (Throwable) {
+            return null;
+        }
+
+        return in_array($type, ['tool_input_start', 'tool_input_delta', 'tool_input_error'], true) ? $type : null;
     }
 
     /**

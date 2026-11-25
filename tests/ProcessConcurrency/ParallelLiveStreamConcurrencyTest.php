@@ -743,6 +743,7 @@ test('the absolute deadline continues while a consumer holds an unacknowledged e
 });
 
 test('tool input crosses the process transport per branch, with reused native ids kept apart and capture applied (#649)', function (): void {
+    config()->set('swarm.streaming.tool_input.enabled', true);
     $isToolInput = fn ($event): bool => $event instanceof SwarmToolInputStart
         || $event instanceof SwarmToolInputDelta
         || $event instanceof SwarmToolInputError;

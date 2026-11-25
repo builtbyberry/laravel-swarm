@@ -66,7 +66,7 @@ class StreamEventMapper
      * effects (output text, tool-call pairing, usage, unrecognized-class
      * breadcrumb) into `$accumulator`. Returns the swarm event to emit, or null for
      * a lifecycle event ({@see StreamEnd} records usage; the lifecycle markers
-     * {@see ToolInputEventMapper::isIgnoredLifecycle()} skips) or an unrecognized event
+     * {@see ToolInputEventMapper::skips()} skips) or an unrecognized event
      * (recorded as a breadcrumb class on the accumulator, never thrown). Throws
      * {@see SwarmStreamProviderException} on a provider error event.
      *
@@ -233,7 +233,7 @@ class StreamEventMapper
             );
         }
 
-        if (ToolInputEventMapper::isIgnoredLifecycle($event)) {
+        if (ToolInputEventMapper::skips($event, $this->capture)) {
             return null;
         }
 

@@ -92,7 +92,8 @@ failed projection choice from abandoning or terminalizing a live run.
 enabled (it is off by default), a live sequential stream marks its final step
 (`live_final_step` on that `swarm_step_start`) when no step or output guardrail
 applies, because a guardrail can reject the answer only after it has streamed.
-`FinalAgent` then sends that step's text, tool input (`tool-input-start` /
+`FinalAgent` then sends that step's text, tool input (with
+`swarm.streaming.tool_input.enabled` on; `tool-input-start` /
 `tool-input-delta` / `tool-input-error`, or AG-UI `TOOL_CALL_START` /
 `TOOL_CALL_ARGS`, and for a cut-off call `TOOL_CALL_END` with an error
 `TOOL_CALL_RESULT`), tool calls and results as they arrive, in the order the model

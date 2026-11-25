@@ -1316,7 +1316,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         timestamp: $event->timestamp,
                         providerErrorType: $event->type,
                     );
-                } elseif (ToolInputEventMapper::isIgnoredLifecycle($event)) {
+                } elseif (ToolInputEventMapper::skips($event, $this->capture)) {
                     continue;
                 } elseif (($toolInput = ToolInputEventMapper::map($event, $this->capture, $context, $stepIndex, $agent::class)) !== null) {
                     $this->tagNode($toolInput, $nodeId);

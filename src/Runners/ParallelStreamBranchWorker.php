@@ -43,7 +43,7 @@ final class ParallelStreamBranchWorker
      * @param  array<string, mixed>  $contextPayload
      * @param  list<string>  $nativeSettingsAttemptIds
      * @param  array<int, array{scope: string, scope_id: string, key: string, value: mixed, metadata: array<string, mixed>, created_at: string|null, updated_at: string|null}>  $snapshotEntries
-     * @param  array{capture: array{inputs: string, outputs: string}, citations: array{max_count: int, max_bytes: int}, provider_tools: array{max_event_bytes: int, max_step_bytes: int, max_depth: int}, native_results: array<string, int>}  $workerSettings
+     * @param  array{capture: array{inputs: string, outputs: string}, citations: array{max_count: int, max_bytes: int}, provider_tools: array{max_event_bytes: int, max_step_bytes: int, max_depth: int}, native_results: array<string, int>, tool_input?: bool}  $workerSettings
      * @return array{branch_id: string, terminal_sent: true}
      */
     public function run(
@@ -126,6 +126,7 @@ final class ParallelStreamBranchWorker
                 'citations' => $workerSettings['citations'],
                 'provider_tools' => $workerSettings['provider_tools'],
                 'native_results' => $workerSettings['native_results'],
+                'streaming' => ['tool_input' => ['enabled' => $workerSettings['tool_input'] ?? false]],
             ]]);
             $nativeResults = NativeStepResultProjector::fromResolvedLimits($workerSettings['native_results']);
             $capture = new SwarmCapture(

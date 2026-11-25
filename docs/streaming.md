@@ -343,7 +343,7 @@ Swarm streams emit typed events, including:
 | `swarm_text_delta` / `swarm_text_end` | Final-agent text chunks and close marker with native content-block `message_id` and explicit `payload_status` when known. |
 | `swarm_reasoning_delta` / `swarm_reasoning_end` | Final-agent reasoning stream events. |
 | `swarm_tool_call` / `swarm_tool_result` | Final-agent tool invocation and results with explicit `payload_status` when known. |
-| `swarm_tool_input_start` / `swarm_tool_input_delta` / `swarm_tool_input_error` | A tool call's input as the model writes it: the start (`tool_id`, `tool_name`), each fragment of the arguments text (`delta`), and a call whose input never completed (`input`, `error`), whose tool was not executed. Streamed when Laravel AI emits them (v1.4.2 and later). |
+| `swarm_tool_input_start` / `swarm_tool_input_delta` / `swarm_tool_input_error` | A tool call's input as the model writes it: the start (`tool_id`, `tool_name`), each fragment of the arguments text (`delta`), and a call whose input never completed (`input`, `error`), whose tool was not executed. Streamed when `swarm.streaming.tool_input.enabled` is on (opt-in) and Laravel AI emits them (v1.4.2 and later). |
 | `swarm_provider_tool_event` | Captured native [provider-tool activity](provider-tool-events.md) with identity and explicit data availability. |
 | `swarm_provider_tool_attempt_invalidated` | Durable control marker invalidating older provider activity for one node. |
 | `swarm_citation` | Native source occurrence with captured [citation evidence and availability](citations.md). |
@@ -404,9 +404,11 @@ standard content/tool frame. See [Vercel and AG-UI protocol projection](native-c
 ### Tool input as it is written
 
 From `laravel/ai` v1.4.2, a provider stream reports a tool call's input while the
-model writes it. Swarm streams it live through every streaming path (sequential,
-hierarchical, static hierarchical, process-parallel and durable per-node
-streaming), persists it for replay, and broadcasts it:
+model writes it. This is opt-in: set `swarm.streaming.tool_input.enabled`
+(`SWARM_STREAMING_TOOL_INPUT=true`). Off (the default), Swarm skips those events
+and nothing about a stream changes. On, Swarm streams it live through every
+streaming path (sequential, hierarchical, static hierarchical, process-parallel
+and durable per-node streaming), persists it for replay, and broadcasts it:
 
 - `swarm_tool_input_start` opens the input for `tool_id` / `tool_name`.
 - `swarm_tool_input_delta` carries one fragment of the arguments text. Joining a

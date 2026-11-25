@@ -707,6 +707,17 @@ return [
             'final_agent_live' => filter_var(env('SWARM_NATIVE_CHAT_PROTOCOLS_FINAL_AGENT_LIVE', false), FILTER_VALIDATE_BOOLEAN),
         ],
         /*
+         * Opt-in. laravel/ai v1.4.2+ reports a tool call's input while the model
+         * writes it (one event per fragment of the arguments). Off (the default):
+         * Swarm skips those events, so streams, replay, broadcasts and the
+         * context-growth event count are as before. On: they stream as
+         * swarm_tool_input_start / _delta / _error, stored and broadcast like
+         * other stream events, and count toward swarm.context_growth budgets.
+         */
+        'tool_input' => [
+            'enabled' => filter_var(env('SWARM_STREAMING_TOOL_INPUT', false), FILTER_VALIDATE_BOOLEAN),
+        ],
+        /*
          * Default-off live multiplexing for parallel topology. This requires
          * Laravel's process concurrency driver plus local loopback sockets. It
          * never falls back to buffered completion: unsupported environments fail
