@@ -305,7 +305,11 @@ test('late tool-input events from a voided attempt stay invalid, with reused nat
         // Public ids are the native ones, unchanged; storage keeps them apart.
         ->and($visible->map(fn ($event) => $event->toArray()['id'])->unique()->sort()->values()->all())->toBe(['same-delta', 'same-error', 'same-start'])
         // Nine stored events (three attempts x three) plus recovery's invalidation marker.
-        ->and(DB::table('swarm_stream_events')->where('run_id', 'run-late-tool-input')->count())->toBe(10);
+        ->and(DB::table('swarm_stream_events')->where('run_id', 'run-late-tool-input')->count())->toBe(10)
+        // Each attempt's copy of a reused native id has its own storage identity, so a
+        // void edge aimed at the stale attempt can never land on the fresh or sibling one.
+        ->and(DB::table('swarm_stream_events')->where('run_id', 'run-late-tool-input')
+            ->where('event_type', 'like', 'swarm_tool_input_%')->distinct()->count('event_uuid'))->toBe(9);
 
     $voided = collect($view->fold(supersession: ViewSupersession::Everything))->whereInstanceOf(VoidedEvent::class);
 
