@@ -362,6 +362,9 @@ class SwarmFake implements Swarm
                     agent: class_basename($step->agentClass),
                     input: $step->input,
                     timestamp: SwarmStreamEvent::timestamp(),
+                    // Mirrors the real sequential stream: its last step may stream
+                    // live through a FinalAgent projection (a fake has no guardrails).
+                    liveFinalStep: $index === array_key_last($steps),
                 );
                 yield new SwarmTextDelta(
                     id: SwarmStreamEvent::newId(),
@@ -406,6 +409,9 @@ class SwarmFake implements Swarm
         }, topology: $this->fakeTopology, nativeChatProtocolsEnabled: (bool) Container::getInstance()->make('config')->get(
             'swarm.streaming.native_protocols.enabled',
             false,
+        ), liveFinalAgent: (bool) Container::getInstance()->make('config')->get(
+            'swarm.streaming.native_protocols.final_agent_live',
+            true,
         ));
     }
 

@@ -328,7 +328,7 @@ HTTP adapter, deployment checklist, and exact privacy limits.
 | Key | Type | Default | Env Var | Description |
 |-----|------|---------|---------|-------------|
 | `swarm.streaming.native_protocols.enabled` | bool | `false` | `SWARM_NATIVE_CHAT_PROTOCOLS_ENABLED` | Enables explicit Vercel and AG-UI projection on `StreamableSwarmResponse`. This does not create a route or bypass application authorization. Rebuild cached configuration and recycle long-lived application workers when changing it. |
-| `swarm.streaming.native_protocols.final_agent_live` | bool | `true` | `SWARM_NATIVE_CHAT_PROTOCOLS_FINAL_AGENT_LIVE` | The `FinalAgent` projection of a live sequential stream sends the final step's text and tool input as they arrive when no step or output guardrail applies. `false` buffers the whole answer until the workflow succeeds. Persisted replay always buffers. See [Vercel and AG-UI protocol projection](native-chat-protocols.md#choose-a-projection). |
+| `swarm.streaming.native_protocols.final_agent_live` | bool | `true` | `SWARM_NATIVE_CHAT_PROTOCOLS_FINAL_AGENT_LIVE` | The `FinalAgent` projection of a live sequential stream sends the final step's text and tool input as they arrive when no step or output guardrail applies. `false` buffers the whole answer until the workflow succeeds. Persisted replay always buffers. Rebuild cached configuration and recycle long-lived application workers when changing it. See [Vercel and AG-UI protocol projection](native-chat-protocols.md#choose-a-projection). |
 | `swarm.streaming.parallel.enabled` | bool | `false` | `SWARM_PARALLEL_STREAMING_ENABLED` | Enables real top-level parallel live multiplexing. Requires Laravel's `process` concurrency driver and loopback process transport; unsupported drivers fail before agent invocation and never masquerade buffered completion as streaming. |
 | `swarm.streaming.parallel.max_branches` | int | `32` | `SWARM_PARALLEL_STREAMING_MAX_BRANCHES` | Maximum branch processes admitted to one parallel live stream. This is not a raw file-descriptor or application-wide ceiling: every branch uses multiple pipes/sockets, and overlapping requests multiply the total. Runtime range: 1–256. |
 | `swarm.streaming.parallel.max_frame_bytes` | int | `2097152` | `SWARM_PARALLEL_STREAMING_MAX_FRAME_BYTES` | Maximum encoded bytes for one atomic branch event or terminal frame. Events are never split. Runtime range: 1 KiB–4 MiB. |
@@ -358,7 +358,7 @@ Governs a streaming run's hot working set by declared intent (v0.15.0+). An auth
 | Key | Type | Default | Env Var | Description |
 |-----|------|---------|---------|-------------|
 | `swarm.context_growth.policy` | string | `degrade_to_cold` | `SWARM_CONTEXT_GROWTH_POLICY` | Framework default growth-policy rung when a swarm declares no `#[ContextGrowthPolicy]`. Cumulative ladder: `ignore` → `warn` → `degrade_to_cold` → `backpressure` → `refuse`. |
-| `swarm.context_growth.budget_events` | int\|null | `null` (inert) | `SWARM_CONTEXT_GROWTH_BUDGET_EVENTS` | Soft budget in hot stream events. `null` leaves the policy inert; supplying a number activates the default `degrade_to_cold` behaviour unless an author declares another rung. Measured per stream segment (resets when a run resumes in a fresh process). |
+| `swarm.context_growth.budget_events` | int\|null | `null` (inert) | `SWARM_CONTEXT_GROWTH_BUDGET_EVENTS` | Soft budget in hot stream events (every streamed event counts, including each text and tool-input delta). `null` leaves the policy inert; supplying a number activates the default `degrade_to_cold` behaviour unless an author declares another rung. Measured per stream segment (resets when a run resumes in a fresh process). |
 | `swarm.context_growth.hard_cap_events` | int\|null | `null` (disabled) | `SWARM_CONTEXT_GROWTH_HARD_CAP_EVENTS` | Absolute ceiling that clamps author intent — a breach refuses the run regardless of declared policy (even `ignore`). Best-effort governance, not a correctness invariant. |
 | `swarm.context_growth.backpressure_delay_ms` | int | `250` | `SWARM_CONTEXT_GROWTH_BACKPRESSURE_DELAY_MS` | Bounded delay inserted at a step boundary under the `backpressure` rung. Clamped to a safe maximum. |
 
@@ -376,7 +376,7 @@ Settings for `dispatchDurable()` execution. Durable runs are database-backed and
 
 ### Durable Stream Batching
 
-For `#[DurableStreaming]` runs, write text and reasoning deltas to
+For `#[DurableStreaming]` runs, write text, reasoning and tool-input deltas to
 `swarm_stream_events` as one multi-row `INSERT` per batch instead of one per event.
 A node's first event and every event that is not a delta are still written at
 once. See [Batched causal-log writes](durable-execution.md#batched-causal-log-writes)

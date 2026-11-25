@@ -15,11 +15,15 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   persisted replay and broadcasting. Before, Swarm dropped all three, so a
   cut-off tool call was invisible. Fragments and partial input follow output
   capture: kept under Full (including the partial arguments of a tool that never
-  ran), `null` with `payload_status` `redacted` / `omitted` otherwise. The native
-  chat protocols send them as standard frames (Vercel `tool-input-start` /
-  `tool-input-delta` / `tool-input-error`, AG-UI `TOOL_CALL_START` /
-  `TOOL_CALL_ARGS`), or as custom frames when withheld or when the installed
-  `laravel/ai` predates them. Durable stream batching holds tool-input deltas
+  ran), `null` with `payload_status` `redacted` / `omitted` otherwise. The
+  `FinalAgent` native chat projection sends them as standard frames (Vercel
+  `tool-input-start` / `tool-input-delta` / `tool-input-error`; AG-UI
+  `TOOL_CALL_START` / `TOOL_CALL_ARGS`, and `TOOL_CALL_END` with an error
+  `TOOL_CALL_RESULT` for a cut-off call), or as custom frames when withheld or
+  when the installed `laravel/ai` predates them; the `Workflow` projection
+  carries them as `tool_input_*` workflow progress. Each fragment is one more
+  streamed event: it counts toward `swarm.context_growth` event budgets and is
+  one more replay row and broadcast. Durable stream batching holds tool-input deltas
   like text deltas, and `#[WithoutBroadcasting(SwarmToolInputDelta::class)]`
   keeps them off a broadcast channel. Older `laravel/ai` versions emit none of
   these events and nothing changes there. See
@@ -143,8 +147,8 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
 
 ### Changed
 
-- **The `FinalAgent` native chat projection streams the final step live (#649).**
-  For a live sequential stream, the final step's text, tool input and tool calls
+- **Behaviour change for `FinalAgent` clients: the native chat projection
+  streams the final step live (#649).** For a live sequential stream, the final step's text, tool input and tool calls
   now reach a Vercel or AG-UI client as the model produces them, in order, when
   no step or output guardrail can still reject them. With a step or output
   guardrail, for persisted replay, and with the new
@@ -153,7 +157,8 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   the answer is buffered until the workflow succeeds, as before. Frames already
   sent cannot be withdrawn: a failure after them ends the stream with the
   protocol error terminal. `swarm_step_start` gains `live_final_step: true` on
-  that step only. See
+  that step only, and a step that begins after it ends the projection with the
+  new `swarm_final_step_not_final` reason. See
   [upgrade guidance](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#tool-input-streaming-and-a-live-finalagent-projection).
 
 - **BREAKING: the minimum Laravel is 13.40 (#640).** `illuminate/concurrency` is

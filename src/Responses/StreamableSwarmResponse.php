@@ -13,6 +13,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\NativeChatProtocolAdapter;
 use BuiltByBerry\LaravelSwarm\Streaming\Protocols\AgentUserInteractionSwarmProtocol;
 use BuiltByBerry\LaravelSwarm\Streaming\Protocols\VercelSwarmProtocol;
+use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
 use Closure;
 use Generator;
 use Illuminate\Contracts\Support\Responsable;
@@ -169,9 +170,12 @@ class StreamableSwarmResponse implements IteratorAggregate, Responsable
     }
 
     /**
-     * Whether the final-agent native projection may release a live stream's final
-     * step as it arrives. Off for persisted replay, whose log can hold an abandoned
-     * attempt before a resumed one; replay keeps the buffered final-step selection.
+     * Whether the final-agent native projection may release this stream's final
+     * step as it arrives: the `liveFinalAgent` constructor argument, false unless
+     * the builder passes it. {@see SwarmHistory::replay()} does not, because a
+     * persisted log can hold an abandoned attempt before a resumed one.
+     *
+     * @internal Read by the native chat protocol adapter.
      */
     public function streamsFinalAgentLive(): bool
     {

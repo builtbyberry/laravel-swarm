@@ -947,10 +947,6 @@ function protocolChunks(StreamableSwarmResponse $stream): Generator
 }
 
 test('a live final step reaches the client frame by frame, before the source advances (#649)', function (string $protocol, string $argsFrame, string $argsKey) {
-    if (! laravelAiStreamsToolInput()) {
-        $this->markTestSkipped('laravel/ai before v1.4.2 has no native tool-input frames.');
-    }
-
     $stream = liveFinalAgentStream(liveFinalAgentEvents(), $yielded);
     $stream = $protocol === 'vercel'
         ? $stream->usingVercelDataProtocol('ui-message', NativeProtocolProjection::FinalAgent)
@@ -971,6 +967,17 @@ test('a live final step reaches the client frame by frame, before the source adv
         if (str_contains($chunk, '"text-delta"') || str_contains($chunk, '"TEXT_MESSAGE_CONTENT"')) {
             $seen['text_at'] ??= $yielded;
         }
+    }
+
+    // The live step announces itself, so a client stops showing "buffering".
+    expect($body)->toContain('"live_final_step":true');
+
+    if (! laravelAiStreamsToolInput()) {
+        // laravel/ai before v1.4.2 has no tool-input frames (custom frames instead),
+        // but the final step's text still goes out before the source advances.
+        expect($seen['text_at'] ?? null)->toBe(2);
+
+        return;
     }
 
     expect($seen)->toBe(['text_at' => 2, 'first_args_at' => 5]);
@@ -999,7 +1006,8 @@ test('the live switch off buffers a flagged final step exactly as an unflagged o
         VercelDataStreamClient::consume($body),
     );
 
-    expect($strip($flaggedOff))->toBe($strip($unflagged))
+    expect($flaggedOff)->not->toContain('live_final_step')
+        ->and($strip($flaggedOff))->toBe($strip($unflagged))
         // ...and live order differs: content arrives before the step completes.
         ->and($strip($live))->not->toBe($strip($unflagged));
 });

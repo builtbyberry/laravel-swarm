@@ -93,14 +93,18 @@ failed projection choice from abandoning or terminalizing a live run.
 applies, because a guardrail can reject the answer only after it has streamed.
 `FinalAgent` then sends that step's text, tool input (`tool-input-start` /
 `tool-input-delta` / `tool-input-error`, or AG-UI `TOOL_CALL_START` /
-`TOOL_CALL_ARGS`), tool calls and results as they arrive, in the order the model
+`TOOL_CALL_ARGS`, and for a cut-off call `TOOL_CALL_END` with an error
+`TOOL_CALL_RESULT`), tool calls and results as they arrive, in the order the model
 produced them, as a plain Laravel AI agent stream does. Frames already sent
 cannot be withdrawn: a later provider failure, timeout or projection error ends
 the stream with the protocol error terminal after them. With any step or output
 guardrail, with `swarm.streaming.native_protocols.final_agent_live` set to
 `false`, for a stream that does not mark its final step (a log written before
 this release), and always for persisted replay (whose log can hold an abandoned
-attempt before a resumed one), the answer is buffered as below.
+attempt before a resumed one), the answer is buffered as below. A live stream
+still opens with `buffering` progress while earlier steps run; the final step's
+`step_started` progress carries `live_final_step: true` when its content will
+follow live.
 
 While the answer is buffered, the adapter continues consuming the source lazily and emits
 only capture-safe `projection_progress` events (`buffering`, `step_started`, and
@@ -230,6 +234,7 @@ The public event uses these reason codes:
 | `swarm_usage_invalid` | Both | An optional aggregate usage value is present but is not a non-negative integer. |
 | `swarm_message_identity_unavailable` | `FinalAgent` | A projected text block lacks its real streamed message identity. |
 | `swarm_stream_failed` | Both | Another exception escaped while the adapter was projecting the source stream. |
+| `swarm_final_step_not_final` | `FinalAgent` | A step began after the step marked `live_final_step`, whose content had already been streamed. |
 
 Treat these values as stable machine-readable categories. New categories may be
 added in a minor release; applications should retain an unknown-code fallback.
@@ -293,6 +298,11 @@ This adapter adds no migration, persistence table, retention owner, pruning
 hook, operational command, cross-system transaction, or recovery process.
 
 ### Activation and rollback
+
+To go back to all-or-nothing `FinalAgent` answers without turning native
+protocols off, set `SWARM_NATIVE_CHAT_PROTOCOLS_FINAL_AGENT_LIVE=false`; like
+every key here it takes effect once cached configuration is rebuilt and
+long-lived workers are recycled.
 
 Activation is a configuration deployment, not just an environment edit:
 

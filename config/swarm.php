@@ -855,7 +855,7 @@ return [
         /*
          * Batched causal-log writes for durable per-node streaming. Off (the
          * default): every streamed event is its own INSERT into swarm_stream_events,
-         * visible the moment it is emitted. On: text and reasoning deltas are held
+         * visible the moment it is emitted. On: text, reasoning and tool-input deltas are held
          * and written as one multi-row INSERT, cutting the write load that
          * streaming_enabled above otherwise sheds by turning streaming off.
          *

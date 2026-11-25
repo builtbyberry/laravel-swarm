@@ -34,6 +34,7 @@ use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use BuiltByBerry\LaravelSwarm\Support\SwarmPayloadLimits;
 use Generator;
+use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Laravel\Ai\Contracts\Agent;
 use Psr\Log\LoggerInterface;
 use Throwable;
@@ -59,7 +60,19 @@ class SequentialRunner
         protected LoggerInterface $logger,
         protected NativeOutcomeValidator $outcomes,
         protected NativeCitationEvidence $citations,
+        protected ?ConfigRepository $config = null,
     ) {}
+
+    /**
+     * Whether a FinalAgent native projection may stream a live run's final step:
+     * native protocols on and swarm.streaming.native_protocols.final_agent_live not off.
+     */
+    protected function finalAgentMayStreamLive(): bool
+    {
+        return $this->config !== null
+            && (bool) $this->config->get('swarm.streaming.native_protocols.enabled', false)
+            && (bool) $this->config->get('swarm.streaming.native_protocols.final_agent_live', true);
+    }
 
     public function run(SwarmExecutionState $state): SwarmResponse
     {
@@ -102,8 +115,10 @@ class SequentialRunner
         $mergedUsage = [];
 
         // A native chat projection may release the final step's content live only
-        // when no step or output guardrail can still reject it afterwards.
-        $finalStepReleasable = ! $this->guardrails->canRejectStreamedOutput($state->swarm, $state->context);
+        // when no step or output guardrail can still reject it afterwards. Guardrails
+        // are resolved for this only when a live projection is possible at all.
+        $finalStepReleasable = $this->finalAgentMayStreamLive()
+            && ! $this->guardrails->canRejectStreamedOutput($state->swarm, $state->context);
 
         // Resolve the frozen-view replay mode once: it is invariant for the
         // swarm class across the whole run (attribute-over-config), so gating

@@ -211,7 +211,11 @@ final class NativeChatProtocolAdapter
                         $liveSeen = true;
                     }
 
-                    yield $this->custom($event, $this->finalAgentProgressPayload($event, 'step_started'));
+                    // A live final step says so, so a client stops showing "buffering".
+                    yield $this->custom($event, [
+                        ...$this->finalAgentProgressPayload($event, 'step_started'),
+                        ...($liveStepIndex === $event->stepIndex ? ['live_final_step' => true] : []),
+                    ]);
 
                     continue;
                 }
@@ -282,8 +286,9 @@ final class NativeChatProtocolAdapter
 
                 if ($this->isFinalAgentCandidate($event)) {
                     if ($liveStepIndex !== null) {
-                        // Only the open live step's own content goes out; a stale event
-                        // from an earlier step is dropped, as the buffered path drops it.
+                        // Only the open live step's own content goes out: an event that
+                        // names another step is dropped (the buffered path keeps whatever
+                        // arrives inside its open step, as it always has).
                         if (($event->stepIndex ?? null) === $liveStepIndex) {
                             yield from $this->finalAgentEvents([$event], $liveOpenMessages, $liveSuppressedMessages, close: false);
                         }
@@ -330,7 +335,7 @@ final class NativeChatProtocolAdapter
      * Project final-agent content to native frames. The buffered path passes the
      * whole step at completion and lets it close what it opened; the live path
      * passes one event at a time with the same text state and closes at the end,
-     * so the two cannot project differently.
+     * so an event is projected the same way on either path.
      *
      * @param  array<int, SwarmStreamEvent>  $events
      * @param  array<string, true>  $openMessages
@@ -706,24 +711,36 @@ final class NativeChatProtocolAdapter
      * The laravel/ai event for a captured tool-input event, or null when the
      * installed laravel/ai predates its tool-input events (v1.4.2), for example a
      * log replayed after a dependency rollback; the caller then sends the custom
-     * workflow frame. The class name is built from the Swarm event's own short name
-     * so it is never a reference to a class the minimum laravel/ai lacks.
+     * workflow frame. The class name is assembled at runtime so it is never a
+     * reference to a class the minimum laravel/ai lacks.
      */
     private function nativeToolInput(SwarmToolInputStart|SwarmToolInputDelta|SwarmToolInputError $event): ?StreamEvent
     {
-        $class = 'Laravel\\Ai\\Streaming\\Events\\'.substr((new \ReflectionClass($event))->getShortName(), strlen('Swarm'));
+        [$name, $arguments] = match (true) {
+            $event instanceof SwarmToolInputStart => ['ToolInputStart', [$event->id, $event->toolId, $event->toolName, $event->timestamp]],
+            $event instanceof SwarmToolInputDelta => ['ToolInputDelta', [$event->id, $event->toolId, (string) $event->delta, $event->timestamp]],
+            default => ['ToolInputError', [$event->id, $event->toolId, $event->toolName, (string) $event->input, (string) $event->error, $event->timestamp]],
+        };
+
+        return $this->upstreamEvent($name, $arguments, $event->invocationId);
+    }
+
+    /**
+     * Build the laravel/ai stream event `$name` when the installed laravel/ai has it.
+     *
+     * @param  list<mixed>  $arguments
+     */
+    private function upstreamEvent(string $name, array $arguments, ?string $invocationId): ?StreamEvent
+    {
+        $class = 'Laravel\\Ai\\Streaming\\Events\\'.$name;
 
         if (! class_exists($class)) {
             return null;
         }
 
-        $native = match (true) {
-            $event instanceof SwarmToolInputStart => new $class($event->id, $event->toolId, $event->toolName, $event->timestamp),
-            $event instanceof SwarmToolInputDelta => new $class($event->id, $event->toolId, (string) $event->delta, $event->timestamp),
-            default => new $class($event->id, $event->toolId, $event->toolName, (string) $event->input, (string) $event->error, $event->timestamp),
-        };
+        $event = new $class(...$arguments);
 
-        return $native instanceof StreamEvent ? $this->withInvocation($native, $event->invocationId) : null;
+        return $event instanceof StreamEvent ? $this->withInvocation($event, $invocationId) : null;
     }
 
     private function mayExposePayload(PayloadAvailability $availability): bool
