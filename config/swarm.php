@@ -696,14 +696,15 @@ return [
              */
             'enabled' => filter_var(env('SWARM_NATIVE_CHAT_PROTOCOLS_ENABLED', false), FILTER_VALIDATE_BOOLEAN),
             /*
-             * The FinalAgent projection of a live sequential stream sends the final
-             * step's text and tool input as they arrive, the way a plain Laravel AI
-             * agent streams, when no step or output guardrail can still reject it.
-             * A failure after that point ends the stream with an error, after the
-             * frames already sent. Set false to buffer the whole answer until the
-             * workflow completes (all or nothing). Persisted replay always buffers.
+             * Opt-in. Off (the default): the FinalAgent projection buffers the whole
+             * answer until the workflow succeeds (all or nothing). On: for a live
+             * sequential stream it sends the final step's text and tool input as
+             * they arrive, the way a plain Laravel AI agent streams, when no step or
+             * output guardrail can still reject it; a failure after that point ends
+             * the stream with an error after the frames already sent. Persisted
+             * replay always buffers.
              */
-            'final_agent_live' => filter_var(env('SWARM_NATIVE_CHAT_PROTOCOLS_FINAL_AGENT_LIVE', true), FILTER_VALIDATE_BOOLEAN),
+            'final_agent_live' => filter_var(env('SWARM_NATIVE_CHAT_PROTOCOLS_FINAL_AGENT_LIVE', false), FILTER_VALIDATE_BOOLEAN),
         ],
         /*
          * Default-off live multiplexing for parallel topology. This requires

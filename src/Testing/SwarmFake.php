@@ -338,7 +338,7 @@ class SwarmFake implements Swarm
 
         $config = Container::getInstance()->make('config');
         $liveFinalStep = (bool) $config->get('swarm.streaming.native_protocols.enabled', false)
-            && (bool) $config->get('swarm.streaming.native_protocols.final_agent_live', true);
+            && (bool) $config->get('swarm.streaming.native_protocols.final_agent_live', false);
 
         return new StreamableSwarmResponse('fake-run-id', function () use ($task, $liveFinalStep): \Generator {
             $this->recordedStreamed[] = $task;
@@ -415,7 +415,7 @@ class SwarmFake implements Swarm
             false,
         ), liveFinalAgent: (bool) Container::getInstance()->make('config')->get(
             'swarm.streaming.native_protocols.final_agent_live',
-            true,
+            false,
         ));
     }
 

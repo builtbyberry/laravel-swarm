@@ -65,13 +65,13 @@ class SequentialRunner
 
     /**
      * Whether a FinalAgent native projection may stream a live run's final step:
-     * native protocols on and swarm.streaming.native_protocols.final_agent_live not off.
+     * native protocols on and swarm.streaming.native_protocols.final_agent_live enabled (opt-in).
      */
     protected function finalAgentMayStreamLive(): bool
     {
         return $this->config !== null
             && (bool) $this->config->get('swarm.streaming.native_protocols.enabled', false)
-            && (bool) $this->config->get('swarm.streaming.native_protocols.final_agent_live', true);
+            && (bool) $this->config->get('swarm.streaming.native_protocols.final_agent_live', false);
     }
 
     public function run(SwarmExecutionState $state): SwarmResponse

@@ -252,6 +252,7 @@ test('WithoutBroadcasting can drop tool input deltas from broadcast while replay
 
 test('the sequential runner marks only its final step live, and a live stream projects it live while replay buffers (#649)', function () {
     config()->set('swarm.streaming.native_protocols.enabled', true);
+    config()->set('swarm.streaming.native_protocols.final_agent_live', true);
     FakeResearcher::fake(['research-out']);
     FakeWriter::fake(['writer-out']);
     FakeEditor::fake(['editor-out']);
@@ -273,6 +274,7 @@ test('the sequential runner marks only its final step live, and a live stream pr
 
 test('a step or output guardrail keeps the final step buffered, so a rejected answer never reaches the client (#649)', function (string $phase, string $guardrail) {
     config()->set('swarm.streaming.native_protocols.enabled', true);
+    config()->set('swarm.streaming.native_protocols.final_agent_live', true);
     config()->set("swarm.guardrails.{$phase}", [$guardrail]);
     app()->bind(BlocksOutputWhenContains::class, fn (): BlocksOutputWhenContains => new BlocksOutputWhenContains('looking up'));
     app()->bind(BlocksStepWhenIndex::class, fn (): BlocksStepWhenIndex => new BlocksStepWhenIndex(0));
@@ -297,6 +299,7 @@ test('a step or output guardrail keeps the final step buffered, so a rejected an
 
 test('an output guardrail that rejects the answer leaves a FinalAgent client with no answer frames, only an error (#649)', function () {
     config()->set('swarm.streaming.native_protocols.enabled', true);
+    config()->set('swarm.streaming.native_protocols.final_agent_live', true);
     config()->set('swarm.guardrails.output', [BlocksOutputWhenContains::class]);
     app()->bind(BlocksOutputWhenContains::class, fn (): BlocksOutputWhenContains => new BlocksOutputWhenContains('looking up'));
 
@@ -339,6 +342,7 @@ test('the final step is marked live only with native protocols and the live swit
 
 test('the live check resolves no guardrail: a configured one is validated once, as before (#649)', function () {
     config()->set('swarm.streaming.native_protocols.enabled', true);
+    config()->set('swarm.streaming.native_protocols.final_agent_live', true);
     config()->set('swarm.guardrails.step', [CountingStepGuardrail::class]);
     $resolutions = 0;
     app()->bind(CountingStepGuardrail::class, function () use (&$resolutions): CountingStepGuardrail {
@@ -354,6 +358,7 @@ test('the live check resolves no guardrail: a configured one is validated once, 
 
 test('a swarm that declares guardrails through its hook stays buffered, even if the hook returns none yet (#649)', function () {
     config()->set('swarm.streaming.native_protocols.enabled', true);
+    config()->set('swarm.streaming.native_protocols.final_agent_live', true);
     DeclaresGuardrailsToolInputStreamSwarm::$outputGuardrails = [];
 
     try {
@@ -381,6 +386,7 @@ test('a faked stream marks its last step live like a real sequential stream, und
 
 test('an output guardrail a SwarmStepStarted listener adds keeps the final step buffered, and its rejection never reaches the client (#649)', function () {
     config()->set('swarm.streaming.native_protocols.enabled', true);
+    config()->set('swarm.streaming.native_protocols.final_agent_live', true);
     app()->bind(BlocksOutputWhenContains::class, fn (): BlocksOutputWhenContains => new BlocksOutputWhenContains('looking up'));
     Event::listen(SwarmStepStarted::class, function (): void {
         config()->set('swarm.guardrails.output', [BlocksOutputWhenContains::class]);
@@ -411,6 +417,7 @@ test('an output guardrail a SwarmStepStarted listener adds keeps the final step 
 
 test('a child run that inherits its parent guardrails keeps the final step buffered; one that does not may stream live (#649)', function (string $inheritance, bool $expected) {
     config()->set('swarm.streaming.native_protocols.enabled', true);
+    config()->set('swarm.streaming.native_protocols.final_agent_live', true);
     config()->set('swarm.guardrails.child_inheritance', $inheritance);
 
     $context = RunContext::from('tool-input-task');
@@ -424,3 +431,16 @@ test('a child run that inherits its parent guardrails keeps the final step buffe
     'inherits the parent' => ['own_global_and_parent', false],
     'does not inherit' => ['own_and_global', true],
 ]);
+
+test('live FinalAgent answers are opt-in: with native protocols on and nothing else set, the final step is buffered (#649)', function () {
+    config()->set('swarm.streaming.native_protocols.enabled', true);
+
+    $stream = ToolInputStreamSwarm::make()->stream('tool-input-task');
+    $liveBeforeIteration = $stream->streamsFinalAgentLive();
+    $start = collect(iterator_to_array($stream, false))
+        ->first(fn (SwarmStreamEvent $event): bool => $event instanceof SwarmStepStart);
+
+    expect(config('swarm.streaming.native_protocols.final_agent_live'))->toBeFalse()
+        ->and($liveBeforeIteration)->toBeFalse()
+        ->and($start->liveFinalStep)->toBeFalse();
+});

@@ -83,12 +83,13 @@ Workflow progress is emitted as AG-UI `CUSTOM` events named
 | Projection | Live topologies | Output contract | Important omissions |
 | --- | --- | --- | --- |
 | `Workflow` (default) | Sequential, enabled process-parallel, generated hierarchical, static hierarchical | Complete whitelisted workflow progress in `data-swarm` / `CUSTOM`; text remains inside custom data parts, with no standard text/tool parts; a real workflow completion is then followed by one native protocol terminal | A custom data-part renderer is required; a stock AI SDK chat UI shows an empty assistant message; reasoning content is withheld |
-| `FinalAgent` | Sequential only | Standard chat-bubble projection of the final step's available text, tool input, tools, provider activity, and citations through standard native frames. Live (the default): those frames stream as the final step produces them, when no step or output guardrail can still reject them. Buffered: emitted once the matching step and workflow both complete | Live: a failure after frames were sent ends the stream with an error after them. Buffered: no live partial answer; buffered content is discarded if a later step begins, the final step is unmatched, or the workflow fails |
+| `FinalAgent` | Sequential only | Standard chat-bubble projection of the final step's available text, tool input, tools, provider activity, and citations through standard native frames. Live (opt-in, `final_agent_live`): those frames stream as the final step produces them, when no step or output guardrail can still reject them. Buffered: emitted once the matching step and workflow both complete | Live: a failure after frames were sent ends the stream with an error after them. Buffered: no live partial answer; buffered content is discarded if a later step begins, the final step is unmatched, or the workflow fails |
 
 `FinalAgent` rejects a non-sequential response before iteration. This prevents a
 failed projection choice from abandoning or terminalizing a live run.
 
-**Live or buffered.** A live sequential stream marks its final step
+**Live or buffered.** With `swarm.streaming.native_protocols.final_agent_live`
+enabled (it is off by default), a live sequential stream marks its final step
 (`live_final_step` on that `swarm_step_start`) when no step or output guardrail
 applies, because a guardrail can reject the answer only after it has streamed.
 `FinalAgent` then sends that step's text, tool input (`tool-input-start` /
@@ -106,7 +107,7 @@ as below instead:
   guardrails (`own_global_and_parent`). This is decided as the final step
   starts, after its `SwarmStepStarted` listeners run; guardrail configuration
   changed while that step is streaming is not seen;
-- with `swarm.streaming.native_protocols.final_agent_live` set to `false`;
+- with `swarm.streaming.native_protocols.final_agent_live` off (the default);
 - for a stream that does not mark its final step (a log written before this
   release);
 - for any replay: persisted replay, and iterating a stream a second time, since
@@ -308,8 +309,9 @@ hook, operational command, cross-system transaction, or recovery process.
 
 ### Activation and rollback
 
-To go back to all-or-nothing `FinalAgent` answers without turning native
-protocols off, set `SWARM_NATIVE_CHAT_PROTOCOLS_FINAL_AGENT_LIVE=false`; like
+Live `FinalAgent` answers are opt-in with
+`SWARM_NATIVE_CHAT_PROTOCOLS_FINAL_AGENT_LIVE=true`; set it back to `false` to
+return to all-or-nothing answers without turning native protocols off. Like
 every key here it takes effect once cached configuration is rebuilt and
 long-lived workers are recycled.
 

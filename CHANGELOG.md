@@ -29,6 +29,22 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   these events and nothing changes there. See
   [Tool input as it is written](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/streaming.md#tool-input-as-it-is-written).
 
+- **Opt-in live answers for the `FinalAgent` native chat projection (#649).**
+  New `swarm.streaming.native_protocols.final_agent_live` key
+  (`SWARM_NATIVE_CHAT_PROTOCOLS_FINAL_AGENT_LIVE`, default `false`, so nothing
+  changes until you set it). With it on, a live sequential stream's final step
+  (its text, tool input and tool calls) reaches a Vercel or AG-UI client as the
+  model produces them, in order, instead of all at once when the workflow
+  succeeds. It applies only when no step or output guardrail can still reject
+  that content: a configured step or output guardrail, a swarm implementing
+  `DefinesGuardrails` or a child run that inherits its parent's guardrails keeps
+  the answer buffered, as do persisted and in-memory replay. Frames already sent
+  cannot be withdrawn, so a failure after them ends the stream with the protocol
+  error terminal. `swarm_step_start` gains `live_final_step: true` on that step
+  only, and a step that begins after it ends the projection with the new
+  `swarm_final_step_not_final` reason. See
+  [Vercel and AG-UI protocol projection](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/native-chat-protocols.md#choose-a-projection).
+
 - **Eager durable dispatch on commit.** New `swarm.durable.eager_dispatch` key
   (`SWARM_DURABLE_EAGER_DISPATCH`, default `false`). With it on, the next durable
   step or branch job, and each `queue()` `multi_worker` hierarchical branch job,
@@ -146,22 +162,6 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   [Error Handling](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/error-handling.md#native-tool-failures).
 
 ### Changed
-
-- **Behaviour change for `FinalAgent` clients: the native chat projection
-  streams the final step live (#649).** For a live sequential stream, the final step's text, tool input and tool calls
-  now reach a Vercel or AG-UI client as the model produces them, in order, when
-  no step or output guardrail can still reject them. With a configured step or
-  output guardrail, a swarm implementing `DefinesGuardrails` or a child run that
-  inherits its parent's guardrails, for persisted or in-memory replay, and with
-  the new
-  `swarm.streaming.native_protocols.final_agent_live` key
-  (`SWARM_NATIVE_CHAT_PROTOCOLS_FINAL_AGENT_LIVE`, default `true`) set to `false`,
-  the answer is buffered until the workflow succeeds, as before. Frames already
-  sent cannot be withdrawn: a failure after them ends the stream with the
-  protocol error terminal. `swarm_step_start` gains `live_final_step: true` on
-  that step only, and a step that begins after it ends the projection with the
-  new `swarm_final_step_not_final` reason. See
-  [upgrade guidance](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#tool-input-streaming-and-a-live-finalagent-projection).
 
 - **BREAKING: the minimum Laravel is 13.40 (#640).** `illuminate/concurrency` is
   now required at `^13.40`; it was `^13.0`, with an effective floor of 13.16.

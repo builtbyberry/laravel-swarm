@@ -256,7 +256,7 @@ their transactions finish, run the migration, run
 (use your configured table name), and only then start the new version. Do not
 run that reset once the new version has created any wait.
 
-### Tool input streaming and a live FinalAgent projection
+### Tool input streaming and an opt-in live FinalAgent projection
 
 No migration. Two changes reach stream consumers (#649).
 
@@ -287,17 +287,12 @@ Upgrade readers with writers:
   the native chat protocols send them as custom frames, since the standard
   tool-input frames do not exist there.
 
-**`FinalAgent` streams the final step live by default.** A live sequential
-stream projected with `NativeProtocolProjection::FinalAgent` now sends the final
-step's text, tool input and tool calls as they arrive, when no step or output
-guardrail applies (a swarm implementing `DefinesGuardrails`, and a child run
-that inherits its parent's guardrails, always keep buffering). Before, a client saw nothing until the workflow succeeded, so
-a failure produced no answer frames at all; now a failure after frames were sent
-ends the stream with an error after them, as a plain Laravel AI agent stream
-does. A swarm with a step or output guardrail is unchanged: its answer is still
-buffered, so a rejected answer never reaches the client. To keep the
-all-or-nothing answer everywhere, set `SWARM_NATIVE_CHAT_PROTOCOLS_FINAL_AGENT_LIVE=false`.
-Persisted replay always buffers.
+**Live `FinalAgent` answers are opt-in.** Nothing changes for an existing
+`NativeProtocolProjection::FinalAgent` client: its answer is still buffered until
+the workflow succeeds. Setting `SWARM_NATIVE_CHAT_PROTOCOLS_FINAL_AGENT_LIVE=true`
+streams a live sequential run's final step as it arrives when no step or output
+guardrail applies; a failure after frames were sent then ends the stream with an
+error after them, as a plain Laravel AI agent stream does.
 
 ### Wait closers read the context with a locking read
 
