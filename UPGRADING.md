@@ -290,8 +290,8 @@ Upgrade readers with writers:
 **`FinalAgent` streams the final step live by default.** A live sequential
 stream projected with `NativeProtocolProjection::FinalAgent` now sends the final
 step's text, tool input and tool calls as they arrive, when no step or output
-guardrail applies (a swarm, or inherited parent, that implements
-`DefinesGuardrails` always keeps buffering). Before, a client saw nothing until the workflow succeeded, so
+guardrail applies (a swarm implementing `DefinesGuardrails`, and a child run
+that inherits its parent's guardrails, always keep buffering). Before, a client saw nothing until the workflow succeeded, so
 a failure produced no answer frames at all; now a failure after frames were sent
 ends the stream with an error after them, as a plain Laravel AI agent stream
 does. A swarm with a step or output guardrail is unchanged: its answer is still

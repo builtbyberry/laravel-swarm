@@ -7,11 +7,13 @@ use BuiltByBerry\LaravelSwarm\Audit\ResolvedCapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Enums\NativeProtocolProjection;
+use BuiltByBerry\LaravelSwarm\Events\SwarmStepStarted;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepStart;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputDelta;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputError;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputStart;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
@@ -376,3 +378,49 @@ test('a faked stream marks its last step live like a real sequential stream, und
 
     expect(end($starts)->liveFinalStep)->toBe($live);
 })->with([true, false]);
+
+test('an output guardrail a SwarmStepStarted listener adds keeps the final step buffered, and its rejection never reaches the client (#649)', function () {
+    config()->set('swarm.streaming.native_protocols.enabled', true);
+    app()->bind(BlocksOutputWhenContains::class, fn (): BlocksOutputWhenContains => new BlocksOutputWhenContains('looking up'));
+    Event::listen(SwarmStepStarted::class, function (): void {
+        config()->set('swarm.guardrails.output', [BlocksOutputWhenContains::class]);
+    });
+
+    $_SERVER['LARAVEL_OCTANE'] = true;
+
+    try {
+        $response = ToolInputStreamSwarm::make()->stream('tool-input-task')
+            ->usingVercelDataProtocol('ui-message', NativeProtocolProjection::FinalAgent)
+            ->toResponse(request());
+        $body = '';
+
+        try {
+            foreach (($response->getCallback())() as $chunk) {
+                $body .= $chunk;
+            }
+        } catch (Throwable) {
+        }
+    } finally {
+        unset($_SERVER['LARAVEL_OCTANE']);
+    }
+
+    expect($body)->not->toContain('live_final_step')
+        ->and($body)->not->toContain('looking up')
+        ->and($body)->toContain('"type":"error"');
+});
+
+test('a child run that inherits its parent guardrails keeps the final step buffered; one that does not may stream live (#649)', function (string $inheritance, bool $expected) {
+    config()->set('swarm.streaming.native_protocols.enabled', true);
+    config()->set('swarm.guardrails.child_inheritance', $inheritance);
+
+    $context = RunContext::from('tool-input-task');
+    $context->mergeMetadata(['parent_run_id' => 'parent-run-649']);
+
+    $start = collect(iterator_to_array(ToolInputStreamSwarm::make()->stream($context), false))
+        ->first(fn (SwarmStreamEvent $event): bool => $event instanceof SwarmStepStart);
+
+    expect($start->liveFinalStep)->toBe($expected);
+})->with([
+    'inherits the parent' => ['own_global_and_parent', false],
+    'does not inherit' => ['own_and_global', true],
+]);

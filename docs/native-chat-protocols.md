@@ -100,9 +100,12 @@ cannot be withdrawn: a later provider failure, timeout or projection error ends
 the stream with the protocol error terminal after them. The answer is buffered
 as below instead:
 
-- when a step or output guardrail is configured, or the swarm (or the parent
-  whose guardrails it inherits) implements `DefinesGuardrails`, since that hook
-  is asked again when the output is validated and may add a guardrail by then;
+- when a step or output guardrail is configured, when the swarm implements
+  `DefinesGuardrails` (that hook is asked again when the output is validated and
+  may add a guardrail by then), and for a child run that inherits its parent's
+  guardrails (`own_global_and_parent`). This is decided as the final step
+  starts, after its `SwarmStepStarted` listeners run; guardrail configuration
+  changed while that step is streaming is not seen;
 - with `swarm.streaming.native_protocols.final_agent_live` set to `false`;
 - for a stream that does not mark its final step (a log written before this
   release);

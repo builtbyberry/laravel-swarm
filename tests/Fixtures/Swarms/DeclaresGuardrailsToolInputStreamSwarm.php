@@ -12,9 +12,9 @@ use BuiltByBerry\LaravelSwarm\Enums\Topology as TopologyEnum;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\ToolInputStreamEditor;
 
 /**
- * {@see ToolInputStreamSwarm} with a guardrails() hook that returns nothing when the
- * run starts: the hook is asked again at validation time, so it may add an output
- * guardrail by then ($outputGuardrails is set mid-run by a test).
+ * {@see ToolInputStreamSwarm} with a guardrails() hook. The hook is asked again at
+ * validation time, so whatever it returns when the run starts (`$outputGuardrails`,
+ * empty by default) does not settle whether the answer can still be rejected.
  */
 #[Topology(TopologyEnum::Sequential)]
 class DeclaresGuardrailsToolInputStreamSwarm implements DefinesGuardrails, Swarm

@@ -114,12 +114,6 @@ class SequentialRunner
         $lastIndex = count($agents) - 1;
         $mergedUsage = [];
 
-        // A native chat projection may release the final step's content live only
-        // when no step or output guardrail can still reject it afterwards. Guardrails
-        // are resolved for this only when a live projection is possible at all.
-        $finalStepReleasable = $this->finalAgentMayStreamLive()
-            && ! $this->guardrails->canRejectStreamedOutput($state->swarm, $state->context);
-
         // Resolve the frozen-view replay mode once: it is invariant for the
         // swarm class across the whole run (attribute-over-config), so gating
         // the per-step checkpoint probe/record on it avoids a ReflectionClass
@@ -171,7 +165,13 @@ class SequentialRunner
                     agent: $agentName,
                     input: $this->capture->applyInput($input, $state->context),
                     timestamp: SwarmStreamEvent::timestamp(),
-                    liveFinalStep: $isFinal && $finalStepReleasable,
+                    // A native chat projection may release the final step's content
+                    // live only when no step or output guardrail can still reject it.
+                    // Decided as that step starts, after its SwarmStepStarted listeners
+                    // ran, and only when a live projection is possible at all.
+                    liveFinalStep: $isFinal
+                        && $this->finalAgentMayStreamLive()
+                        && ! $this->guardrails->canRejectStreamedOutput($state->swarm, $state->context),
                 );
 
                 $startedAt = MonotonicTime::now();
