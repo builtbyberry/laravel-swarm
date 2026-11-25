@@ -21,6 +21,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Guardrails\BlocksOutputWhenContains
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Guardrails\BlocksStepWhenIndex;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Guardrails\CountingStepGuardrail;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Streaming\UnknownStreamEvent;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\DeclaresGuardrailsToolInputStreamSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\StaticHierarchicalToolInputStreamSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\ToolInputStreamSwarm;
@@ -254,10 +255,13 @@ test('the sequential runner marks only its final step live, and a live stream pr
     FakeEditor::fake(['editor-out']);
 
     $stream = FakeSequentialSwarm::make()->stream('task');
+    // Live only before its first iteration; a consumed stream replays buffered.
+    $liveBeforeIteration = $stream->streamsFinalAgentLive();
     $starts = array_values(array_filter(iterator_to_array($stream, false), fn (SwarmStreamEvent $event): bool => $event instanceof SwarmStepStart));
 
     expect(array_map(fn (SwarmStepStart $start): bool => $start->liveFinalStep, $starts))->toBe([false, false, true])
-        ->and($stream->streamsFinalAgentLive())->toBeTrue()
+        ->and($liveBeforeIteration)->toBeTrue()
+        ->and($stream->streamsFinalAgentLive())->toBeFalse()
         ->and(app(SwarmHistory::class)->replay($stream->runId)->streamsFinalAgentLive())->toBeFalse();
 
     config()->set('swarm.streaming.native_protocols.final_agent_live', false);
@@ -317,9 +321,22 @@ test('an output guardrail that rejects the answer leaves a FinalAgent client wit
         ->and($body)->toContain('"type":"error"');
 });
 
-test('guardrails are resolved for the live check only when a live FinalAgent projection is possible (#649)', function (bool $protocols, bool $live, int $expected) {
+test('the final step is marked live only with native protocols and the live switch both on (#649)', function (bool $protocols, bool $live, bool $expected) {
     config()->set('swarm.streaming.native_protocols.enabled', $protocols);
     config()->set('swarm.streaming.native_protocols.final_agent_live', $live);
+
+    $start = collect(iterator_to_array(ToolInputStreamSwarm::make()->stream('tool-input-task'), false))
+        ->first(fn (SwarmStreamEvent $event): bool => $event instanceof SwarmStepStart);
+
+    expect($start->liveFinalStep)->toBe($expected);
+})->with([
+    'native protocols off' => [false, true, false],
+    'live projection off' => [true, false, false],
+    'live projection possible' => [true, true, true],
+]);
+
+test('the live check resolves no guardrail: a configured one is validated once, as before (#649)', function () {
+    config()->set('swarm.streaming.native_protocols.enabled', true);
     config()->set('swarm.guardrails.step', [CountingStepGuardrail::class]);
     $resolutions = 0;
     app()->bind(CountingStepGuardrail::class, function () use (&$resolutions): CountingStepGuardrail {
@@ -330,13 +347,24 @@ test('guardrails are resolved for the live check only when a live FinalAgent pro
 
     iterator_to_array(ToolInputStreamSwarm::make()->stream('tool-input-task'), false);
 
-    // One resolution validates the step; the live check adds one only when it can matter.
-    expect($resolutions)->toBe($expected);
-})->with([
-    'native protocols off' => [false, true, 1],
-    'live projection off' => [true, false, 1],
-    'live projection possible' => [true, true, 2],
-]);
+    expect($resolutions)->toBe(1);
+});
+
+test('a swarm that declares guardrails through its hook stays buffered, even if the hook returns none yet (#649)', function () {
+    config()->set('swarm.streaming.native_protocols.enabled', true);
+    DeclaresGuardrailsToolInputStreamSwarm::$outputGuardrails = [];
+
+    try {
+        $start = collect(iterator_to_array(DeclaresGuardrailsToolInputStreamSwarm::make()->stream('tool-input-task'), false))
+            ->first(fn (SwarmStreamEvent $event): bool => $event instanceof SwarmStepStart);
+    } finally {
+        DeclaresGuardrailsToolInputStreamSwarm::$outputGuardrails = [];
+    }
+
+    // The hook is asked again at validation time and could add an output guardrail
+    // by then, so its content is never released before that answer.
+    expect($start->liveFinalStep)->toBeFalse();
+});
 
 test('a faked stream marks its last step live like a real sequential stream, under the same switch (#649)', function (bool $live) {
     config()->set('swarm.streaming.native_protocols.enabled', true);
@@ -346,6 +374,5 @@ test('a faked stream marks its last step live like a real sequential stream, und
     $stream = FakeSequentialSwarm::make()->stream('task');
     $starts = array_values(array_filter(iterator_to_array($stream, false), fn (SwarmStreamEvent $event): bool => $event instanceof SwarmStepStart));
 
-    expect(end($starts)->liveFinalStep)->toBeTrue()
-        ->and($stream->streamsFinalAgentLive())->toBe($live);
+    expect(end($starts)->liveFinalStep)->toBe($live);
 })->with([true, false]);

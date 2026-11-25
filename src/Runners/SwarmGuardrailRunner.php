@@ -57,18 +57,30 @@ class SwarmGuardrailRunner
     }
 
     /**
-     * Whether a step or output guardrail applies to this swarm: either can still
-     * reject a step's content after that content has streamed.
+     * Whether a step or output guardrail can still reject a step's content after
+     * that content has streamed. A swarm (or an inherited parent) that declares
+     * guardrails through guardrails() counts whatever it returns now: the hook is
+     * asked again at validation time and may answer differently then. Checked by
+     * class and configuration only, so nothing is resolved or logged twice.
      */
     public function canRejectStreamedOutput(Swarm $swarm, RunContext $context): bool
     {
-        foreach ([SwarmStepGuardrail::class, SwarmOutputGuardrail::class] as $contract) {
-            foreach ($this->resolvePhase($contract, $swarm, $context) as $guardrail) {
-                return true;
-            }
+        if ($this->configuredRefsForContract(SwarmStepGuardrail::class) !== []
+            || $this->configuredRefsForContract(SwarmOutputGuardrail::class) !== []
+            || $swarm instanceof DefinesGuardrails) {
+            return true;
         }
 
-        return false;
+        if ($this->childInheritanceMode() !== GuardrailChildInheritance::OwnGlobalAndParent) {
+            return false;
+        }
+
+        $parentRunId = $context->metadata['parent_run_id'] ?? null;
+        $parentSwarmClass = is_string($parentRunId) && $parentRunId !== ''
+            ? ($this->historyStore->find($parentRunId)['swarm_class'] ?? null)
+            : null;
+
+        return is_string($parentSwarmClass) && is_a($parentSwarmClass, DefinesGuardrails::class, true);
     }
 
     /**

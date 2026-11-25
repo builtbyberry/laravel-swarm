@@ -1097,3 +1097,20 @@ test('a client that disconnects mid live answer abandons the run, which goes no 
     expect($abandoned)->toBeTrue()
         ->and($advancedPastArgs)->toBeFalse();
 });
+
+test('a consumed live stream projected again replays its cached events buffered, not live (#649)', function () {
+    $stream = liveFinalAgentStream(liveFinalAgentEvents());
+    iterator_to_array($stream);
+
+    expect($stream->streamsFinalAgentLive())->toBeFalse();
+
+    $replayed = renderedProtocolContent($stream->usingVercelDataProtocol('ui-message', NativeProtocolProjection::FinalAgent));
+    $buffered = renderedProtocolContent(nativeProtocolStream(liveFinalAgentEvents(flagged: false))->usingVercelDataProtocol('ui-message', NativeProtocolProjection::FinalAgent));
+    $strip = fn (string $body): array => array_map(
+        fn (array $frame): array => array_diff_key($frame, ['timestamp' => true]),
+        VercelDataStreamClient::consume($body),
+    );
+
+    expect($replayed)->not->toContain('live_final_step')
+        ->and($strip($replayed))->toBe($strip($buffered));
+});

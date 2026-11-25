@@ -97,11 +97,17 @@ applies, because a guardrail can reject the answer only after it has streamed.
 `TOOL_CALL_RESULT`), tool calls and results as they arrive, in the order the model
 produced them, as a plain Laravel AI agent stream does. Frames already sent
 cannot be withdrawn: a later provider failure, timeout or projection error ends
-the stream with the protocol error terminal after them. With any step or output
-guardrail, with `swarm.streaming.native_protocols.final_agent_live` set to
-`false`, for a stream that does not mark its final step (a log written before
-this release), and always for persisted replay (whose log can hold an abandoned
-attempt before a resumed one), the answer is buffered as below. A live stream
+the stream with the protocol error terminal after them. The answer is buffered
+as below instead:
+
+- when a step or output guardrail is configured, or the swarm (or the parent
+  whose guardrails it inherits) implements `DefinesGuardrails`, since that hook
+  is asked again when the output is validated and may add a guardrail by then;
+- with `swarm.streaming.native_protocols.final_agent_live` set to `false`;
+- for a stream that does not mark its final step (a log written before this
+  release);
+- for any replay: persisted replay, and iterating a stream a second time, since
+  a replayed log can hold an abandoned attempt before a resumed one. A live stream
 still opens with `buffering` progress while earlier steps run; the final step's
 `step_started` progress carries `live_final_step: true` when its content will
 follow live.

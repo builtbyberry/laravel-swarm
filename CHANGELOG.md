@@ -150,8 +150,9 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
 - **Behaviour change for `FinalAgent` clients: the native chat projection
   streams the final step live (#649).** For a live sequential stream, the final step's text, tool input and tool calls
   now reach a Vercel or AG-UI client as the model produces them, in order, when
-  no step or output guardrail can still reject them. With a step or output
-  guardrail, for persisted replay, and with the new
+  no step or output guardrail can still reject them. With a configured step or
+  output guardrail or a swarm implementing `DefinesGuardrails`, for persisted or
+  in-memory replay, and with the new
   `swarm.streaming.native_protocols.final_agent_live` key
   (`SWARM_NATIVE_CHAT_PROTOCOLS_FINAL_AGENT_LIVE`, default `true`) set to `false`,
   the answer is buffered until the workflow succeeds, as before. Frames already

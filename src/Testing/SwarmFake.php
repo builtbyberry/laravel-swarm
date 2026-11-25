@@ -336,7 +336,11 @@ class SwarmFake implements Swarm
     {
         $task = $this->normalizeAgentInput($task);
 
-        return new StreamableSwarmResponse('fake-run-id', function () use ($task): \Generator {
+        $config = Container::getInstance()->make('config');
+        $liveFinalStep = (bool) $config->get('swarm.streaming.native_protocols.enabled', false)
+            && (bool) $config->get('swarm.streaming.native_protocols.final_agent_live', true);
+
+        return new StreamableSwarmResponse('fake-run-id', function () use ($task, $liveFinalStep): \Generator {
             $this->recordedStreamed[] = $task;
             $resolved = $this->resolveResponse($task);
             $fixture = $resolved instanceof SwarmResponse ? $this->boundedCitationFixture($resolved) : new SwarmResponse(output: $resolved);
@@ -364,7 +368,7 @@ class SwarmFake implements Swarm
                     timestamp: SwarmStreamEvent::timestamp(),
                     // Mirrors the real sequential stream: its last step may stream
                     // live through a FinalAgent projection (a fake has no guardrails).
-                    liveFinalStep: $index === array_key_last($steps),
+                    liveFinalStep: $index === array_key_last($steps) && $liveFinalStep,
                 );
                 yield new SwarmTextDelta(
                     id: SwarmStreamEvent::newId(),
