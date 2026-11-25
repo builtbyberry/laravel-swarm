@@ -339,7 +339,7 @@ Swarm streams emit typed events, including:
 | Type | Role |
 | --- | --- |
 | `swarm_stream_start` | Run metadata and captured input. |
-| `swarm_step_start` | Step lifecycle start with captured step input; `live_final_step: true` on a live sequential stream's final step when no step or output guardrail applies (see [native chat protocols](native-chat-protocols.md#choose-a-projection)). |
+| `swarm_step_start` | Step lifecycle start with captured step input; `live_final_step: true` on a live sequential stream's final step when `swarm.streaming.native_protocols.final_agent_live` is enabled (opt-in) and no step or output guardrail applies (see [native chat protocols](native-chat-protocols.md#choose-a-projection)). |
 | `swarm_text_delta` / `swarm_text_end` | Final-agent text chunks and close marker with native content-block `message_id` and explicit `payload_status` when known. |
 | `swarm_reasoning_delta` / `swarm_reasoning_end` | Final-agent reasoning stream events. |
 | `swarm_tool_call` / `swarm_tool_result` | Final-agent tool invocation and results with explicit `payload_status` when known. |
