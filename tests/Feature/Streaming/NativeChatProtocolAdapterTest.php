@@ -31,6 +31,9 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamStart;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolCall;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputDelta;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputError;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputStart;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
 use BuiltByBerry\LaravelSwarm\Streaming\PayloadAvailability;
 use BuiltByBerry\LaravelSwarm\Streaming\Protocols\AgentUserInteractionSwarmProtocol;
@@ -777,4 +780,107 @@ test('a failing operational correlation hook cannot suppress the terminal projec
         'type' => 'error',
         'errorText' => 'The swarm stream failed.',
     ]);
+});
+
+/**
+ * #649: tool input a final agent streamed (one tool that ran, one cut off).
+ *
+ * @return list<SwarmStreamEvent>
+ */
+function toolInputNativeProtocolEvents(PayloadAvailability $availability = PayloadAvailability::Available): array
+{
+    $withheld = $availability !== PayloadAvailability::Available;
+
+    return [
+        new SwarmStreamStart('start', 'swarm-run-1', 'Swarm', 'sequential', null, [], 1),
+        new SwarmStepStart('step', 'swarm-run-1', 0, 'Agent', 'Agent', null, 2),
+        new SwarmToolInputStart('tis-1', 'swarm-run-1', 0, 'Agent', 'tool-1', 'lookup', 3, $availability),
+        new SwarmToolInputDelta('tid-1', 'swarm-run-1', 0, 'Agent', 'tool-1', $withheld ? null : '{"q":', 4, $availability),
+        new SwarmToolInputDelta('tid-2', 'swarm-run-1', 0, 'Agent', 'tool-1', $withheld ? null : '"input-secret"}', 5, $availability),
+        new SwarmToolCall('call', 'swarm-run-1', 0, 'Agent', new ToolCallData('tool-1', 'lookup', $withheld ? [] : ['q' => 'input-secret']), 6, $availability),
+        new SwarmToolResult('result', 'swarm-run-1', 0, 'Agent', new ToolResultData('tool-1', 'lookup', [], $withheld ? null : 'found'), true, null, 7, payloadAvailability: $availability),
+        new SwarmToolInputStart('tis-2', 'swarm-run-1', 0, 'Agent', 'tool-2', 'search', 8, $availability),
+        new SwarmToolInputDelta('tid-3', 'swarm-run-1', 0, 'Agent', 'tool-2', $withheld ? null : '{"q":"cut', 9, $availability),
+        new SwarmToolInputError('tie-1', 'swarm-run-1', 0, 'Agent', 'tool-2', 'search', $withheld ? null : '{"q":"cut', $withheld ? null : 'error-secret', 10, $availability),
+        new SwarmStepEnd('step-end', 'swarm-run-1', 0, 'Agent', 'Agent', null, 1, [], 11, nativeResult: new NativeStepResult),
+        new SwarmStreamEnd('end', 'swarm-run-1', null, ['input_tokens' => 1, 'output_tokens' => 1], [], 12),
+    ];
+}
+
+function laravelAiStreamsToolInput(): bool
+{
+    return class_exists(implode('\\', ['Laravel', 'Ai', 'Streaming', 'Events', 'ToolInputStart']));
+}
+
+test('final agent projection sends available tool input as standard Vercel tool-input frames (#649)', function () {
+    $parts = VercelDataStreamClient::consume(renderedProtocolContent(
+        nativeProtocolStream(toolInputNativeProtocolEvents())->usingVercelDataProtocol('ui-message', NativeProtocolProjection::FinalAgent),
+    ));
+    $tool = array_values(array_filter($parts, fn (array $part): bool => str_starts_with((string) ($part['type'] ?? ''), 'tool-')));
+
+    if (! laravelAiStreamsToolInput()) {
+        // laravel/ai before v1.4.2 has no tool-input frames: custom workflow frames instead.
+        $customTypes = array_column(array_column(array_filter($parts, fn (array $part): bool => ($part['type'] ?? null) === 'data-swarm'), 'data'), 'event_type');
+
+        expect($customTypes)->toContain('tool_input_started', 'tool_input_delta', 'tool_input_error')
+            ->and(array_column($parts, 'type'))->toContain('finish');
+
+        return;
+    }
+
+    expect(array_column($tool, 'type'))->toBe([
+        'tool-input-start', 'tool-input-delta', 'tool-input-delta', 'tool-input-available', 'tool-output-available',
+        'tool-input-start', 'tool-input-delta', 'tool-input-error',
+    ])
+        ->and($tool[0])->toMatchArray(['toolCallId' => 'tool-1', 'toolName' => 'lookup'])
+        ->and($tool[1]['inputTextDelta'].$tool[2]['inputTextDelta'])->toBe('{"q":"input-secret"}')
+        ->and($tool[7])->toMatchArray(['toolCallId' => 'tool-2', 'toolName' => 'search', 'input' => '{"q":"cut', 'errorText' => 'error-secret'])
+        ->and(array_column($parts, 'type'))->toContain('finish');
+});
+
+test('final agent projection sends available tool input as AG-UI tool call frames (#649)', function () {
+    $events = AgentUserInteractionClient::consume(renderedProtocolContent(
+        nativeProtocolStream(toolInputNativeProtocolEvents())->usingAgentUserInteractionProtocol('thread-1', projection: NativeProtocolProjection::FinalAgent),
+    ));
+
+    if (! laravelAiStreamsToolInput()) {
+        expect(json_encode($events))->toContain('tool_input_error')
+            ->and(array_column($events, 'type'))->toContain('RUN_FINISHED');
+
+        return;
+    }
+
+    $cut = array_values(array_filter($events, fn (array $event): bool => ($event['toolCallId'] ?? null) === 'tool-2'));
+
+    expect(array_column($cut, 'type'))->toBe(['TOOL_CALL_START', 'TOOL_CALL_ARGS', 'TOOL_CALL_END', 'TOOL_CALL_RESULT'])
+        ->and($cut[0]['toolCallName'])->toBe('search')
+        ->and($cut[1]['delta'])->toBe('{"q":"cut')
+        ->and($cut[3]['content'])->toBe('error-secret')
+        ->and(array_column($events, 'type'))->toContain('RUN_FINISHED');
+});
+
+test('withheld tool input reaches native clients only as custom frames, never as values (#649)', function (PayloadAvailability $availability) {
+    $parts = VercelDataStreamClient::consume(renderedProtocolContent(
+        nativeProtocolStream(toolInputNativeProtocolEvents($availability))->usingVercelDataProtocol('ui-message', NativeProtocolProjection::FinalAgent),
+    ));
+    $custom = array_column(array_filter($parts, fn (array $part): bool => ($part['type'] ?? null) === 'data-swarm'), 'data');
+
+    expect(array_column($parts, 'type'))->not->toContain('tool-input-start', 'tool-input-delta', 'tool-input-error')
+        ->and(array_column($custom, 'event_type'))->toContain('tool_input_started', 'tool_input_delta', 'tool_input_error')
+        ->and(json_encode($parts))->not->toContain('input-secret')
+        ->and(json_encode($parts))->not->toContain('cut')
+        ->and(json_encode($parts))->toContain('"payload_status":"'.$availability->value.'"');
+})->with([PayloadAvailability::Redacted, PayloadAvailability::Omitted]);
+
+test('workflow projection streams tool input as live workflow progress (#649)', function () {
+    $parts = VercelDataStreamClient::consume(renderedProtocolContent(
+        nativeProtocolStream(toolInputNativeProtocolEvents())->usingVercelDataProtocol('ui-message'),
+    ));
+    $custom = array_values(array_column(array_filter($parts, fn (array $part): bool => ($part['type'] ?? null) === 'data-swarm'), 'data'));
+    $toolInput = array_values(array_filter($custom, fn (array $data): bool => str_starts_with((string) ($data['event_type'] ?? ''), 'tool_input')));
+
+    expect(array_column($toolInput, 'event_type'))->toBe(['tool_input_started', 'tool_input_delta', 'tool_input_delta', 'tool_input_started', 'tool_input_delta', 'tool_input_error'])
+        ->and($toolInput[0])->toMatchArray(['tool_call_id' => 'tool-1', 'tool_name' => 'lookup', 'payload_status' => 'available'])
+        ->and($toolInput[1]['delta'].$toolInput[2]['delta'])->toBe('{"q":"input-secret"}')
+        ->and($toolInput[5])->toMatchArray(['tool_call_id' => 'tool-2', 'input' => '{"q":"cut', 'error' => 'error-secret']);
 });

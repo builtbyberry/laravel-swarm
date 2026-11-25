@@ -10,6 +10,9 @@ use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableNodeStreamRecorder;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolCall;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputDelta;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputError;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputStart;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
 use BuiltByBerry\LaravelSwarm\Streaming\View\CausalLogView;
 use BuiltByBerry\LaravelSwarm\Streaming\View\ViewSupersession;
@@ -273,4 +276,38 @@ test('legacy raw function-tool identities remain valid void targets through cold
     $cold->reclaim('run-legacy-tool', $boundary);
     $events = collect(CausalLogView::forRun(app(StreamEventStore::class), 'run-legacy-tool')->fold())->whereInstanceOf(SwarmToolResult::class);
     expect($events->pluck('id')->values()->all())->toBe(['new-native']);
+});
+
+test('late tool-input events from a voided attempt stay invalid, with reused native ids kept apart (#649)', function () {
+    seedNodeStreamRun('run-late-tool-input');
+    $recorder = app(DurableNodeStreamRecorder::class);
+    // Recovery writes the watermark before the stale attempt's first event lands.
+    $recorder->voidPriorAttempt('run-late-tool-input', 'node', 2, true);
+
+    $emit = static function (callable $sink, string $tag): void {
+        $sink(new SwarmToolInputStart('same-start', 'run-late-tool-input', 0, 'Agent', 'tool-id', 'tool', 123));
+        $sink(new SwarmToolInputDelta('same-delta', 'run-late-tool-input', 0, 'Agent', 'tool-id', $tag, 123));
+        $sink(new SwarmToolInputError('same-error', 'run-late-tool-input', 0, 'Agent', 'tool-id', 'tool', $tag, 'cut', 123));
+    };
+
+    $emit($recorder->sinkFor('run-late-tool-input', 'node', 1), 'stale');
+    $emit($recorder->sinkFor('run-late-tool-input', 'node', 2), 'fresh');
+    $emit($recorder->sinkFor('run-late-tool-input', 'sibling', 1), 'sibling');
+
+    $isToolInput = fn ($event): bool => $event instanceof SwarmToolInputStart
+        || $event instanceof SwarmToolInputDelta
+        || $event instanceof SwarmToolInputError;
+    $view = CausalLogView::forRun(app(StreamEventStore::class), 'run-late-tool-input');
+    $visible = collect($view->fold())->filter($isToolInput)->values();
+
+    expect($visible)->toHaveCount(6)
+        ->and($visible->whereInstanceOf(SwarmToolInputDelta::class)->pluck('delta')->sort()->values()->all())->toBe(['fresh', 'sibling'])
+        // Public ids are the native ones, unchanged; storage keeps them apart.
+        ->and($visible->map(fn ($event) => $event->toArray()['id'])->unique()->sort()->values()->all())->toBe(['same-delta', 'same-error', 'same-start'])
+        // Nine stored events (three attempts x three) plus recovery's invalidation marker.
+        ->and(DB::table('swarm_stream_events')->where('run_id', 'run-late-tool-input')->count())->toBe(10);
+
+    $voided = collect($view->fold(supersession: ViewSupersession::Everything))->whereInstanceOf(VoidedEvent::class);
+
+    expect($voided)->toHaveCount(3);
 });

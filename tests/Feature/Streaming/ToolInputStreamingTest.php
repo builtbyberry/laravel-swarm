@@ -15,7 +15,11 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\ToolInputStreamEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Streaming\UnknownStreamEvent;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\StaticHierarchicalToolInputStreamSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\ToolInputStreamSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\WithoutToolInputDeltaBroadcastingSwarm;
+use Illuminate\Broadcasting\AnonymousEvent;
+use Illuminate\Broadcasting\Channel;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Event;
 use Psr\Log\AbstractLogger;
 use Psr\Log\LoggerInterface;
 
@@ -190,3 +194,46 @@ test('the frozen snapshot records only the tool call that ran, not the cut-off o
     expect($snapshot)->not->toBeNull()
         ->and(array_column($snapshot->toolCalls, 'name'))->toBe(['lookup']);
 })->with('tool input chains');
+
+/**
+ * @return list<AnonymousEvent>
+ */
+function toolInputBroadcasts(): array
+{
+    return Event::dispatched(AnonymousEvent::class)
+        ->map(fn (array $event): AnonymousEvent => $event[0])
+        ->values()
+        ->all();
+}
+
+test('tool input events broadcast under their swarm type with a capture-shaped body', function () {
+    Event::fake([AnonymousEvent::class]);
+
+    ToolInputStreamSwarm::make()->broadcast('tool-input-task', new Channel('swarm.run'));
+
+    $byType = collect(toolInputBroadcasts())->groupBy(fn (AnonymousEvent $event): string => $event->broadcastAs());
+
+    expect($byType->keys()->all())->toContain('swarm_tool_input_start', 'swarm_tool_input_delta', 'swarm_tool_input_error')
+        ->and($byType['swarm_tool_input_delta'])->toHaveCount(3)
+        ->and($byType['swarm_tool_input_error'][0]->broadcastWith())->toMatchArray([
+            'type' => 'swarm_tool_input_error',
+            'tool_id' => 'tool-2',
+            'tool_name' => 'search',
+            'error' => ToolInputStreamEditor::ERROR_SECRET,
+            'payload_status' => 'available',
+        ]);
+});
+
+test('WithoutBroadcasting can drop tool input deltas from broadcast while replay keeps them', function () {
+    Event::fake([AnonymousEvent::class]);
+
+    $response = WithoutToolInputDeltaBroadcastingSwarm::make()->broadcast('tool-input-task', new Channel('swarm.run'));
+    $types = array_map(fn (AnonymousEvent $event): string => $event->broadcastAs(), toolInputBroadcasts());
+
+    expect($types)->not->toContain('swarm_tool_input_delta')
+        ->and($types)->toContain('swarm_tool_input_start', 'swarm_tool_input_error');
+
+    $replayed = toolInputToolEvents(iterator_to_array(app(SwarmHistory::class)->replay($response->runId), false));
+
+    expect(array_map(fn (SwarmStreamEvent $event): string => $event->type(), $replayed))->toContain('swarm_tool_input_delta');
+});
