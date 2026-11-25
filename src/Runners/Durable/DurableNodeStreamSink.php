@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Persistence\DatabaseCausalLogStore;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmReasoningDelta;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputDelta;
 use Closure;
 
 /**
@@ -157,6 +158,8 @@ final class DurableNodeStreamSink
 
     private static function isDelta(SwarmStreamEvent $event): bool
     {
-        return $event instanceof SwarmTextDelta || $event instanceof SwarmReasoningDelta;
+        return $event instanceof SwarmTextDelta
+            || $event instanceof SwarmReasoningDelta
+            || $event instanceof SwarmToolInputDelta;
     }
 }

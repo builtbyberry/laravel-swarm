@@ -63,6 +63,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
 use BuiltByBerry\LaravelSwarm\Streaming\NativeProtocolFailureReporter;
 use BuiltByBerry\LaravelSwarm\Streaming\PayloadAvailability;
 use BuiltByBerry\LaravelSwarm\Streaming\ProviderToolEventMapper;
+use BuiltByBerry\LaravelSwarm\Streaming\ToolInputEventMapper;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\AgentResponseOutput;
 use BuiltByBerry\LaravelSwarm\Support\DeclinedToolResults;
@@ -1315,6 +1316,12 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         timestamp: $event->timestamp,
                         providerErrorType: $event->type,
                     );
+                } elseif (ToolInputEventMapper::isIgnoredLifecycle($event)) {
+                    continue;
+                } elseif (($toolInput = ToolInputEventMapper::map($event, $this->capture, $context, $stepIndex, $agent::class)) !== null) {
+                    $this->tagNode($toolInput, $nodeId);
+                    yield $toolInput;
+                    $this->recordStreamTelemetry($swarm, $state, $toolInput, $streamSequenceIndex, $streamTelemetryStart, false);
                 } else {
                     // An event type this chain does not map. Record its type
                     // (never its payload) so the silent snapshot drop becomes a

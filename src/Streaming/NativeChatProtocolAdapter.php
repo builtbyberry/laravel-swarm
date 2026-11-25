@@ -26,6 +26,9 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamStart;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolCall;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputDelta;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputError;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputStart;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
 use BuiltByBerry\LaravelSwarm\Streaming\Protocols\SwarmProtocolEvent;
 use Closure;
@@ -355,6 +358,16 @@ final class NativeChatProtocolAdapter
                 continue;
             }
 
+            if ($event instanceof SwarmToolInputStart || $event instanceof SwarmToolInputDelta || $event instanceof SwarmToolInputError) {
+                $native = $event->payloadAvailability === PayloadAvailability::Available
+                    ? $this->nativeToolInput($event)
+                    : null;
+
+                yield $native ?? $this->custom($event, $this->workflowPayload($event));
+
+                continue;
+            }
+
             if ($event instanceof SwarmProviderToolEvent) {
                 if ($event->payload->status === 'available' && $event->provider !== null) {
                     yield $this->withInvocation(new ProviderToolEvent(
@@ -410,6 +423,9 @@ final class NativeChatProtocolAdapter
             || $event instanceof SwarmTextEnd
             || $event instanceof SwarmToolCall
             || $event instanceof SwarmToolResult
+            || $event instanceof SwarmToolInputStart
+            || $event instanceof SwarmToolInputDelta
+            || $event instanceof SwarmToolInputError
             || $event instanceof SwarmProviderToolEvent
             || $event instanceof SwarmCitation
             || $event instanceof SwarmReasoningDelta
@@ -463,6 +479,29 @@ final class NativeChatProtocolAdapter
                 'denied' => $event->denied,
                 'payload_status' => $event->payloadAvailability->value,
                 ...($this->mayExposePayload($event->payloadAvailability) ? ['result' => $event->toolResult->result] : []),
+                ...($event->error === null ? [] : ['error' => $event->error]),
+            ],
+            $event instanceof SwarmToolInputStart => [
+                'event_type' => 'tool_input_started',
+                'step_index' => $event->stepIndex,
+                'tool_call_id' => $event->toolId,
+                'tool_name' => $event->toolName,
+                'payload_status' => $event->payloadAvailability->value,
+            ],
+            $event instanceof SwarmToolInputDelta => [
+                'event_type' => 'tool_input_delta',
+                'step_index' => $event->stepIndex,
+                'tool_call_id' => $event->toolId,
+                'payload_status' => $event->payloadAvailability->value,
+                ...($this->mayExposePayload($event->payloadAvailability) ? ['delta' => $event->delta] : []),
+            ],
+            $event instanceof SwarmToolInputError => [
+                'event_type' => 'tool_input_error',
+                'step_index' => $event->stepIndex,
+                'tool_call_id' => $event->toolId,
+                'tool_name' => $event->toolName,
+                'payload_status' => $event->payloadAvailability->value,
+                ...($this->mayExposePayload($event->payloadAvailability) ? ['input' => $event->input] : []),
                 ...($event->error === null ? [] : ['error' => $event->error]),
             ],
             $event instanceof SwarmProviderToolEvent => [
@@ -599,6 +638,30 @@ final class NativeChatProtocolAdapter
         }
 
         return $event->messageId;
+    }
+
+    /**
+     * The laravel/ai event for a captured tool-input event, or null when the
+     * installed laravel/ai predates its tool-input events (v1.4.2), for example a
+     * log replayed after a dependency rollback; the caller then sends the custom
+     * workflow frame. The class name is built from the Swarm event's own short name
+     * so it is never a reference to a class the minimum laravel/ai lacks.
+     */
+    private function nativeToolInput(SwarmToolInputStart|SwarmToolInputDelta|SwarmToolInputError $event): ?StreamEvent
+    {
+        $class = 'Laravel\\Ai\\Streaming\\Events\\'.substr((new \ReflectionClass($event))->getShortName(), strlen('Swarm'));
+
+        if (! class_exists($class)) {
+            return null;
+        }
+
+        $native = match (true) {
+            $event instanceof SwarmToolInputStart => new $class($event->id, $event->toolId, $event->toolName, $event->timestamp),
+            $event instanceof SwarmToolInputDelta => new $class($event->id, $event->toolId, (string) $event->delta, $event->timestamp),
+            default => new $class($event->id, $event->toolId, $event->toolName, (string) $event->input, (string) $event->error, $event->timestamp),
+        };
+
+        return $native instanceof StreamEvent ? $this->withInvocation($native, $event->invocationId) : null;
     }
 
     private function mayExposePayload(PayloadAvailability $availability): bool

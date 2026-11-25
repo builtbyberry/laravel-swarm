@@ -65,7 +65,8 @@ class StreamEventMapper
      * Map one provider stream event to its swarm event, folding the per-step side
      * effects (output text, tool-call pairing, usage, unrecognized-class
      * breadcrumb) into `$accumulator`. Returns the swarm event to emit, or null for
-     * a lifecycle event ({@see StreamEnd} records usage) or an unrecognized event
+     * a lifecycle event ({@see StreamEnd} records usage; the lifecycle markers
+     * {@see ToolInputEventMapper::isIgnoredLifecycle()} skips) or an unrecognized event
      * (recorded as a breadcrumb class on the accumulator, never thrown). Throws
      * {@see SwarmStreamProviderException} on a provider error event.
      *
@@ -230,6 +231,16 @@ class StreamEventMapper
                 timestamp: $event->timestamp,
                 providerErrorType: $event->type,
             );
+        }
+
+        if (ToolInputEventMapper::isIgnoredLifecycle($event)) {
+            return null;
+        }
+
+        $toolInput = ToolInputEventMapper::map($event, $this->capture, $state->context, $index, $agent::class);
+
+        if ($toolInput !== null) {
+            return $toolInput;
         }
 
         // An event type this chain does not map. Record its type (never its
