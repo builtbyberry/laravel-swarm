@@ -1050,3 +1050,42 @@ test('a stale event from an earlier step is not released during a live final ste
     expect($body)->not->toContain('stale-step-text')
         ->and($body)->toContain('Checking');
 });
+
+test('a client that disconnects mid live answer abandons the run, which goes no further (#649)', function () {
+    $abandoned = false;
+    $advancedPastArgs = false;
+    $events = liveFinalAgentEvents();
+    $stream = new StreamableSwarmResponse(
+        runId: 'swarm-run-1',
+        generator: function () use ($events, &$advancedPastArgs): Generator {
+            foreach ($events as $index => $event) {
+                if ($index > 5) {
+                    $advancedPastArgs = true;
+                }
+
+                yield $event;
+            }
+        },
+        onAbandoned: function () use (&$abandoned): void {
+            $abandoned = true;
+        },
+        topology: 'sequential',
+        nativeChatProtocolsEnabled: true,
+        liveFinalAgent: true,
+    );
+
+    $_SERVER['LARAVEL_OCTANE'] = true;
+    $chunks = ($stream->usingVercelDataProtocol('ui-message', NativeProtocolProjection::FinalAgent)->toResponse(request())->getCallback())();
+
+    // Read until the first live text frame, then disconnect.
+    while ($chunks->valid() && ! str_contains((string) $chunks->current(), '"text-delta"')) {
+        $chunks->next();
+    }
+
+    unset($chunks);
+    gc_collect_cycles();
+    unset($_SERVER['LARAVEL_OCTANE']);
+
+    expect($abandoned)->toBeTrue()
+        ->and($advancedPastArgs)->toBeFalse();
+});

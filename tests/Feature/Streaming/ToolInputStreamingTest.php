@@ -6,6 +6,7 @@ use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
 use BuiltByBerry\LaravelSwarm\Audit\ResolvedCapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
+use BuiltByBerry\LaravelSwarm\Enums\NativeProtocolProjection;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepStart;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputDelta;
@@ -286,3 +287,31 @@ test('a step or output guardrail keeps the final step buffered, so a rejected an
     'output guardrail' => ['output', BlocksOutputWhenContains::class],
     'step guardrail' => ['step', BlocksStepWhenIndex::class],
 ]);
+
+test('an output guardrail that rejects the answer leaves a FinalAgent client with no answer frames, only an error (#649)', function () {
+    config()->set('swarm.streaming.native_protocols.enabled', true);
+    config()->set('swarm.guardrails.output', [BlocksOutputWhenContains::class]);
+    app()->bind(BlocksOutputWhenContains::class, fn (): BlocksOutputWhenContains => new BlocksOutputWhenContains('looking up'));
+
+    $_SERVER['LARAVEL_OCTANE'] = true;
+
+    try {
+        $response = ToolInputStreamSwarm::make()->stream('tool-input-task')
+            ->usingVercelDataProtocol('ui-message', NativeProtocolProjection::FinalAgent)
+            ->toResponse(request());
+        $body = '';
+
+        try {
+            foreach (($response->getCallback())() as $chunk) {
+                $body .= $chunk;
+            }
+        } catch (Throwable) {
+        }
+    } finally {
+        unset($_SERVER['LARAVEL_OCTANE']);
+    }
+
+    expect($body)->not->toContain('looking up')
+        ->and($body)->not->toContain('"tool-input-start"')
+        ->and($body)->toContain('"type":"error"');
+});
