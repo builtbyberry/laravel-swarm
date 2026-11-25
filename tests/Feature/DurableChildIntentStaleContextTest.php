@@ -6,6 +6,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseContextStore;
 use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
 use BuiltByBerry\LaravelSwarm\Responses\DurableChildRun;
@@ -167,4 +168,21 @@ test('a child intent recorded from a stale read keeps a signal accepted on anoth
         ->and($store->lockingReads[$runId] ?? 0)->toBeGreaterThan($lockingReadsBefore);
 
     childIntentStaleContextAssertChildRecorded($runId, $child, $context, 'review:650');
+});
+
+test('a child intent whose parent context is missing records nothing: the wait and lineage written before the read roll back (#650)', function (): void {
+    $runId = childIntentStaleContextParent();
+    $generation = DB::table('swarm_durable_runs')->where('run_id', $runId)->value('wait_generation');
+    $waits = DB::table('swarm_durable_waits')->where('run_id', $runId)->orderBy('id')->pluck('name')->all();
+    DB::table('swarm_contexts')->where('run_id', $runId)->delete();
+
+    expect(fn () => app(DurableSwarmManager::class)->dispatchChildSwarm($runId, FakeSequentialSwarm::class, 'child-task'))
+        ->toThrow(SwarmException::class, "Durable run [{$runId}] is missing its persisted context.");
+
+    // The child's wait and lineage row are written before the parent context is read;
+    // the failed read rolls them back with the rest of the transaction.
+    expect(DB::table('swarm_durable_waits')->where('run_id', $runId)->orderBy('id')->pluck('name')->all())->toBe($waits)
+        ->and(DB::table('swarm_durable_runs')->where('run_id', $runId)->value('wait_generation'))->toBe($generation)
+        ->and(DB::table('swarm_durable_child_runs')->where('parent_run_id', $runId)->count())->toBe(0)
+        ->and(DB::table('swarm_durable_runs')->where('parent_run_id', $runId)->count())->toBe(0);
 });
