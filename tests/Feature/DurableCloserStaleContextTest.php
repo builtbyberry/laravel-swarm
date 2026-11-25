@@ -194,3 +194,65 @@ test('findForUpdate() reads a context row exactly as find() does, and a missing 
         ->and($store->findForUpdate($runId)['metadata']['marker'])->toBe(['nested' => true])
         ->and($store->findForUpdate('missing-run'))->toBeNull();
 });
+
+/**
+ * #649: cancel() writes the run's context back and publishes terminal history from it;
+ * pause() publishes paused history from it. Both read it with a locking read once the
+ * run row is written. On SQLite this proves which read is used and what is persisted
+ * when an ordinary read is stale; the real snapshot case is in
+ * tests/ProcessConcurrency/DurableJoinOpenWaitTest.php.
+ */
+function lifecycleStaleContextAssertHistoryKept(string $runId, string $status): void
+{
+    $history = app(RunHistoryStore::class)->find($runId);
+
+    expect($history['status'] ?? null)->toBe($status)
+        ->and($history['context']['data']['fan_out_step'] ?? null)->toBe('fan-out-output', json_encode($history['context'] ?? null))
+        ->and($history['metadata']['fan_out_marker'] ?? null)->toBe('saved-by-fan-out')
+        ->and(collect($history['context']['artifacts'] ?? [])->firstWhere('name', 'fan-out-artifact')['content'] ?? null)->toBe('fan-out-artifact-content');
+}
+
+test('a run cancelled from a stale snapshot keeps the context a fan-out committed since (#649)', function (bool $openWait): void {
+    $runId = FakeSequentialSwarm::make()->dispatchDurable('lifecycle-stale-context-task')->runId;
+    $manager = app(DurableSwarmManager::class);
+
+    if ($openWait) {
+        $manager->wait($runId, 'approval');
+    }
+
+    closerStaleContextFanOutAfterSnapshot($runId);
+
+    $result = $manager->cancel($runId);
+
+    expect($result->status->value)->toBe('cancelled')
+        ->and($manager->find($runId)['status'])->toBe('cancelled');
+
+    closerStaleContextAfterClose($runId);
+    lifecycleStaleContextAssertHistoryKept($runId, 'cancelled');
+})->with([
+    'pending run' => [false],
+    'run waiting on a wait' => [true],
+]);
+
+test('a run paused from a stale snapshot publishes history with the context a fan-out committed since (#649)', function (bool $openWait): void {
+    $runId = FakeSequentialSwarm::make()->dispatchDurable('lifecycle-stale-context-task')->runId;
+    $manager = app(DurableSwarmManager::class);
+
+    if ($openWait) {
+        $manager->wait($runId, 'approval');
+    }
+
+    closerStaleContextFanOutAfterSnapshot($runId);
+
+    $result = $manager->pause($runId);
+
+    expect($result->status->value)->toBe('paused')
+        ->and($manager->find($runId)['status'])->toBe('paused');
+
+    lifecycleStaleContextAssertHistoryKept($runId, 'paused');
+
+    expect(closerStaleContextStore()->lockingReads[$runId] ?? 0)->toBeGreaterThanOrEqual(1);
+})->with([
+    'pending run' => [false],
+    'run waiting on a wait' => [true],
+]);

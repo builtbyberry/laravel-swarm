@@ -2460,3 +2460,124 @@ test('the creation_generation migration upgrades populated wait rows on the real
         ->and(joinOpenWaitDbRunStatus($runId))->toBe('pending')
         ->and(joinOpenWaitDbStepRows($runId))->toBe($steps + 1);
 });
+
+/**
+ * Cancels or pauses one run inside an application transaction whose snapshot was taken
+ * (by reading the run's context) before the other worker fanned out, then commits.
+ * Reports what it saw before the action. The isolation level is set, not left to the
+ * server default.
+ */
+function joinOpenWaitDbStaleSnapshotLifecycle(string $runId, string $action, string $dir): Closure
+{
+    return static function () use ($runId, $action, $dir): array {
+        JoinOpenWaitWorker::boot();
+        $mysql = DB::connection()->getDriverName() === 'mysql';
+
+        if ($mysql) {
+            DB::statement('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+        }
+
+        DB::beginTransaction();
+
+        if (! $mysql) {
+            DB::statement('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
+        }
+
+        $markerBefore = app(ContextStore::class)->find($runId)['metadata']['fan_out_marker'] ?? null;
+        LockBarrier::signal($dir, 'snapshot-taken');
+        LockBarrier::await($dir, 'fanout-done');
+        $markerAfter = app(ContextStore::class)->find($runId)['metadata']['fan_out_marker'] ?? null;
+
+        try {
+            $status = match ($action) {
+                'cancel' => app(DurableSwarmManager::class)->cancel($runId)->status->value,
+                'pause' => app(DurableSwarmManager::class)->pause($runId)->status->value,
+            };
+            DB::commit();
+        } catch (Throwable $e) {
+            try {
+                DB::rollBack();
+            } catch (Throwable) {
+            }
+
+            return ['outcome' => 'aborted', 'failure' => LockBarrier::failure($e)];
+        }
+
+        return ['outcome' => $status, 'marker_before' => $markerBefore, 'marker_after' => $markerAfter];
+    };
+}
+
+/**
+ * A step that holds its lease on a parallel run, about to fan out; the other worker's
+ * transaction takes its snapshot first, then the fan-out commits and leaves the run
+ * waiting, then that transaction cancels or pauses the run.
+ *
+ * @return array{0: array<string, mixed>, 1: array<string, mixed>}
+ */
+function joinOpenWaitDbLifecycleAfterFanOut(string $runId, string $action): array
+{
+    $store = app(DurableRunStore::class);
+    $token = (string) $store->acquireLease($runId, 0, 300);
+    $store->markRunning($runId, $token, 0);
+    $dir = joinOpenWaitDbBarrierDir();
+
+    return app(ConcurrencyManager::class)->driver('process')->run([
+        joinOpenWaitDbStaleSnapshotLifecycle($runId, $action, $dir),
+        joinOpenWaitDbFanOutAfter($runId, $token, $dir, 'snapshot-taken', savesContext: true),
+    ]);
+}
+
+/**
+ * The run history, read by run id after the action, carries the fan-out's data, marker
+ * and artifact.
+ */
+function joinOpenWaitDbAssertHistoryKeptFanOut(string $runId, string $status): void
+{
+    $history = app(RunHistoryStore::class)->find($runId);
+    $artifact = collect($history['context']['artifacts'] ?? [])->firstWhere('name', 'fan-out-artifact');
+
+    expect($history['status'] ?? null)->toBe($status, json_encode($history))
+        ->and($history['context']['data']['fan_out_step'] ?? null)->toBe('fan-out-output', json_encode($history['context'] ?? null))
+        ->and($history['metadata']['fan_out_marker'] ?? null)->toBe('saved-by-fan-out')
+        ->and($artifact['content'] ?? null)->toBe('fan-out-artifact-content');
+}
+
+test('a run cancelled inside an application transaction whose snapshot predates a fan-out keeps the context the fan-out saved (#649)', function (): void {
+    $runId = FakeParallelSwarm::make()->dispatchDurable('parallel-durable-task')->runId;
+
+    [$canceller, $fanOut] = joinOpenWaitDbLifecycleAfterFanOut($runId, 'cancel');
+
+    // Under MySQL's REPEATABLE READ the cancelling transaction still misses the fan-out's
+    // context when it cancels; under Postgres' READ COMMITTED it sees it.
+    expect($fanOut)->toBe(['outcome' => 'committed'], json_encode($fanOut))
+        ->and($canceller)->toBe([
+            'outcome' => 'cancelled',
+            'marker_before' => null,
+            'marker_after' => DB::connection()->getDriverName() === 'mysql' ? null : 'saved-by-fan-out',
+        ], json_encode($canceller))
+        ->and(joinOpenWaitDbRunStatus($runId))->toBe('cancelled');
+
+    $context = RunContext::fromPayload((array) app(ContextStore::class)->find($runId));
+
+    expect($context->data['fan_out_step'] ?? null)->toBe('fan-out-output', json_encode($context->toArray()))
+        ->and($context->metadata['fan_out_marker'] ?? null)->toBe('saved-by-fan-out')
+        ->and(collect($context->artifacts)->firstWhere('name', 'fan-out-artifact')?->content)->toBe('fan-out-artifact-content');
+
+    joinOpenWaitDbAssertHistoryKeptFanOut($runId, 'cancelled');
+});
+
+test('a run paused inside an application transaction whose snapshot predates a fan-out publishes history with the context the fan-out saved (#649)', function (): void {
+    $runId = FakeParallelSwarm::make()->dispatchDurable('parallel-durable-task')->runId;
+
+    [$pauser, $fanOut] = joinOpenWaitDbLifecycleAfterFanOut($runId, 'pause');
+
+    expect($fanOut)->toBe(['outcome' => 'committed'], json_encode($fanOut))
+        ->and($pauser)->toBe([
+            'outcome' => 'paused',
+            'marker_before' => null,
+            'marker_after' => DB::connection()->getDriverName() === 'mysql' ? null : 'saved-by-fan-out',
+        ], json_encode($pauser))
+        ->and(joinOpenWaitDbRunStatus($runId))->toBe('paused');
+
+    joinOpenWaitDbAssertHistoryKeptFanOut($runId, 'paused');
+});

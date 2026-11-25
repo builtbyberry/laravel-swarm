@@ -269,6 +269,20 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   before the upgrade is not restored. See
   [upgrade guidance](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#wait-closers-read-the-context-with-a-locking-read).
 
+- **Cancelling or pausing a durable run inside an older application transaction
+  no longer erases or misreports the context a fan-out saved (#649, MySQL).** An
+  immediate cancel writes the run's context back and publishes terminal history
+  from it; an immediate pause publishes paused history from it. On MySQL, inside
+  an application transaction that had already read, both loaded that context
+  from the transaction's older snapshot. A cancel then replaced the data,
+  metadata and artifacts a fan-out committed in between, in the run context and
+  in its history; a pause published history without them. Both now read the
+  context with a locking read (`SELECT ... FOR UPDATE`) after the run row is
+  written, the order a fan-out already uses. What the context and history keep
+  still follows the capture settings. Postgres and SQLite were not affected. No
+  migration, configuration or public contract change. Context already lost
+  before the upgrade is not restored.
+
 - **A paused run cannot resume past a concurrently created wait (#621).** Ordinary
   declared waits and child intents now commit with the step checkpoint. Resume
   can fail loudly inside an application transaction, leaving the run paused and

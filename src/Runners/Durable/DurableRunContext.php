@@ -59,10 +59,10 @@ class DurableRunContext
     }
 
     /**
-     * The context a wait closer merges its outcome into and writes back: read with a
-     * locking read (DatabaseContextStore::findForUpdate()), so it is the latest committed
-     * row and not an application transaction's older MySQL snapshot. Call it inside the
-     * closer's transaction, once the run row is locked.
+     * The context a caller writes back or publishes from: read with a locking read
+     * (DatabaseContextStore::findForUpdate()), so it is the latest committed row and not
+     * an application transaction's older MySQL snapshot. Call it inside the caller's
+     * transaction, once the run row is locked.
      *
      * Durable dispatch requires a DatabaseContextStore
      * (DispatchValidator::ensureDatabaseDurableInfrastructure()), so every durable run

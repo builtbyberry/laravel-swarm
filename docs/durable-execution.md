@@ -605,6 +605,12 @@ hierarchical durable run completes, fails, or is cancelled. Terminal history,
 context, and durable failure metadata follow the normal capture and redaction
 settings.
 
+An immediate cancel writes the terminal context and history from the run's
+latest committed context, read with a locking read once the run row is
+cancelled, so a cancel inside an older application transaction cannot erase
+what a fan-out committed since. An immediate pause publishes its paused history
+from that same latest context.
+
 ## Operational query contract
 
 This section is the **supported durable operational query surface** for
