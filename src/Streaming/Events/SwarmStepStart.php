@@ -6,6 +6,12 @@ namespace BuiltByBerry\LaravelSwarm\Streaming\Events;
 
 final class SwarmStepStart extends SwarmStreamEvent
 {
+    /**
+     * `liveFinalStep` marks the run's final step when nothing can still reject its
+     * content after it streams (no step or output guardrail applies), so a native
+     * chat projection may release that content as it arrives. Serialised only when
+     * true, so every other step-start payload is unchanged.
+     */
     public function __construct(
         public string $id,
         public string $runId,
@@ -14,6 +20,7 @@ final class SwarmStepStart extends SwarmStreamEvent
         public string $agent,
         public ?string $input,
         public int $timestamp,
+        public bool $liveFinalStep = false,
     ) {}
 
     /**
@@ -30,6 +37,7 @@ final class SwarmStepStart extends SwarmStreamEvent
             'agent_class' => $this->agentClass,
             'agent' => $this->agent,
             'input' => $this->input,
+            ...($this->liveFinalStep ? ['live_final_step' => true] : []),
             'timestamp' => $this->timestamp,
         ];
     }
@@ -47,6 +55,7 @@ final class SwarmStepStart extends SwarmStreamEvent
             agent: self::stringValue($payload, 'agent'),
             input: self::nullableStringValue($payload, 'input'),
             timestamp: self::intValue($payload, 'timestamp', self::timestamp()),
+            liveFinalStep: ($payload['live_final_step'] ?? null) === true,
         );
     }
 }

@@ -57,6 +57,21 @@ class SwarmGuardrailRunner
     }
 
     /**
+     * Whether a step or output guardrail applies to this swarm: either can still
+     * reject a step's content after that content has streamed.
+     */
+    public function canRejectStreamedOutput(Swarm $swarm, RunContext $context): bool
+    {
+        foreach ([SwarmStepGuardrail::class, SwarmOutputGuardrail::class] as $contract) {
+            foreach ($this->resolvePhase($contract, $swarm, $context) as $guardrail) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * @template T of object
      *
      * @param  class-string<T>  $contract

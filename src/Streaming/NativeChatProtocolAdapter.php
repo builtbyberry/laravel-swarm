@@ -165,6 +165,13 @@ final class NativeChatProtocolAdapter
         $ended = false;
         $errored = false;
         $openStepIndex = null;
+        // Live: the open step whose content is released as it arrives, whether one
+        // has been seen (it must be the last step), and its text state.
+        $mayStreamLive = $source->streamsFinalAgentLive();
+        $liveStepIndex = null;
+        $liveSeen = false;
+        $liveOpenMessages = [];
+        $liveSuppressedMessages = [];
 
         try {
             foreach ($source as $event) {
@@ -179,9 +186,30 @@ final class NativeChatProtocolAdapter
                 }
 
                 if ($event instanceof SwarmStepStart) {
+                    if ($liveSeen) {
+                        $reason = 'swarm_final_step_not_final';
+                        $this->reportFailure($onFailure, $source, NativeProtocolProjection::FinalAgent, $protocol, $reason);
+                        yield $this->failureProgress($source, NativeProtocolProjection::FinalAgent, $reason, $event);
+                        yield new Error(
+                            id: $event->id,
+                            type: $reason,
+                            message: 'The swarm stream began a step after the step it marked final.',
+                            recoverable: false,
+                            timestamp: $event->timestamp,
+                        );
+                        $errored = true;
+
+                        continue;
+                    }
+
                     $steps++;
                     $current = [];
                     $openStepIndex = $event->stepIndex;
+
+                    if ($mayStreamLive && $event->liveFinalStep) {
+                        $liveStepIndex = $event->stepIndex;
+                        $liveSeen = true;
+                    }
 
                     yield $this->custom($event, $this->finalAgentProgressPayload($event, 'step_started'));
 
@@ -196,6 +224,7 @@ final class NativeChatProtocolAdapter
                     $last = $current;
                     $lastNativeResult = $event->nativeResult;
                     $openStepIndex = null;
+                    $liveStepIndex = null;
 
                     yield $this->custom($event, $this->finalAgentProgressPayload($event, 'step_completed'));
 
@@ -235,7 +264,11 @@ final class NativeChatProtocolAdapter
                         'event_type' => 'projection',
                         'projection' => NativeProtocolProjection::FinalAgent->value,
                     ]);
-                    yield from $this->finalAgentEvents($last);
+
+                    // A live final step already sent its content; close what it left open.
+                    yield from $liveSeen
+                        ? $this->closeOpenMessages($liveOpenMessages)
+                        : $this->finalAgentEvents($last);
                     yield $this->withInvocation(new StreamEnd(
                         id: $event->id,
                         reason: 'stop',
@@ -248,7 +281,19 @@ final class NativeChatProtocolAdapter
                 }
 
                 if ($this->isFinalAgentCandidate($event)) {
-                    $current[] = $event;
+                    if ($liveStepIndex !== null) {
+                        // Only the open live step's own content goes out; a stale event
+                        // from an earlier step is dropped, as the buffered path drops it.
+                        if (($event->stepIndex ?? null) === $liveStepIndex) {
+                            yield from $this->finalAgentEvents([$event], $liveOpenMessages, $liveSuppressedMessages, close: false);
+                        }
+
+                        continue;
+                    }
+
+                    if (! $liveSeen) {
+                        $current[] = $event;
+                    }
                 }
             }
         } catch (Throwable $exception) {
@@ -282,14 +327,18 @@ final class NativeChatProtocolAdapter
     }
 
     /**
+     * Project final-agent content to native frames. The buffered path passes the
+     * whole step at completion and lets it close what it opened; the live path
+     * passes one event at a time with the same text state and closes at the end,
+     * so the two cannot project differently.
+     *
      * @param  array<int, SwarmStreamEvent>  $events
+     * @param  array<string, true>  $openMessages
+     * @param  array<string, true>  $suppressedMessages
      * @return \Generator<int, StreamEvent>
      */
-    private function finalAgentEvents(array $events): \Generator
+    private function finalAgentEvents(array $events, array &$openMessages = [], array &$suppressedMessages = [], bool $close = true): \Generator
     {
-        $openMessages = [];
-        $suppressedMessages = [];
-
         foreach ($events as $event) {
             if ($event instanceof SwarmTextDelta) {
                 if ($event->payloadAvailability !== PayloadAvailability::Available) {
@@ -412,9 +461,22 @@ final class NativeChatProtocolAdapter
             }
         }
 
+        if ($close) {
+            yield from $this->closeOpenMessages($openMessages);
+        }
+    }
+
+    /**
+     * @param  array<string, true>  $openMessages
+     * @return \Generator<int, StreamEvent>
+     */
+    private function closeOpenMessages(array &$openMessages): \Generator
+    {
         foreach (array_keys($openMessages) as $messageId) {
             yield new TextEnd(SwarmStreamEvent::newId(), $messageId, SwarmStreamEvent::timestamp());
         }
+
+        $openMessages = [];
     }
 
     private function isFinalAgentCandidate(SwarmStreamEvent $event): bool

@@ -6,6 +6,25 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
 
 ### Added
 
+- **Tool input streams live as it is written (#649).** With `laravel/ai`
+  v1.4.2 and later, a provider stream reports a tool call's input while the model
+  writes it. Swarm streams it as `swarm_tool_input_start`,
+  `swarm_tool_input_delta` (one fragment of the arguments text) and
+  `swarm_tool_input_error` (a call whose input never completed, such as one the
+  token limit cut off; its tool is not executed), through every streaming path,
+  persisted replay and broadcasting. Before, Swarm dropped all three, so a
+  cut-off tool call was invisible. Fragments and partial input follow output
+  capture: kept under Full (including the partial arguments of a tool that never
+  ran), `null` with `payload_status` `redacted` / `omitted` otherwise. The native
+  chat protocols send them as standard frames (Vercel `tool-input-start` /
+  `tool-input-delta` / `tool-input-error`, AG-UI `TOOL_CALL_START` /
+  `TOOL_CALL_ARGS`), or as custom frames when withheld or when the installed
+  `laravel/ai` predates them. Durable stream batching holds tool-input deltas
+  like text deltas, and `#[WithoutBroadcasting(SwarmToolInputDelta::class)]`
+  keeps them off a broadcast channel. Older `laravel/ai` versions emit none of
+  these events and nothing changes there. See
+  [Tool input as it is written](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/streaming.md#tool-input-as-it-is-written).
+
 - **Eager durable dispatch on commit.** New `swarm.durable.eager_dispatch` key
   (`SWARM_DURABLE_EAGER_DISPATCH`, default `false`). With it on, the next durable
   step or branch job, and each `queue()` `multi_worker` hierarchical branch job,
@@ -123,6 +142,19 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   [Error Handling](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/error-handling.md#native-tool-failures).
 
 ### Changed
+
+- **The `FinalAgent` native chat projection streams the final step live (#649).**
+  For a live sequential stream, the final step's text, tool input and tool calls
+  now reach a Vercel or AG-UI client as the model produces them, in order, when
+  no step or output guardrail can still reject them. With a step or output
+  guardrail, for persisted replay, and with the new
+  `swarm.streaming.native_protocols.final_agent_live` key
+  (`SWARM_NATIVE_CHAT_PROTOCOLS_FINAL_AGENT_LIVE`, default `true`) set to `false`,
+  the answer is buffered until the workflow succeeds, as before. Frames already
+  sent cannot be withdrawn: a failure after them ends the stream with the
+  protocol error terminal. `swarm_step_start` gains `live_final_step: true` on
+  that step only. See
+  [upgrade guidance](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#tool-input-streaming-and-a-live-finalagent-projection).
 
 - **BREAKING: the minimum Laravel is 13.40 (#640).** `illuminate/concurrency` is
   now required at `^13.40`; it was `^13.0`, with an effective floor of 13.16.
@@ -285,6 +317,14 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   a `DatabaseContextStore` subclass no longer applies to these reads. Context
   already lost before the upgrade is not restored. See
   [upgrade guidance](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#wait-closers-read-the-context-with-a-locking-read).
+
+- **Streamed steps no longer log a false "durable record incomplete" warning
+  (#649).** `StreamStart`, `TextStart` and `ReasoningStart`, which Swarm
+  deliberately does not map, were counted as unrecognized stream events, so
+  every real streamed step logged that the durable record was incomplete. They
+  are now skipped quietly; a genuinely unrecognized event still logs the
+  warning. With `laravel/ai` v1.4.2 the new tool-input events had also failed
+  the package's event-inventory test on every latest-dependency lane.
 
 - **A paused run cannot resume past a concurrently created wait (#621).** Ordinary
   declared waits and child intents now commit with the step checkpoint. Resume

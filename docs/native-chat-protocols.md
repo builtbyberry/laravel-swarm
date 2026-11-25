@@ -83,11 +83,26 @@ Workflow progress is emitted as AG-UI `CUSTOM` events named
 | Projection | Live topologies | Output contract | Important omissions |
 | --- | --- | --- | --- |
 | `Workflow` (default) | Sequential, enabled process-parallel, generated hierarchical, static hierarchical | Complete whitelisted workflow progress in `data-swarm` / `CUSTOM`; text remains inside custom data parts, with no standard text/tool parts; a real workflow completion is then followed by one native protocol terminal | A custom data-part renderer is required; a stock AI SDK chat UI shows an empty assistant message; reasoning content is withheld |
-| `FinalAgent` | Sequential only | Standard chat-bubble projection: buffers final-step content until the matching step and workflow both complete, then emits available text, tools, provider activity, and citations through standard native frames | No live partial answer; buffered content is discarded if a later step begins, the final step is unmatched, or the workflow fails |
+| `FinalAgent` | Sequential only | Standard chat-bubble projection of the final step's available text, tool input, tools, provider activity, and citations through standard native frames. Live (the default): those frames stream as the final step produces them, when no step or output guardrail can still reject them. Buffered: emitted once the matching step and workflow both complete | Live: a failure after frames were sent ends the stream with an error after them. Buffered: no live partial answer; buffered content is discarded if a later step begins, the final step is unmatched, or the workflow fails |
 
 `FinalAgent` rejects a non-sequential response before iteration. This prevents a
-failed projection choice from abandoning or terminalizing a live run. While the
-answer is buffered, the adapter continues consuming the source lazily and emits
+failed projection choice from abandoning or terminalizing a live run.
+
+**Live or buffered.** A live sequential stream marks its final step
+(`live_final_step` on that `swarm_step_start`) when no step or output guardrail
+applies, because a guardrail can reject the answer only after it has streamed.
+`FinalAgent` then sends that step's text, tool input (`tool-input-start` /
+`tool-input-delta` / `tool-input-error`, or AG-UI `TOOL_CALL_START` /
+`TOOL_CALL_ARGS`), tool calls and results as they arrive, in the order the model
+produced them, as a plain Laravel AI agent stream does. Frames already sent
+cannot be withdrawn: a later provider failure, timeout or projection error ends
+the stream with the protocol error terminal after them. With any step or output
+guardrail, with `swarm.streaming.native_protocols.final_agent_live` set to
+`false`, for a stream that does not mark its final step (a log written before
+this release), and always for persisted replay (whose log can hold an abandoned
+attempt before a resumed one), the answer is buffered as below.
+
+While the answer is buffered, the adapter continues consuming the source lazily and emits
 only capture-safe `projection_progress` events (`buffering`, `step_started`, and
 `step_completed`), not standard answer frames. A client disconnect can therefore
 still abandon the consumer and trigger the stream's

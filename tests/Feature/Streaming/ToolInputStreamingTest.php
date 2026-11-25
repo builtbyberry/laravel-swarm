@@ -6,13 +6,20 @@ use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
 use BuiltByBerry\LaravelSwarm\Audit\ResolvedCapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepStart;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputDelta;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputError;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputStart;
 use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\ToolInputStreamEditor;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Guardrails\BlocksOutputWhenContains;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Guardrails\BlocksStepWhenIndex;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Streaming\UnknownStreamEvent;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\StaticHierarchicalToolInputStreamSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\ToolInputStreamSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\WithoutToolInputDeltaBroadcastingSwarm;
@@ -237,3 +244,45 @@ test('WithoutBroadcasting can drop tool input deltas from broadcast while replay
 
     expect(array_map(fn (SwarmStreamEvent $event): string => $event->type(), $replayed))->toContain('swarm_tool_input_delta');
 });
+
+test('the sequential runner marks only its final step live, and a live stream projects it live while replay buffers (#649)', function () {
+    config()->set('swarm.streaming.native_protocols.enabled', true);
+    FakeResearcher::fake(['research-out']);
+    FakeWriter::fake(['writer-out']);
+    FakeEditor::fake(['editor-out']);
+
+    $stream = FakeSequentialSwarm::make()->stream('task');
+    $starts = array_values(array_filter(iterator_to_array($stream, false), fn (SwarmStreamEvent $event): bool => $event instanceof SwarmStepStart));
+
+    expect(array_map(fn (SwarmStepStart $start): bool => $start->liveFinalStep, $starts))->toBe([false, false, true])
+        ->and($stream->streamsFinalAgentLive())->toBeTrue()
+        ->and(app(SwarmHistory::class)->replay($stream->runId)->streamsFinalAgentLive())->toBeFalse();
+
+    config()->set('swarm.streaming.native_protocols.final_agent_live', false);
+
+    expect(FakeSequentialSwarm::make()->stream('task')->streamsFinalAgentLive())->toBeFalse();
+});
+
+test('a step or output guardrail keeps the final step buffered, so a rejected answer never reaches the client (#649)', function (string $phase, string $guardrail) {
+    config()->set('swarm.streaming.native_protocols.enabled', true);
+    config()->set("swarm.guardrails.{$phase}", [$guardrail]);
+    app()->bind(BlocksOutputWhenContains::class, fn (): BlocksOutputWhenContains => new BlocksOutputWhenContains('looking up'));
+    app()->bind(BlocksStepWhenIndex::class, fn (): BlocksStepWhenIndex => new BlocksStepWhenIndex(0));
+
+    $stream = ToolInputStreamSwarm::make()->stream('tool-input-task');
+    $events = [];
+
+    try {
+        foreach ($stream as $event) {
+            $events[] = $event;
+        }
+    } catch (Throwable) {
+    }
+
+    $start = collect($events)->first(fn (SwarmStreamEvent $event): bool => $event instanceof SwarmStepStart);
+
+    expect($start->liveFinalStep)->toBeFalse();
+})->with([
+    'output guardrail' => ['output', BlocksOutputWhenContains::class],
+    'step guardrail' => ['step', BlocksStepWhenIndex::class],
+]);

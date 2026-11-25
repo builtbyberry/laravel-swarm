@@ -256,6 +256,41 @@ their transactions finish, run the migration, run
 (use your configured table name), and only then start the new version. Do not
 run that reset once the new version has created any wait.
 
+### Tool input streaming and a live FinalAgent projection
+
+No migration. Two changes reach stream consumers (#649).
+
+**New stream event types.** With `laravel/ai` v1.4.2 and later, streams carry
+`swarm_tool_input_start`, `swarm_tool_input_delta` and `swarm_tool_input_error`.
+A consumer that switches on the event `type` should handle or ignore them; the
+broadcast channel carries them too (drop the deltas with
+`#[WithoutBroadcasting(SwarmToolInputDelta::class)]`). Under Full output capture
+the partial arguments of a tool that never ran are persisted with the run's
+stream events.
+
+Upgrade readers with writers:
+
+- **Rolling Swarm back** after runs wrote these events: an older Swarm reading a
+  database stream log skips the types it does not know, hot and cold, so a replay
+  shows the run without the tool input, including a cut-off call. The cache store
+  returns them as `SwarmUnknownEvent`, whose `toArray()` keeps the original
+  payload.
+- **Rolling `laravel/ai` back** below v1.4.2 while keeping this Swarm: no new
+  events are produced, and replaying a log that holds them still decodes them;
+  the native chat protocols send them as custom frames, since the standard
+  tool-input frames do not exist there.
+
+**`FinalAgent` streams the final step live by default.** A live sequential
+stream projected with `NativeProtocolProjection::FinalAgent` now sends the final
+step's text, tool input and tool calls as they arrive, when no step or output
+guardrail applies. Before, a client saw nothing until the workflow succeeded, so
+a failure produced no answer frames at all; now a failure after frames were sent
+ends the stream with an error after them, as a plain Laravel AI agent stream
+does. A swarm with a step or output guardrail is unchanged: its answer is still
+buffered, so a rejected answer never reaches the client. To keep the
+all-or-nothing answer everywhere, set `SWARM_NATIVE_CHAT_PROTOCOLS_FINAL_AGENT_LIVE=false`.
+Persisted replay always buffers.
+
 ### Wait closers read the context with a locking read
 
 A signal, wait timeout or child outcome now reads the run's context through

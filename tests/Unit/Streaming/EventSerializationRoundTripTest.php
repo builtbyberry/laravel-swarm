@@ -223,6 +223,19 @@ function event_payload_cases(): array
         'input' => null,
         'timestamp' => 1_700_000_007,
     ]];
+    $cases['step_start live final step'] = [SwarmStepStart::class, [
+        'id' => 'evt-ss-3',
+        'invocation_id' => 'inv-ss-3',
+        'node_id' => null,
+        'type' => 'swarm_step_start',
+        'run_id' => 'run-1',
+        'step_index' => 2,
+        'agent_class' => 'App\\Agents\\Writer',
+        'agent' => 'writer',
+        'input' => 'finish it',
+        'live_final_step' => true,
+        'timestamp' => 1_700_000_008,
+    ]];
 
     // SwarmStreamEnd — full + null output / empty usage+metadata.
     $cases['stream_end full'] = [SwarmStreamEnd::class, [
