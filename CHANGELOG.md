@@ -35,7 +35,8 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   New `swarm.streaming.native_protocols.final_agent_live` key
   (`SWARM_NATIVE_CHAT_PROTOCOLS_FINAL_AGENT_LIVE`, default `false`, so nothing
   changes until you set it). With it on, a live sequential stream's final step
-  (its text, tool input and tool calls) reaches a Vercel or AG-UI client as the
+  (its text and tool calls, plus its tool input when
+  `swarm.streaming.tool_input.enabled` is also on) reaches a Vercel or AG-UI client as the
   model produces them, in order, instead of all at once when the workflow
   succeeds. It applies only when no step or output guardrail can still reject
   that content: a configured step or output guardrail, a swarm implementing

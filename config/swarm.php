@@ -698,8 +698,8 @@ return [
             /*
              * Opt-in. Off (the default): the FinalAgent projection buffers the whole
              * answer until the workflow succeeds (all or nothing). On: for a live
-             * sequential stream it sends the final step's text and tool input as
-             * they arrive, the way a plain Laravel AI agent streams, when no step or
+             * sequential stream it sends the final step's text (and tool input, when
+             * swarm.streaming.tool_input.enabled is also on) as they arrive, the way a plain Laravel AI agent streams, when no step or
              * output guardrail can still reject it; a failure after that point ends
              * the stream with an error after the frames already sent. Persisted
              * replay always buffers.

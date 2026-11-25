@@ -48,7 +48,7 @@ final class ToolInputEventMapper
             return true;
         }
 
-        return ! $capture->streamsToolInput() && self::toolInputType($event) !== null;
+        return ! $capture->streamsToolInput() && self::toolInputPayload($event) !== null;
     }
 
     /**
@@ -62,13 +62,13 @@ final class ToolInputEventMapper
         int $stepIndex,
         string $agentClass,
     ): ?SwarmStreamEvent {
-        $type = self::toolInputType($event);
+        $payload = self::toolInputPayload($event);
 
-        if ($type === null || ! $event instanceof StreamEvent) {
+        if ($payload === null || ! $event instanceof StreamEvent) {
             return null;
         }
 
-        $payload = $event->toArray();
+        $type = $payload['type'];
 
         $decision = $capture->outputsDecision($context);
         $availability = PayloadAvailability::fromCaptureDecision($decision);
@@ -125,23 +125,28 @@ final class ToolInputEventMapper
     }
 
     /**
-     * The tool-input wire type of `$event`, or null for anything else. An
-     * unrecognised event's toArray() is foreign code; if it throws, the event is
-     * not tool input and falls through to the caller's never-throw breadcrumb.
+     * The wire payload of a tool-input `$event` (its one toArray() call), or null
+     * for anything else. An unrecognised event's toArray() is foreign code; if it
+     * throws, the event is not tool input and falls through to the caller's
+     * never-throw breadcrumb.
+     *
+     * @return array<string, mixed>|null
      */
-    private static function toolInputType(mixed $event): ?string
+    private static function toolInputPayload(mixed $event): ?array
     {
         if (! $event instanceof StreamEvent) {
             return null;
         }
 
         try {
-            $type = $event->toArray()['type'] ?? null;
+            $payload = $event->toArray();
         } catch (Throwable) {
             return null;
         }
 
-        return in_array($type, ['tool_input_start', 'tool_input_delta', 'tool_input_error'], true) ? $type : null;
+        $type = $payload['type'] ?? null;
+
+        return in_array($type, ['tool_input_start', 'tool_input_delta', 'tool_input_error'], true) ? $payload : null;
     }
 
     /**

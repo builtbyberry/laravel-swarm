@@ -369,8 +369,9 @@ the default-off Swarm adapter. The workflow projection supports every live
 topology, including enabled process-parallel multiplexing, without inventing a
 global branch order. The final-agent projection is sequential-only and buffers
 until workflow success; opt in with `swarm.streaming.native_protocols.final_agent_live`
-to stream the final step's text and tool input live when no step or output
-guardrail can still reject them. See [Vercel and AG-UI protocol projection](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/native-chat-protocols.md)
+to stream the final step's text (and, with `swarm.streaming.tool_input.enabled`
+also on, its tool input) live when no step or output guardrail can still reject
+them. See [Vercel and AG-UI protocol projection](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/native-chat-protocols.md)
 for examples, identity rules, capture behavior, replay authorization, and exact
 approval/error limits.
 
