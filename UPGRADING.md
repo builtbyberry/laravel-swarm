@@ -267,16 +267,20 @@ read returned that transaction's older snapshot, and writing it back could erase
 context a fan-out had committed since (#636). No migration or configuration is
 needed, and code that only uses the package's public contracts needs no change.
 
+An immediate cancel and an immediate pause read the context the same way, once the
+run row is written: a cancel writes it back as the terminal context, and both publish
+history from it (#649).
+
 **`DatabaseContextStore` subclasses.** `DatabaseContextStore` is `@internal`; if you
 subclass it (unsupported), two things changed:
 
 - `find()` and `findForUpdate()` now decode a row through one protected method,
   `hydrateContextRow(object $record, string $runId): array`. A subclass that
   changed how `find()` decodes a row must move that change into
-  `hydrateContextRow()`: the closers read through `findForUpdate()`, not `find()`,
-  so an override of `find()` alone no longer applies to them. A subclass that
-  overrides `findForUpdate()` must keep it a locking read on the closer's
-  connection.
+  `hydrateContextRow()`: the closers, an immediate cancel and an immediate pause
+  read through `findForUpdate()`, not `find()`, so an override of `find()` alone no
+  longer applies to them. A subclass that overrides `findForUpdate()` must keep it a
+  locking read on the caller's connection.
 - A subclass that already declares a method named `findForUpdate()` or
   `hydrateContextRow()` must match the new signatures, or PHP refuses to load it.
 

@@ -276,12 +276,15 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   an application transaction that had already read, both loaded that context
   from the transaction's older snapshot. A cancel then replaced the data,
   metadata and artifacts a fan-out committed in between, in the run context and
-  in its history; a pause published history without them. Both now read the
-  context with a locking read (`SELECT ... FOR UPDATE`) after the run row is
+  in its history; a pause published history without them. The `SwarmCancelled`
+  and `SwarmPaused` event metadata came from the same context. Cancel and pause
+  now read the context with a locking read (`SELECT ... FOR UPDATE`) after the run row is
   written, the order a fan-out already uses. What the context and history keep
   still follows the capture settings. Postgres and SQLite were not affected. No
-  migration, configuration or public contract change. Context already lost
-  before the upgrade is not restored.
+  migration, configuration or public contract change; an override of `find()` in
+  a `DatabaseContextStore` subclass no longer applies to these reads. Context
+  already lost before the upgrade is not restored. See
+  [upgrade guidance](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#wait-closers-read-the-context-with-a-locking-read).
 
 - **A paused run cannot resume past a concurrently created wait (#621).** Ordinary
   declared waits and child intents now commit with the step checkpoint. Resume
