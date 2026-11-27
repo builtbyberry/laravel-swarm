@@ -339,10 +339,11 @@ Swarm streams emit typed events, including:
 | Type | Role |
 | --- | --- |
 | `swarm_stream_start` | Run metadata and captured input. |
-| `swarm_step_start` | Step lifecycle start with captured step input. |
+| `swarm_step_start` | Step lifecycle start with captured step input; `live_final_step: true` on a live sequential stream's final step when `swarm.streaming.native_protocols.final_agent_live` is enabled (opt-in) and no step or output guardrail applies (see [native chat protocols](native-chat-protocols.md#choose-a-projection)). |
 | `swarm_text_delta` / `swarm_text_end` | Final-agent text chunks and close marker with native content-block `message_id` and explicit `payload_status` when known. |
 | `swarm_reasoning_delta` / `swarm_reasoning_end` | Final-agent reasoning stream events. |
 | `swarm_tool_call` / `swarm_tool_result` | Final-agent tool invocation and results with explicit `payload_status` when known. |
+| `swarm_tool_input_start` / `swarm_tool_input_delta` / `swarm_tool_input_error` | A tool call's input as the model writes it: the start (`tool_id`, `tool_name`), each fragment of the arguments text (`delta`), and a call whose input never completed (`input`, `error`), whose tool was not executed. Streamed when `swarm.streaming.tool_input.enabled` is on (opt-in) and Laravel AI emits them (v1.4.2 and later). |
 | `swarm_provider_tool_event` | Captured native [provider-tool activity](provider-tool-events.md) with identity and explicit data availability. |
 | `swarm_provider_tool_attempt_invalidated` | Durable control marker invalidating older provider activity for one node. |
 | `swarm_citation` | Native source occurrence with captured [citation evidence and availability](citations.md). |
@@ -399,6 +400,34 @@ made availability knowable:
 back to the raw event shape, preserving backward compatibility. Protocol clients
 still receive an explicit unavailable status through custom progress and never a
 standard content/tool frame. See [Vercel and AG-UI protocol projection](native-chat-protocols.md#tools-text-reasoning-citations-and-capture).
+
+### Tool input as it is written
+
+From `laravel/ai` v1.4.2, a provider stream reports a tool call's input while the
+model writes it. This is opt-in: set `swarm.streaming.tool_input.enabled`
+(`SWARM_STREAMING_TOOL_INPUT=true`). Off (the default), Swarm skips those events
+and nothing about a stream changes. On, Swarm streams it live through every
+streaming path (sequential, hierarchical, static hierarchical, process-parallel
+and durable per-node streaming), persists it for replay, and broadcasts it:
+
+- `swarm_tool_input_start` opens the input for `tool_id` / `tool_name`.
+- `swarm_tool_input_delta` carries one fragment of the arguments text. Joining a
+  tool's fragments gives the arguments the matching `swarm_tool_call` carries
+  decoded.
+- `swarm_tool_input_error` reports a call whose input never completed, for
+  example one the token limit cut off. Its tool was **not executed**: no
+  `swarm_tool_call` or `swarm_tool_result` follows for that `tool_id`, and the
+  step's memory snapshot records only the calls that ran.
+
+Fragments and the partial `input` follow output capture. Under Full they are
+kept as written, including the partial arguments of a tool that never ran.
+Under Redact and Skip they are `null` with `payload_status` `redacted` or
+`omitted`: a fragment can end inside a key, so it cannot be redacted key by key
+the way decoded arguments are. The `error` text follows the tool-result error
+policy. Tool-input deltas are frequent; a swarm can keep them off the broadcast
+channel with `#[WithoutBroadcasting(SwarmToolInputDelta::class)]` while the
+stream and replay keep them. Durable stream batching holds them like text
+deltas.
 
 ### Tool calls (including MCP tools)
 

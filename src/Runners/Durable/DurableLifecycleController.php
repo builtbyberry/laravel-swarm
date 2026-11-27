@@ -61,7 +61,11 @@ class DurableLifecycleController
             $updated = $this->runs->requireRun($runId);
 
             if ($updated['status'] === 'paused') {
-                $context = $this->runs->loadContext($runId);
+                // The paused history is published from this context. The run row is
+                // written above, so a locking read here returns the latest committed
+                // context, not an application transaction's older snapshot that
+                // predates a fan-out.
+                $context = $this->runs->loadContextForUpdate($runId);
                 $this->historyStore->syncDurableState($runId, 'paused', $this->capture->context($context), $context->metadata, $this->runs->ttlSeconds(), false);
             }
 
@@ -251,7 +255,11 @@ class DurableLifecycleController
             $updated = $this->runs->requireRun($runId);
 
             if ($updated['status'] === 'cancelled') {
-                $context = $this->runs->loadContext($runId);
+                // This context is written back whole and published as terminal
+                // history. The run row is written above, so a locking read here
+                // returns the latest committed context; an older snapshot would erase
+                // what a fan-out committed since.
+                $context = $this->runs->loadContextForUpdate($runId);
                 $this->contextStore->put($this->capture->terminalContext($context), $this->runs->ttlSeconds());
                 $this->historyStore->syncDurableState($runId, 'cancelled', $this->capture->context($context), $context->metadata, $this->runs->ttlSeconds(), true);
             }

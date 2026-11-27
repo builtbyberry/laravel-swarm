@@ -79,14 +79,14 @@ class DatabaseContextStore implements ContextStore
      * the context is read and then written back in the fan-out's lock order: run row,
      * then context.
      *
-     * A wait closer reads the context this way before it merges its outcome and writes
-     * the row back with put(). A plain find() inside an application transaction on MySQL
+     * A caller reads the context this way before it writes the row back with put(), or
+     * publishes history from it. A plain find() inside an application transaction on MySQL
      * (REPEATABLE READ) reads that transaction's snapshot, which can predate a fan-out
      * committed since; writing it back would erase the fan-out's data, metadata and
      * artifacts. A locking read returns the latest committed row instead. Postgres
      * (READ COMMITTED) reads each statement fresh. SQLite drops the lock clause, so
      * there the caller's transaction must already hold the database's write lock: it
-     * has written before this read (each wait closer has written its wait row).
+     * has written before this read.
      *
      * The row is decoded exactly as find() decodes it, through hydrateContextRow().
      *

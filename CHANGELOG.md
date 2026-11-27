@@ -6,6 +6,48 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
 
 ### Added
 
+- **Opt-in: tool input streams live as it is written (#649).** With `laravel/ai`
+  v1.4.2 and later, a provider stream reports a tool call's input while the model
+  writes it. New `swarm.streaming.tool_input.enabled` key
+  (`SWARM_STREAMING_TOOL_INPUT`, default `false`): off, Swarm skips those events,
+  so streams, replay, broadcasts and context-growth event counts are exactly as
+  before. On, Swarm streams it as `swarm_tool_input_start`,
+  `swarm_tool_input_delta` (one fragment of the arguments text) and
+  `swarm_tool_input_error` (a call whose input never completed, such as one the
+  token limit cut off; its tool is not executed), through every streaming path,
+  persisted replay and broadcasting, which makes a cut-off tool call visible. Fragments and partial input follow output
+  capture: kept under Full (including the partial arguments of a tool that never
+  ran), `null` with `payload_status` `redacted` / `omitted` otherwise. The
+  `FinalAgent` native chat projection sends them as standard frames (Vercel
+  `tool-input-start` / `tool-input-delta` / `tool-input-error`; AG-UI
+  `TOOL_CALL_START` / `TOOL_CALL_ARGS`, and `TOOL_CALL_END` with an error
+  `TOOL_CALL_RESULT` for a cut-off call), or as custom frames when withheld or
+  when the installed `laravel/ai` predates them; the `Workflow` projection
+  carries them as `tool_input_*` workflow progress. With it on, each fragment is
+  one more streamed event: it counts toward `swarm.context_growth` event budgets
+  and is one more replay row and broadcast. Durable stream batching holds tool-input deltas
+  like text deltas, and `#[WithoutBroadcasting(SwarmToolInputDelta::class)]`
+  keeps them off a broadcast channel. Older `laravel/ai` versions emit none of
+  these events and nothing changes there. See
+  [Tool input as it is written](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/streaming.md#tool-input-as-it-is-written).
+
+- **Opt-in live answers for the `FinalAgent` native chat projection (#649).**
+  New `swarm.streaming.native_protocols.final_agent_live` key
+  (`SWARM_NATIVE_CHAT_PROTOCOLS_FINAL_AGENT_LIVE`, default `false`, so nothing
+  changes until you set it). With it on, a live sequential stream's final step
+  (its text and tool calls, plus its tool input when
+  `swarm.streaming.tool_input.enabled` is also on) reaches a Vercel or AG-UI client as the
+  model produces them, in order, instead of all at once when the workflow
+  succeeds. It applies only when no step or output guardrail can still reject
+  that content: a configured step or output guardrail, a swarm implementing
+  `DefinesGuardrails` or a child run that inherits its parent's guardrails keeps
+  the answer buffered, as do persisted and in-memory replay. Frames already sent
+  cannot be withdrawn, so a failure after them ends the stream with the protocol
+  error terminal. `swarm_step_start` gains `live_final_step: true` on that step
+  only, and a step that begins after it ends the projection with the new
+  `swarm_final_step_not_final` reason. See
+  [Vercel and AG-UI protocol projection](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/native-chat-protocols.md#choose-a-projection).
+
 - **Eager durable dispatch on commit.** New `swarm.durable.eager_dispatch` key
   (`SWARM_DURABLE_EAGER_DISPATCH`, default `false`). With it on, the next durable
   step or branch job, and each `queue()` `multi_worker` hierarchical branch job,
@@ -281,6 +323,31 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   row must move that into the new `hydrateContextRow()`. Context already lost
   before the upgrade is not restored. See
   [upgrade guidance](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#wait-closers-read-the-context-with-a-locking-read).
+
+- **Cancelling or pausing a durable run inside an older application transaction
+  no longer erases or misreports the context a fan-out saved (#649, MySQL).** An
+  immediate cancel writes the run's context back and publishes terminal history
+  from it; an immediate pause publishes paused history from it. On MySQL, inside
+  an application transaction that had already read, both loaded that context
+  from the transaction's older snapshot. A cancel then replaced the data,
+  metadata and artifacts a fan-out committed in between, in the run context and
+  in its history; a pause published history without them. The `SwarmCancelled`
+  and `SwarmPaused` event metadata came from the same context. Cancel and pause
+  now read the context with a locking read (`SELECT ... FOR UPDATE`) after the run row is
+  written, the order a fan-out already uses. What the context and history keep
+  still follows the capture settings. Postgres and SQLite were not affected. No
+  migration, configuration or public contract change; an override of `find()` in
+  a `DatabaseContextStore` subclass no longer applies to these reads. Context
+  already lost before the upgrade is not restored. See
+  [upgrade guidance](https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#wait-closers-read-the-context-with-a-locking-read).
+
+- **Streamed steps no longer log a false "durable record incomplete" warning
+  (#649).** `StreamStart`, `TextStart` and `ReasoningStart`, which Swarm
+  deliberately does not map, were counted as unrecognized stream events, so
+  every real streamed step logged that the durable record was incomplete. They
+  are now skipped quietly; a genuinely unrecognized event still logs the
+  warning. With `laravel/ai` v1.4.2 the new tool-input events had also failed
+  the package's event-inventory test on every latest-dependency lane.
 
 - **A paused run cannot resume past a concurrently created wait (#621).** Ordinary
   declared waits and child intents now commit with the step checkpoint. Resume

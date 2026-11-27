@@ -26,12 +26,16 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamError;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputDelta;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputError;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputStart;
 use BuiltByBerry\LaravelSwarm\Streaming\Parallel\ParallelProcessStreamTransport;
 use BuiltByBerry\LaravelSwarm\Streaming\Parallel\ParallelStreamSession;
 use BuiltByBerry\LaravelSwarm\Streaming\StreamEventIdentity;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Telemetry\SwarmTelemetryDispatcher;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\ToolInputStreamEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\ParallelStreamBootstrapFailureWorker;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Protocols\AgentUserInteractionClient;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Protocols\VercelDataStreamClient;
@@ -46,6 +50,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\ParallelLiveStreamGuardedSwa
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\ParallelLiveStreamOversizedSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\ParallelLiveStreamSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\ParallelProviderErrorStreamSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\ParallelToolInputStreamSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Support\SkippingAuditCapturePolicy;
 use Illuminate\Broadcasting\AnonymousEvent;
 use Illuminate\Broadcasting\Channel;
@@ -735,4 +740,51 @@ test('the absolute deadline continues while a consumer holds an unacknowledged e
         }
     })->toThrow(SwarmTimeoutException::class);
     removeParallelStreamMarkers($path);
+});
+
+test('tool input crosses the process transport per branch, with reused native ids kept apart and capture applied (#649)', function (): void {
+    config()->set('swarm.streaming.tool_input.enabled', true);
+    $isToolInput = fn ($event): bool => $event instanceof SwarmToolInputStart
+        || $event instanceof SwarmToolInputDelta
+        || $event instanceof SwarmToolInputError;
+
+    $response = ParallelToolInputStreamSwarm::make()->stream('tool-input-process-task')->storeForReplay();
+    $live = array_values(array_filter(iterator_to_array($response, false), $isToolInput));
+    $replayed = array_values(array_filter(iterator_to_array(app(StreamEventStore::class)->events($response->runId), false), $isToolInput));
+
+    foreach (['parallel:0', 'parallel:1'] as $branch) {
+        $own = array_values(array_filter($live, fn ($event): bool => $event->branchId === $branch));
+
+        expect(array_map(fn ($event): string => $event->type(), $own))->toBe([
+            'swarm_tool_input_start', 'swarm_tool_input_delta', 'swarm_tool_input_delta',
+            'swarm_tool_input_start', 'swarm_tool_input_delta', 'swarm_tool_input_error',
+        ])
+            ->and($own[1]->delta.$own[2]->delta)->toBe('{"query":"'.ToolInputStreamEditor::ARGUMENT_SECRET.'"}')
+            ->and($own[5]->error)->toBe(ToolInputStreamEditor::ERROR_SECRET)
+            ->and(array_unique(array_map(fn ($event) => $event->attemptId, $own)))->toHaveCount(1);
+    }
+
+    // Both branches reuse the same native ids; storage identity keeps all twelve apart.
+    expect(array_unique(array_map(fn ($event): string => $event->toArray()['id'], $live)))->toHaveCount(6)
+        ->and(array_unique(array_map(StreamEventIdentity::forEvent(...), $replayed)))->toHaveCount(12)
+        ->and(array_map(fn ($event): array => $event->toArray(), $replayed))
+        ->toEqualCanonicalizing(array_map(fn ($event): array => $event->toArray(), $live));
+
+    config()->set('swarm.capture.outputs', false);
+    $redacted = ParallelToolInputStreamSwarm::make()->stream('tool-input-redacted-task')->storeForReplay();
+    $redactedLive = array_values(array_filter(iterator_to_array($redacted, false), $isToolInput));
+    $redactedReplay = array_values(array_filter(iterator_to_array(app(StreamEventStore::class)->events($redacted->runId), false), $isToolInput));
+
+    foreach ([$redactedLive, $redactedReplay] as $events) {
+        expect($events)->toHaveCount(12);
+
+        foreach ($events as $event) {
+            expect($event->toArray()['payload_status'])->toBe('redacted');
+        }
+
+        $encoded = json_encode(array_map(fn ($event): array => $event->toArray(), $events), JSON_THROW_ON_ERROR);
+
+        expect($encoded)->not->toContain(ToolInputStreamEditor::ARGUMENT_SECRET)
+            ->and($encoded)->not->toContain(ToolInputStreamEditor::ERROR_SECRET);
+    }
 });

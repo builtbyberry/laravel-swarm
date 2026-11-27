@@ -120,14 +120,16 @@ re-throwing the original exception.
 
 Persisted replay keeps the same typed stream timeline Laravel Swarm emitted,
 including final-agent non-text events such as `swarm_text_end`,
-`swarm_reasoning_delta`, `swarm_reasoning_end`, `swarm_tool_call`, and
-`swarm_tool_result`.
+`swarm_reasoning_delta`, `swarm_reasoning_end`, `swarm_tool_call`,
+`swarm_tool_result`, and the tool-input events (`swarm_tool_input_start`,
+`swarm_tool_input_delta`, `swarm_tool_input_error`).
 For upstream streamed final-agent events, persisted typed replay preserves the
 upstream event IDs and timestamps so replay records keep source provenance.
 When output capture is disabled, output-bearing fields in text/reasoning/tool
 event payloads are redacted in both live and replayed streams. For function-tool
 payloads, redaction preserves argument/result keys while replacing values with
-`[redacted]`. [Provider-tool data](provider-tool-events.md#capture-and-bounds)
+`[redacted]`. Streamed tool-input fragments are raw arguments text, so redaction
+withholds them whole (`null`, `payload_status` `redacted`). [Provider-tool data](provider-tool-events.md#capture-and-bounds)
 withholds arbitrary keys and values together, with explicit `redacted` availability.
 
 ## Application Run Inspector

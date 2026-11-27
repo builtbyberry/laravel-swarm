@@ -324,8 +324,8 @@ loud at dispatch** — it never silently pins the opt-in and no-ops. Non-durable
 By default every streamed event is its own `INSERT` into `swarm_stream_events`,
 written the moment it is emitted. A token stream therefore costs one write per
 delta. Set `SWARM_DURABLE_STREAM_BATCHING=true`
-(`swarm.durable.stream_batching.enabled`, default `false`) to write text and
-reasoning deltas in batches instead, one multi-row `INSERT` per batch. Try this
+(`swarm.durable.stream_batching.enabled`, default `false`) to write text,
+reasoning and tool-input deltas in batches instead, one multi-row `INSERT` per batch. Try this
 before reaching for the kill switch when the table is hot.
 
 Batching changes **when** a reader of `swarm_stream_events` (such as
@@ -334,10 +334,10 @@ what is written or in what order. With batching on, for each node attempt:
 
 - **The first event is written at once**, so a reader always sees a node start.
 - **Every event that is not a delta is written at once**: a node opening or
-  closing, a tool call or result, a text or reasoning end, a citation, a
+  closing, a tool call or result, a tool input's start or error, a text or reasoning end, a citation, a
   provider-tool event. It goes out in the same `INSERT` as the deltas held before
   it, so order is unchanged.
-- **Text and reasoning deltas are held**, then written together when any of these
+- **Text, reasoning and tool-input deltas are held**, then written together when any of these
   happens first:
   - `max_events` deltas are held (default 50, at most 100);
   - a delta arrives while the oldest held delta is `max_age_ms` old (default 250).
@@ -604,6 +604,12 @@ runtime payloads. Laravel Swarm deletes durable node-output rows when a
 hierarchical durable run completes, fails, or is cancelled. Terminal history,
 context, and durable failure metadata follow the normal capture and redaction
 settings.
+
+An immediate cancel writes the terminal context and history from the run's
+latest committed context, read with a locking read once the run row is
+cancelled, so a cancel inside an older application transaction cannot erase
+what a fan-out committed since. An immediate pause publishes its paused history
+from that same latest context.
 
 ## Operational query contract
 

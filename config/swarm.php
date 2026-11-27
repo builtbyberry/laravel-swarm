@@ -695,6 +695,27 @@ return [
              * projection and added tenant authorization around persisted replay.
              */
             'enabled' => filter_var(env('SWARM_NATIVE_CHAT_PROTOCOLS_ENABLED', false), FILTER_VALIDATE_BOOLEAN),
+            /*
+             * Opt-in. Off (the default): the FinalAgent projection buffers the whole
+             * answer until the workflow succeeds (all or nothing). On: for a live
+             * sequential stream it sends the final step's text (and tool input, when
+             * swarm.streaming.tool_input.enabled is also on) as they arrive, the way a plain Laravel AI agent streams, when no step or
+             * output guardrail can still reject it; a failure after that point ends
+             * the stream with an error after the frames already sent. Persisted
+             * replay always buffers.
+             */
+            'final_agent_live' => filter_var(env('SWARM_NATIVE_CHAT_PROTOCOLS_FINAL_AGENT_LIVE', false), FILTER_VALIDATE_BOOLEAN),
+        ],
+        /*
+         * Opt-in. laravel/ai v1.4.2+ reports a tool call's input while the model
+         * writes it (one event per fragment of the arguments). Off (the default):
+         * Swarm skips those events, so streams, replay, broadcasts and the
+         * context-growth event count are as before. On: they stream as
+         * swarm_tool_input_start / _delta / _error, stored and broadcast like
+         * other stream events, and count toward swarm.context_growth budgets.
+         */
+        'tool_input' => [
+            'enabled' => filter_var(env('SWARM_STREAMING_TOOL_INPUT', false), FILTER_VALIDATE_BOOLEAN),
         ],
         /*
          * Default-off live multiplexing for parallel topology. This requires
@@ -846,7 +867,7 @@ return [
         /*
          * Batched causal-log writes for durable per-node streaming. Off (the
          * default): every streamed event is its own INSERT into swarm_stream_events,
-         * visible the moment it is emitted. On: text and reasoning deltas are held
+         * visible the moment it is emitted. On: text, reasoning and tool-input deltas are held
          * and written as one multi-row INSERT, cutting the write load that
          * streaming_enabled above otherwise sheds by turning streaming off.
          *
