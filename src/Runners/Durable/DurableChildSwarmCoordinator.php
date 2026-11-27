@@ -118,13 +118,18 @@ class DurableChildSwarmCoordinator
         ]);
 
         $this->connection->transaction(function () use ($parentRunId, $childContext, $childSwarmClass, $waitName, $reason, $metadata, $dedupeKey): void {
-            $parentContext = $this->runs->loadContext($parentRunId);
+            $this->durableRuns->createWait($parentRunId, $waitName, $reason, null, $metadata);
+            $this->durableRuns->createChildRun($parentRunId, $childContext->runId, $childSwarmClass, $waitName, $this->capture->context($childContext)->toArray());
+
+            // The parent context is read only now, with a locking read, once createWait()
+            // holds the parent run: a signal, child outcome or fan-out committed before that
+            // lock is in the row this writes back (#650). Read earlier, or from an
+            // application transaction's older snapshot, the write-back would erase it.
+            $parentContext = $this->runs->loadContextForUpdate($parentRunId);
             $dispatched = is_array($parentContext->metadata['durable_dispatched_child_swarms'] ?? null) ? $parentContext->metadata['durable_dispatched_child_swarms'] : [];
             $dispatched[$dedupeKey ?? $childContext->runId] = true;
             $parentContext->mergeMetadata(['durable_dispatched_child_swarms' => $dispatched]);
 
-            $this->durableRuns->createWait($parentRunId, $waitName, $reason, null, $metadata);
-            $this->durableRuns->createChildRun($parentRunId, $childContext->runId, $childSwarmClass, $waitName, $this->capture->context($childContext)->toArray());
             $this->contextStore->put($this->capture->activeContext($parentContext), $this->runs->ttlSeconds());
             $this->historyStore->syncDurableState($parentRunId, 'waiting', $this->capture->context($parentContext), $parentContext->metadata, $this->runs->ttlSeconds(), false);
         }, 3);
