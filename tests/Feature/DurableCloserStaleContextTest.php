@@ -225,14 +225,14 @@ test('a run cancelled from a stale snapshot keeps the context a fan-out committe
         $manager->wait($runId, 'approval');
     }
 
-    closerStaleContextFanOutAfterSnapshot($runId);
+    $lockingReads = closerStaleContextFanOutAfterSnapshot($runId);
 
     $result = $manager->cancel($runId);
 
     expect($result->status->value)->toBe('cancelled')
         ->and($manager->find($runId)['status'])->toBe('cancelled');
 
-    closerStaleContextAfterClose($runId);
+    closerStaleContextAfterClose($runId, $lockingReads);
     lifecycleStaleContextAssertHistoryKept($runId, 'cancelled');
 })->with([
     'pending run' => [false],
@@ -247,7 +247,7 @@ test('a run paused from a stale snapshot publishes history with the context a fa
         $manager->wait($runId, 'approval');
     }
 
-    closerStaleContextFanOutAfterSnapshot($runId);
+    $lockingReads = closerStaleContextFanOutAfterSnapshot($runId);
 
     $result = $manager->pause($runId);
 
@@ -256,7 +256,7 @@ test('a run paused from a stale snapshot publishes history with the context a fa
 
     lifecycleStaleContextAssertHistoryKept($runId, 'paused');
 
-    expect(closerStaleContextStore()->lockingReads[$runId] ?? 0)->toBeGreaterThanOrEqual(1);
+    expect(closerStaleContextStore()->lockingReads[$runId] ?? 0)->toBeGreaterThan($lockingReads);
 })->with([
     'pending run' => [false],
     'run waiting on a wait' => [true],
