@@ -102,14 +102,19 @@ class ComplianceParentSwarm implements Swarm, DispatchesChildSwarms
 }
 ```
 
-The declared child is converted into durable child dispatch intent after a
-checkpoint, so the parent can recover without replaying the provider call that
-created the intent.
+The declared child intent is committed with the step checkpoint, so the parent
+can recover a committed intent without replaying the provider call that created
+it. Child dispatch runs after commit.
 
 ## What Happens At Runtime
 
 Dispatching a child checkpoints the parent into a durable child wait. The child
 durable run is dispatched with its own run ID and runtime state.
+
+The child is recorded into the parent's latest committed context, read once the
+parent run is locked, not from an earlier read or your transaction's older view.
+A signal, child outcome or fan-out committed on the parent before that lock is
+kept (#650).
 
 When the child reaches a terminal state, recovery reconciles the child row,
 writes the terminal status to parent metadata at

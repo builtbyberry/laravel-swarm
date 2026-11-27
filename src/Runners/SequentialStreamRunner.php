@@ -179,6 +179,7 @@ class SequentialStreamRunner
             topology: $topology->value,
             nativeChatProtocolsEnabled: (bool) $this->config->get('swarm.streaming.native_protocols.enabled', false),
             onNativeProtocolFailure: NativeProtocolFailureReporter::callback($this->events),
+            liveFinalAgent: (bool) $this->config->get('swarm.streaming.native_protocols.final_agent_live', false),
         );
     }
 

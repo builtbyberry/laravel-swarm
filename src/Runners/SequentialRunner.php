@@ -26,6 +26,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\StreamEventMapper;
 use BuiltByBerry\LaravelSwarm\Streaming\StreamStepAccumulator;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
+use BuiltByBerry\LaravelSwarm\Support\AgentResponseOutput;
 use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\NativeAgentInvoker;
@@ -33,6 +34,7 @@ use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use BuiltByBerry\LaravelSwarm\Support\SwarmPayloadLimits;
 use Generator;
+use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Laravel\Ai\Contracts\Agent;
 use Psr\Log\LoggerInterface;
 use Throwable;
@@ -58,7 +60,19 @@ class SequentialRunner
         protected LoggerInterface $logger,
         protected NativeOutcomeValidator $outcomes,
         protected NativeCitationEvidence $citations,
+        protected ?ConfigRepository $config = null,
     ) {}
+
+    /**
+     * Whether a FinalAgent native projection may stream a live run's final step:
+     * native protocols on and swarm.streaming.native_protocols.final_agent_live enabled (opt-in).
+     */
+    protected function finalAgentMayStreamLive(): bool
+    {
+        return $this->config !== null
+            && (bool) $this->config->get('swarm.streaming.native_protocols.enabled', false)
+            && (bool) $this->config->get('swarm.streaming.native_protocols.final_agent_live', false);
+    }
 
     public function run(SwarmExecutionState $state): SwarmResponse
     {
@@ -151,6 +165,13 @@ class SequentialRunner
                     agent: $agentName,
                     input: $this->capture->applyInput($input, $state->context),
                     timestamp: SwarmStreamEvent::timestamp(),
+                    // A native chat projection may release the final step's content
+                    // live only when no step or output guardrail can still reject it.
+                    // Decided as that step starts, after its SwarmStepStarted listeners
+                    // ran, and only when a live projection is possible at all.
+                    liveFinalStep: $isFinal
+                        && $this->finalAgentMayStreamLive()
+                        && ! $this->guardrails->canRejectStreamedOutput($state->swarm, $state->context),
                 );
 
                 $startedAt = MonotonicTime::now();
@@ -207,7 +228,7 @@ class SequentialRunner
                         );
 
                     $invocation = $state->context->nativeInvocation("sequential:{$index}", $input, $state->nativeSettingsAttempt);
-                    $stream = NativeAgentInvoker::stream($agent, $invocation);
+                    $stream = NativeAgentInvoker::stream($agent, $invocation, $state->context->runId);
                     $accumulator = new StreamStepAccumulator($snapshot);
 
                     $nativeStreamFailure = null;
@@ -282,10 +303,10 @@ class SequentialRunner
                     );
 
                     $invocation = $state->context->nativeInvocation("sequential:{$index}", $input, $state->nativeSettingsAttempt);
-                    $response = NativeAgentInvoker::prompt($agent, $invocation);
+                    $response = NativeAgentInvoker::prompt($agent, $invocation, $state->context->runId);
                     $this->outcomes->validateResponse($response);
                     $citationEvidence = $this->citations->response($response, $state->context->runId, $index, $agent::class);
-                    $output = (string) $response;
+                    $output = AgentResponseOutput::text($response);
                     $stepUsage = $this->usageFromResponse($response);
                     $this->appendResponseToolCalls($snapshot, $response);
 
@@ -382,7 +403,7 @@ class SequentialRunner
                 );
             }
 
-            ActiveRunContext::exit();
+            ActiveRunContext::exit($state->context->runId);
         }
     }
 
@@ -412,13 +433,13 @@ class SequentialRunner
 
         try {
             $invocation = $state->context->nativeInvocation("sequential:{$index}", $input, $state->nativeSettingsAttempt);
-            $response = NativeAgentInvoker::prompt($agent, $invocation);
+            $response = NativeAgentInvoker::prompt($agent, $invocation, $state->context->runId);
             $this->outcomes->validateResponse($response);
             $citationEvidence = $this->citations->response($response, $state->context->runId, $index, $agent::class);
         } finally {
-            ActiveRunContext::exit();
+            ActiveRunContext::exit($state->context->runId);
         }
-        $output = (string) $response;
+        $output = AgentResponseOutput::text($response);
         $usage = $this->usageFromResponse($response);
         $this->appendResponseToolCalls($snapshot, $response);
         $mergedUsage = $this->mergeUsageReport(
@@ -496,7 +517,7 @@ class SequentialRunner
         $nativeStreamFailure = null;
         try {
             $invocation = $state->context->nativeInvocation("sequential:{$index}", $input, $state->nativeSettingsAttempt);
-            $stream = NativeAgentInvoker::stream($agent, $invocation);
+            $stream = NativeAgentInvoker::stream($agent, $invocation, $state->context->runId);
             foreach ($stream as $event) {
                 $swarmEvent = $this->mapper->map($event, $state, $index, $agent, $accumulator);
 
@@ -513,7 +534,7 @@ class SequentialRunner
                 $this->flushPendingToolCalls($accumulator);
                 $this->breadcrumbUnknownStreamEvents($accumulator->unknownEventClasses, $state->context->runId, $index);
             } finally {
-                ActiveRunContext::exit();
+                ActiveRunContext::exit($state->context->runId);
                 NativeOutcomeValidator::rethrowIfUnsupported($nativeStreamFailure);
             }
         }

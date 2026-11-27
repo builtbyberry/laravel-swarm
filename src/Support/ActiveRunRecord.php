@@ -6,6 +6,7 @@ namespace BuiltByBerry\LaravelSwarm\Support;
 
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Memory\ReplaySwarmMemory;
+use Laravel\Ai\Contracts\Agent;
 
 /**
  * View of the swarm run currently executing an agent, as published by
@@ -26,6 +27,16 @@ final class ActiveRunRecord
 {
     /** @var list<array{invocation: string, id: string, message: string}> */
     public array $declinedToolCalls = [];
+
+    /**
+     * The Laravel AI agent Swarm is currently invoking in this frame, as handed
+     * to {@see NativeAgentInvoker}. Set per invocation, so a frame that drives
+     * several agents in turn always names the live one, and it stays set for a
+     * streamed invocation's whole consumption because that is when its tool
+     * calls run. Read only to tell Swarm's own tool failures from an
+     * application's.
+     */
+    public ?Agent $invokingAgent = null;
 
     public function __construct(
         public readonly string $runId,

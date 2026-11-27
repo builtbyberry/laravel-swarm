@@ -17,6 +17,8 @@ use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamStepCheckpointStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
+use BuiltByBerry\LaravelSwarm\Enums\NativeToolFailurePolicy;
+use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableOutbox;
 use BuiltByBerry\LaravelSwarm\Streaming\Parallel\ParallelProcessStreamTransport;
 use BuiltByBerry\LaravelSwarm\Streaming\Parallel\ParallelStreamLimits;
 use Carbon\CarbonInterface;
@@ -27,6 +29,7 @@ use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Filesystem\Factory;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Database\Connection;
+use Illuminate\Database\Query\Builder;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Throwable;
 
@@ -91,19 +94,22 @@ class SwarmHealthCommand extends Command
                     'driver' => 'n/a',
                     'store' => 'n/a',
                     'status' => 'note',
-                    'details' => 'swarm:relay must run every minute for durable execution to advance — derive withoutOverlapping() minutes from swarm.commands.overlap.lease_seconds',
+                    'details' => 'swarm:relay must drain the durable lane (a bare swarm:relay, or --type=step --type=branch --type=queued_resume) every minute for durable execution to advance — derive withoutOverlapping() minutes from swarm.commands.overlap.lease_seconds',
                 ];
                 $results[] = $this->runOutboxStalenessCheck($config, $connection);
+                $results[] = $this->runHeldBranchesCheck($config, $connection);
                 $results[] = $this->runQueueRoutingCheck($config, $connection);
             }
 
             // Governed-by-default checks: the single-agent/inline front door promises
-            // that globally-configured guardrails, the audit sink, and the capture
-            // policy are wired up. These are container-only checks (no database), so
-            // they run on a bare `swarm:health` alongside the persistence checks.
+            // that globally-configured guardrails, the audit sink, the capture policy
+            // and the native tool-failure policy are wired up. These are
+            // container-only checks (no database), so they run on a bare
+            // `swarm:health` alongside the persistence checks.
             $results[] = $this->runGuardrailResolutionCheck($app, $config);
             $results[] = $this->runAuditSinkCheck($app);
             $results[] = $this->runCapturePolicyCheck($app);
+            $results[] = $this->runNativeToolFailurePolicyCheck($config);
 
             if ($this->option('parallel-streaming') === true
                 || (bool) $config->get('swarm.streaming.parallel.enabled', false)) {
@@ -326,7 +332,7 @@ class SwarmHealthCommand extends Command
                 'driver' => $lease['driver'],
                 'store' => $lease['store'],
                 'status' => 'ok',
-                'details' => "Atomic command lease is available for {$lease['lease_seconds']} seconds",
+                'details' => "Atomic command leases (one per swarm:relay lane, plus swarm:recover) are available for {$lease['lease_seconds']} seconds",
             ];
         } catch (Throwable $exception) {
             $configuredStore = $config->get('swarm.commands.overlap.store');
@@ -431,6 +437,64 @@ class SwarmHealthCommand extends Command
             'details' => $total === 0
                 ? 'no global guardrails configured (swarm.guardrails.input/step/output empty)'
                 : "{$total} global guardrail ref(s) resolve from the container",
+        ];
+    }
+
+    /**
+     * Report the effective native tool-failure policy.
+     *
+     * The per-failure read defaults silently, because it runs inside the
+     * failure path — so this is where an operator finds out which policy is in
+     * effect, whether their configured value was recognised, and whether the
+     * installed laravel/ai even has a recovery to defer to. Without it, "my
+     * tool failed but the run succeeded" has three indistinguishable causes.
+     *
+     * @return array{component: string, driver: string, store: string, status: string, details: string}
+     */
+    protected function runNativeToolFailurePolicyCheck(ConfigRepository $config): array
+    {
+        /** @var mixed $configured */
+        $configured = $config->get('swarm.native_tool_failure_policy');
+
+        // A non-string is as unusable as a typo'd one, and more likely:
+        // SWARM_NATIVE_TOOL_FAILURE_POLICY=false arrives as a real bool. The
+        // listener has to coerce it silently (throwing there would mask the
+        // tool's own exception); this check is not in the failure path, so it
+        // says so instead.
+        $unusableType = $configured === null || is_string($configured)
+            ? null
+            : get_debug_type($configured);
+
+        $parsed = NativeToolFailurePolicy::parse(is_string($configured) ? $configured : null);
+        $invalid = $unusableType !== null || $parsed['invalid'];
+        $recoveryAvailable = class_exists('Laravel\\Ai\\Exceptions\\ToolExecutionException');
+
+        $details = "effective policy=[{$parsed['policy']->value}]";
+
+        $details .= $recoveryAvailable
+            ? '; installed laravel/ai recovers tool failures, so the policy is what decides'
+            : '; installed laravel/ai has no tool-failure recovery, so a failing tool fails the run either way';
+
+        if ($invalid) {
+            $because = $unusableType === null
+                ? 'is not a recognised policy'
+                : "is a [{$unusableType}], not a policy string";
+
+            return [
+                'component' => 'Native tool failures',
+                'driver' => 'n/a',
+                'store' => 'n/a',
+                'status' => 'warning',
+                'details' => 'swarm.native_tool_failure_policy '.$because.'; '.$details.'. Set it to propagate or recover.',
+            ];
+        }
+
+        return [
+            'component' => 'Native tool failures',
+            'driver' => 'n/a',
+            'store' => 'n/a',
+            'status' => 'ok',
+            'details' => $details,
         ];
     }
 
@@ -613,9 +677,12 @@ class SwarmHealthCommand extends Command
                 ];
             }
 
-            // Total pending: unclaimed or with an expired reservation.
+            // Total pending: unclaimed or with an expired reservation. Branches held by
+            // the fan-out cap (swarm.durable.parallel.max_concurrent_branches) are not
+            // relay work and are reported on their own line.
             $totalPending = $connection->table($outboxTable)
                 ->where(fn ($q) => $q->whereNull('reserved_at')->orWhere('reserved_at', '<', $staleThreshold))
+                ->where(fn (Builder $q) => DatabaseDurableOutbox::constrainNotHeld($q))
                 ->count();
 
             if ($totalPending === 0) {
@@ -628,10 +695,13 @@ class SwarmHealthCommand extends Command
                 ];
             }
 
-            // Aging: pending AND older than the warning threshold.
+            // Aging: pending AND due for longer than the warning threshold. Aged by
+            // available_at — the moment the row became dispatchable, which equals
+            // created_at for every row except a branch the fan-out cap released later.
             $agingCount = $connection->table($outboxTable)
-                ->where('created_at', '<', $warningThreshold)
+                ->where('available_at', '<', $warningThreshold)
                 ->where(fn ($q) => $q->whereNull('reserved_at')->orWhere('reserved_at', '<', $staleThreshold))
+                ->where(fn (Builder $q) => DatabaseDurableOutbox::constrainNotHeld($q))
                 ->count();
 
             if ($agingCount > 0) {
@@ -654,6 +724,54 @@ class SwarmHealthCommand extends Command
         } catch (Throwable $exception) {
             return [
                 'component' => 'Outbox relay',
+                'driver' => 'database',
+                'store' => 'n/a',
+                'status' => 'failed',
+                'details' => $exception->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * Branches held back by the durable fan-out cap. Informational: held branches are
+     * released as running branches finish. Before rolling back to a version without
+     * the cap, set the cap to null and run swarm:recover until this shows none.
+     *
+     * @return array{component: string, driver: string, store: string, status: string, details: string}
+     */
+    protected function runHeldBranchesCheck(ConfigRepository $config, Connection $connection): array
+    {
+        $outboxTable = (string) $config->get('swarm.tables.durable_outbox', 'swarm_durable_outbox');
+
+        try {
+            if (! $connection->getSchemaBuilder()->hasTable($outboxTable)) {
+                return [
+                    'component' => 'Held branches',
+                    'driver' => 'database',
+                    'store' => 'n/a',
+                    'status' => 'failed',
+                    'details' => "Outbox table [{$outboxTable}] does not exist. Run migrations.",
+                ];
+            }
+
+            $row = DatabaseDurableOutbox::constrainHeld($connection->table($outboxTable))
+                ->selectRaw('count(*) as held, count(distinct run_id) as runs, min(created_at) as oldest')
+                ->first();
+            $held = (int) ($row->held ?? 0);
+
+            return [
+                'component' => 'Held branches',
+                'driver' => 'database',
+                'store' => 'n/a',
+                'status' => 'ok',
+                'details' => $held === 0
+                    ? 'none held by the fan-out cap'
+                    : "{$held} branch(es) held across ".(int) $row->runs.' run(s), oldest since '.(string) $row->oldest.' UTC'
+                        .' — released as running branches finish; if this does not shrink, check that swarm:recover is scheduled and that no capped run is paused',
+            ];
+        } catch (Throwable $exception) {
+            return [
+                'component' => 'Held branches',
                 'driver' => 'database',
                 'store' => 'n/a',
                 'status' => 'failed',

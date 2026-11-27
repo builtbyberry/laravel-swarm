@@ -17,6 +17,7 @@ use BuiltByBerry\LaravelSwarm\Responses\NativeStepResult;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\AdHocSwarm;
+use BuiltByBerry\LaravelSwarm\Support\AgentResponseOutput;
 use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\NativeAgentInvoker;
@@ -91,11 +92,11 @@ class ParallelRunner
                         ->resolve($swarmClass, $agentClass, $index, $adHoc);
                     $startedAt = MonotonicTime::now();
                     $invocation = $workerContext->nativeInvocation("parallel:{$index}", $input, $attempt);
-                    $response = NativeAgentInvoker::prompt($agent, $invocation);
+                    $response = NativeAgentInvoker::prompt($agent, $invocation, $runId);
                     Container::getInstance()->make(NativeOutcomeValidator::class)->validateResponse($response);
 
                     return [
-                        'output' => (string) $response,
+                        'output' => AgentResponseOutput::text($response),
                         'citation_evidence' => NativeCitationEvidence::forConcurrentWorker($citationLimits)->response($response, $runId, $index, $agentClass)->toArray(),
                         'usage' => $response->usage->toArray(),
                         'class' => $agentClass,
@@ -105,7 +106,7 @@ class ParallelRunner
                         'native_result' => NativeStepResultProjector::fromResolvedLimits($nativeResultLimits)->fromResponse($response)->toArray(),
                     ];
                 } finally {
-                    ActiveRunContext::exit();
+                    ActiveRunContext::exit($runId);
                 }
             };
         }

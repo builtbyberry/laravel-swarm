@@ -120,6 +120,9 @@ every sealed value: cold replay archives have no automatic TTL pruning.
    php artisan swarm:health --durable
    ```
 
+   Re-run the relay until it exits 0: if a scheduled relay takes a lane between
+   batches, that lane is skipped for the run and the command exits 1.
+
 3. Block new swarm dispatches from application traffic and all other producers.
    Let already-running synchronous requests and worker jobs finish, then stop
    queue workers and the scheduler, including compaction. Keep new dispatches

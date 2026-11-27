@@ -308,10 +308,10 @@ test('native invocation preserves legacy positional omission for renamed agent p
         }
     };
 
-    NativeAgentInvoker::prompt($agent, new NativeAgentInvocation('legacy'));
-    NativeAgentInvoker::prompt($agent, new NativeAgentInvocation('override', model: 'gpt-test'));
-    NativeAgentInvoker::stream($agent, new NativeAgentInvocation('legacy'));
-    NativeAgentInvoker::stream($agent, new NativeAgentInvocation('override', provider: 'openai', model: 'gpt-test', timeout: 17));
+    NativeAgentInvoker::prompt($agent, new NativeAgentInvocation('legacy'), 'unit-run');
+    NativeAgentInvoker::prompt($agent, new NativeAgentInvocation('override', model: 'gpt-test'), 'unit-run');
+    NativeAgentInvoker::stream($agent, new NativeAgentInvocation('legacy'), 'unit-run');
+    NativeAgentInvoker::stream($agent, new NativeAgentInvocation('override', provider: 'openai', model: 'gpt-test', timeout: 17), 'unit-run');
 
     expect($agent->promptArgumentCounts)->toBe([1, 4])
         ->and($agent->streamArgumentCounts)->toBe([1, 5]);

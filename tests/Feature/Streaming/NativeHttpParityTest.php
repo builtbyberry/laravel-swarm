@@ -17,6 +17,8 @@ use BuiltByBerry\LaravelSwarm\Tests\Feature\Streaming\Fixtures\NativeFailoverAge
 use BuiltByBerry\LaravelSwarm\Tests\Feature\Streaming\Fixtures\NativeHttpAgent;
 use BuiltByBerry\LaravelSwarm\Tests\Feature\Streaming\Fixtures\NativeLimitedAgent;
 use BuiltByBerry\LaravelSwarm\Tests\Feature\Streaming\Fixtures\NativeTool;
+use Composer\InstalledVersions;
+use Composer\Semver\VersionParser;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
@@ -46,6 +48,36 @@ beforeEach(function () {
     NativeTool::$calls = 0;
     Event::fake([SwarmCompleted::class, SwarmFailed::class, SwarmStepCompleted::class]);
 });
+
+/**
+ * Whether laravel/ai's AgentTool still degrades a child-run failure to a result.
+ *
+ * Up to and including v1.4.0, BOTH `AgentTool::handle()` and `AgentTool::stream()`
+ * wrapped the child prompt in `catch (Throwable)` and returned
+ * `'Agent failed: '.$e->getMessage()`, so a failing sub-agent never reached the
+ * parent's tool-failure path at all. v1.4.1 removed both catches. This test
+ * drives the streamed path, so `stream()` is the one that matters here.
+ *
+ * The expectation below 1.4.1 is therefore upstream's behaviour, and it is
+ * upstream's removal that makes the original assertions unsatisfiable on 1.4.1 --
+ * they fail at the release base too, with no Swarm listener installed. What Swarm
+ * decides is the OUTCOME: a child-run failure is now an ordinary tool failure
+ * carrying the PARENT agent, so the default `propagate` policy rethrows it and
+ * the parent run fails, instead of the parent's model being handed a failed tool
+ * result and carrying on. Swarm follows upstream rather than re-creating the
+ * degradation; see docs/error-handling.md#a-sub-agents-own-run-failure.
+ *
+ * Not to be confused with a tool throwing INSIDE the child: that ToolFailed
+ * carries the child agent, which Swarm is not invoking, so laravel/ai recovers
+ * it inside the child and v1.4.1 changed nothing there. The same applies one
+ * AgentTool deeper -- this gate and the branch it guards are about a sub-agent
+ * held directly as a tool of the agent Swarm invokes, which is this file's
+ * fixture.
+ */
+function nativeAgentToolDegradesChildFailure(): bool
+{
+    return ! InstalledVersions::satisfies(new VersionParser, 'laravel/ai', '>=1.4.1');
+}
 
 function nativeParitySse(?string $tool = null): string
 {
@@ -112,6 +144,40 @@ it('preserves released validation and nested AgentTool result semantics', functi
         return Http::response(nativeParitySse($parentRequests === 1 ? ($mode === 'child' ? 'NativeChildAgent' : 'NativeTool') : null));
     });
     $stream = app(SwarmRunner::class)->agent(new NativeHttpAgent)->stream('task');
+
+    if ($mode === 'child' && ! nativeAgentToolDegradesChildFailure()) {
+        // laravel/ai >= 1.4.1: the child's own RateLimitedException escapes
+        // AgentTool::stream() and reaches the parent's tool-failure path, so the
+        // default propagate policy ends the parent run with the child's
+        // exception rather than handing the parent's model a failed tool result.
+        expect(fn () => iterator_to_array($stream))->toThrow(RateLimitedException::class);
+        // This recorder is a wildcard registered in the test body, so it sits
+        // after Swarm's own `booted()` wildcard and the rethrow ends the
+        // dispatch before it runs -- ToolFailed stays unseen here. Empty for a
+        // different reason than below 1.4.1, where no tool failure happens at
+        // all. docs/error-handling.md#native-tool-failures carries the cost.
+        expect($native[ToolFailed::class] ?? [])->toHaveCount(0);
+
+        // Both agents now fail, in order: the child on its own 429, then the
+        // parent once the rethrow leaves its tool loop. On <= 1.4.0 only the
+        // child failed, because the catch absorbed it into a parent result.
+        // The parent fails with the child's SAME exception object, which is what
+        // shows it was delegated back rather than re-wrapped on the way out.
+        expect($native[AgentFailed::class])->toHaveCount(2)
+            ->and($native[AgentFailed::class][0]->prompt->agent)->toBeInstanceOf(NativeChildAgent::class)
+            ->and($native[AgentFailed::class][1]->prompt->agent)->toBeInstanceOf(NativeHttpAgent::class)
+            ->and($native[AgentFailed::class][1]->exception)->toBeInstanceOf(RateLimitedException::class)
+            ->and($native[AgentFailed::class][1]->exception)->toBe($native[AgentFailed::class][0]->exception)
+            ->and(app(RunHistoryStore::class)->find($stream->runId)['status'])->toBe('failed');
+
+        // The parent never reaches a second turn, so there is no third request.
+        Http::assertSentCount(2);
+        Event::assertDispatchedTimes(SwarmFailed::class, 1);
+        Event::assertNotDispatched(SwarmCompleted::class);
+
+        return;
+    }
+
     $events = collect(iterator_to_array($stream));
     $result = $events->whereInstanceOf(SwarmToolResult::class)->where('preliminary', false)->sole();
     expect($result->successful)->toBeTrue()->and($result->toolResult->failed)->toBeFalse()

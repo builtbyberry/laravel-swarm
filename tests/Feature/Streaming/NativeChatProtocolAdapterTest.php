@@ -31,6 +31,9 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamStart;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolCall;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputDelta;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputError;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputStart;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
 use BuiltByBerry\LaravelSwarm\Streaming\PayloadAvailability;
 use BuiltByBerry\LaravelSwarm\Streaming\Protocols\AgentUserInteractionSwarmProtocol;
@@ -777,4 +780,337 @@ test('a failing operational correlation hook cannot suppress the terminal projec
         'type' => 'error',
         'errorText' => 'The swarm stream failed.',
     ]);
+});
+
+/**
+ * #649: tool input a final agent streamed (one tool that ran, one cut off).
+ *
+ * @return list<SwarmStreamEvent>
+ */
+function toolInputNativeProtocolEvents(PayloadAvailability $availability = PayloadAvailability::Available): array
+{
+    $withheld = $availability !== PayloadAvailability::Available;
+
+    return [
+        new SwarmStreamStart('start', 'swarm-run-1', 'Swarm', 'sequential', null, [], 1),
+        new SwarmStepStart('step', 'swarm-run-1', 0, 'Agent', 'Agent', null, 2),
+        new SwarmToolInputStart('tis-1', 'swarm-run-1', 0, 'Agent', 'tool-1', 'lookup', 3, $availability),
+        new SwarmToolInputDelta('tid-1', 'swarm-run-1', 0, 'Agent', 'tool-1', $withheld ? null : '{"q":', 4, $availability),
+        new SwarmToolInputDelta('tid-2', 'swarm-run-1', 0, 'Agent', 'tool-1', $withheld ? null : '"input-secret"}', 5, $availability),
+        new SwarmToolCall('call', 'swarm-run-1', 0, 'Agent', new ToolCallData('tool-1', 'lookup', $withheld ? [] : ['q' => 'input-secret']), 6, $availability),
+        new SwarmToolResult('result', 'swarm-run-1', 0, 'Agent', new ToolResultData('tool-1', 'lookup', [], $withheld ? null : 'found'), true, null, 7, payloadAvailability: $availability),
+        new SwarmToolInputStart('tis-2', 'swarm-run-1', 0, 'Agent', 'tool-2', 'search', 8, $availability),
+        new SwarmToolInputDelta('tid-3', 'swarm-run-1', 0, 'Agent', 'tool-2', $withheld ? null : '{"q":"cut', 9, $availability),
+        new SwarmToolInputError('tie-1', 'swarm-run-1', 0, 'Agent', 'tool-2', 'search', $withheld ? null : '{"q":"cut', $withheld ? null : 'error-secret', 10, $availability),
+        new SwarmStepEnd('step-end', 'swarm-run-1', 0, 'Agent', 'Agent', null, 1, [], 11, nativeResult: new NativeStepResult),
+        new SwarmStreamEnd('end', 'swarm-run-1', null, ['input_tokens' => 1, 'output_tokens' => 1], [], 12),
+    ];
+}
+
+function laravelAiStreamsToolInput(): bool
+{
+    return class_exists(implode('\\', ['Laravel', 'Ai', 'Streaming', 'Events', 'ToolInputStart']));
+}
+
+test('final agent projection sends available tool input as standard Vercel tool-input frames (#649)', function () {
+    $parts = VercelDataStreamClient::consume(renderedProtocolContent(
+        nativeProtocolStream(toolInputNativeProtocolEvents())->usingVercelDataProtocol('ui-message', NativeProtocolProjection::FinalAgent),
+    ));
+    $tool = array_values(array_filter($parts, fn (array $part): bool => str_starts_with((string) ($part['type'] ?? ''), 'tool-')));
+
+    if (! laravelAiStreamsToolInput()) {
+        // laravel/ai before v1.4.2 has no tool-input frames: custom workflow frames instead.
+        $customTypes = array_column(array_column(array_filter($parts, fn (array $part): bool => ($part['type'] ?? null) === 'data-swarm'), 'data'), 'event_type');
+
+        expect($customTypes)->toContain('tool_input_started', 'tool_input_delta', 'tool_input_error')
+            ->and(array_column($parts, 'type'))->toContain('finish');
+
+        return;
+    }
+
+    expect(array_column($tool, 'type'))->toBe([
+        'tool-input-start', 'tool-input-delta', 'tool-input-delta', 'tool-input-available', 'tool-output-available',
+        'tool-input-start', 'tool-input-delta', 'tool-input-error',
+    ])
+        ->and($tool[0])->toMatchArray(['toolCallId' => 'tool-1', 'toolName' => 'lookup'])
+        ->and($tool[1]['inputTextDelta'].$tool[2]['inputTextDelta'])->toBe('{"q":"input-secret"}')
+        ->and($tool[7])->toMatchArray(['toolCallId' => 'tool-2', 'toolName' => 'search', 'input' => '{"q":"cut', 'errorText' => 'error-secret'])
+        ->and(array_column($parts, 'type'))->toContain('finish');
+});
+
+test('final agent projection sends available tool input as AG-UI tool call frames (#649)', function () {
+    $events = AgentUserInteractionClient::consume(renderedProtocolContent(
+        nativeProtocolStream(toolInputNativeProtocolEvents())->usingAgentUserInteractionProtocol('thread-1', projection: NativeProtocolProjection::FinalAgent),
+    ));
+
+    if (! laravelAiStreamsToolInput()) {
+        expect(json_encode($events))->toContain('tool_input_error')
+            ->and(array_column($events, 'type'))->toContain('RUN_FINISHED');
+
+        return;
+    }
+
+    $cut = array_values(array_filter($events, fn (array $event): bool => ($event['toolCallId'] ?? null) === 'tool-2'));
+
+    expect(array_column($cut, 'type'))->toBe(['TOOL_CALL_START', 'TOOL_CALL_ARGS', 'TOOL_CALL_END', 'TOOL_CALL_RESULT'])
+        ->and($cut[0]['toolCallName'])->toBe('search')
+        ->and($cut[1]['delta'])->toBe('{"q":"cut')
+        ->and($cut[3]['content'])->toBe('error-secret')
+        ->and(array_column($events, 'type'))->toContain('RUN_FINISHED');
+});
+
+test('withheld tool input reaches native clients only as custom frames, never as values (#649)', function (PayloadAvailability $availability) {
+    $parts = VercelDataStreamClient::consume(renderedProtocolContent(
+        nativeProtocolStream(toolInputNativeProtocolEvents($availability))->usingVercelDataProtocol('ui-message', NativeProtocolProjection::FinalAgent),
+    ));
+    $custom = array_column(array_filter($parts, fn (array $part): bool => ($part['type'] ?? null) === 'data-swarm'), 'data');
+
+    expect(array_column($parts, 'type'))->not->toContain('tool-input-start', 'tool-input-delta', 'tool-input-error')
+        ->and(array_column($custom, 'event_type'))->toContain('tool_input_started', 'tool_input_delta', 'tool_input_error')
+        ->and(json_encode($parts))->not->toContain('input-secret')
+        ->and(json_encode($parts))->not->toContain('cut')
+        ->and(json_encode($parts))->toContain('"payload_status":"'.$availability->value.'"');
+})->with([PayloadAvailability::Redacted, PayloadAvailability::Omitted]);
+
+test('workflow projection streams tool input as live workflow progress (#649)', function () {
+    $parts = VercelDataStreamClient::consume(renderedProtocolContent(
+        nativeProtocolStream(toolInputNativeProtocolEvents())->usingVercelDataProtocol('ui-message'),
+    ));
+    $custom = array_values(array_column(array_filter($parts, fn (array $part): bool => ($part['type'] ?? null) === 'data-swarm'), 'data'));
+    $toolInput = array_values(array_filter($custom, fn (array $data): bool => str_starts_with((string) ($data['event_type'] ?? ''), 'tool_input')));
+
+    expect(array_column($toolInput, 'event_type'))->toBe(['tool_input_started', 'tool_input_delta', 'tool_input_delta', 'tool_input_started', 'tool_input_delta', 'tool_input_error'])
+        ->and($toolInput[0])->toMatchArray(['tool_call_id' => 'tool-1', 'tool_name' => 'lookup', 'payload_status' => 'available'])
+        ->and($toolInput[1]['delta'].$toolInput[2]['delta'])->toBe('{"q":"input-secret"}')
+        ->and($toolInput[5])->toMatchArray(['tool_call_id' => 'tool-2', 'input' => '{"q":"cut', 'error' => 'error-secret']);
+});
+
+/**
+ * A live sequential stream (as SequentialStreamRunner builds it) whose source
+ * reports how far it has advanced.
+ *
+ * @param  list<SwarmStreamEvent>  $events
+ */
+function liveFinalAgentStream(array $events, ?int &$yielded = null, bool $live = true): StreamableSwarmResponse
+{
+    $yielded = -1;
+
+    return new StreamableSwarmResponse(
+        runId: 'swarm-run-1',
+        generator: function () use ($events, &$yielded): Generator {
+            foreach ($events as $index => $event) {
+                $yielded = $index;
+
+                yield $event;
+            }
+        },
+        topology: 'sequential',
+        nativeChatProtocolsEnabled: true,
+        liveFinalAgent: $live,
+    );
+}
+
+/** @return list<SwarmStreamEvent> */
+function liveFinalAgentEvents(bool $flagged = true): array
+{
+    return [
+        new SwarmStreamStart('start', 'swarm-run-1', 'Swarm', 'sequential', null, [], 1),
+        new SwarmStepStart('step', 'swarm-run-1', 0, 'Agent', 'Agent', null, 2, liveFinalStep: $flagged),
+        new SwarmTextDelta('delta', 'swarm-run-1', 0, 'Agent', 'Checking', 3, 'block-1', payloadAvailability: PayloadAvailability::Available),
+        new SwarmTextEnd('text-end', 'swarm-run-1', 0, 'Agent', 'block-1', 4, payloadAvailability: PayloadAvailability::Available),
+        new SwarmToolInputStart('tis-1', 'swarm-run-1', 0, 'Agent', 'tool-1', 'lookup', 5, PayloadAvailability::Available),
+        new SwarmToolInputDelta('tid-1', 'swarm-run-1', 0, 'Agent', 'tool-1', '{"q":', 6, PayloadAvailability::Available),
+        new SwarmToolInputDelta('tid-2', 'swarm-run-1', 0, 'Agent', 'tool-1', '"x"}', 7, PayloadAvailability::Available),
+        new SwarmToolCall('call', 'swarm-run-1', 0, 'Agent', new ToolCallData('tool-1', 'lookup', ['q' => 'x']), 8, PayloadAvailability::Available),
+        new SwarmToolResult('result', 'swarm-run-1', 0, 'Agent', new ToolResultData('tool-1', 'lookup', ['q' => 'x'], 'found'), true, null, 9, payloadAvailability: PayloadAvailability::Available),
+        new SwarmStepEnd('step-end', 'swarm-run-1', 0, 'Agent', 'Agent', 'Checking', 1, [], 10, nativeResult: new NativeStepResult),
+        new SwarmStreamEnd('end', 'swarm-run-1', 'Checking', ['input_tokens' => 1, 'output_tokens' => 1], [], 11),
+    ];
+}
+
+/**
+ * Iterate a protocol response's SSE body one chunk at a time.
+ *
+ * @return Generator<int, string>
+ */
+function protocolChunks(StreamableSwarmResponse $stream): Generator
+{
+    $_SERVER['LARAVEL_OCTANE'] = true;
+
+    try {
+        $response = $stream->toResponse(request());
+    } finally {
+        unset($_SERVER['LARAVEL_OCTANE']);
+    }
+
+    yield from ($response->getCallback())();
+}
+
+test('a live final step reaches the client frame by frame, before the source advances (#649)', function (string $protocol, string $argsFrame, string $argsKey) {
+    $stream = liveFinalAgentStream(liveFinalAgentEvents(), $yielded);
+    $stream = $protocol === 'vercel'
+        ? $stream->usingVercelDataProtocol('ui-message', NativeProtocolProjection::FinalAgent)
+        : $stream->usingAgentUserInteractionProtocol('thread-1', projection: NativeProtocolProjection::FinalAgent);
+
+    $seen = [];
+    $body = '';
+
+    foreach (protocolChunks($stream) as $chunk) {
+        $body .= $chunk;
+
+        if (str_contains($chunk, '"'.$argsFrame.'"') && str_contains($chunk, '{\"q\":')) {
+            // The first argument fragment is on the wire while the source still
+            // sits on that fragment (index 5): nothing after it has been pulled.
+            $seen['first_args_at'] = $yielded;
+        }
+
+        if (str_contains($chunk, '"text-delta"') || str_contains($chunk, '"TEXT_MESSAGE_CONTENT"')) {
+            $seen['text_at'] ??= $yielded;
+        }
+    }
+
+    // The live step announces itself, so a client stops showing "buffering".
+    expect($body)->toContain('"live_final_step":true');
+
+    if (! laravelAiStreamsToolInput()) {
+        // laravel/ai before v1.4.2 has no tool-input frames (custom frames instead),
+        // but the final step's text still goes out before the source advances.
+        expect($seen['text_at'] ?? null)->toBe(2);
+
+        return;
+    }
+
+    expect($seen)->toBe(['text_at' => 2, 'first_args_at' => 5]);
+
+    $frames = $protocol === 'vercel' ? VercelDataStreamClient::consume($body) : AgentUserInteractionClient::consume($body);
+    $types = array_column($frames, 'type');
+
+    // In order, once each: text before the tool it introduced, then completion.
+    expect(array_count_values($types)[$argsFrame])->toBe(2)
+        ->and(array_search($protocol === 'vercel' ? 'text-delta' : 'TEXT_MESSAGE_CONTENT', $types, true))
+        ->toBeLessThan(array_search($argsFrame, $types, true))
+        ->and(end($types))->toBe($protocol === 'vercel' ? 'finish' : 'RUN_FINISHED')
+        ->and(implode('', array_column(array_values(array_filter($frames, fn (array $f): bool => ($f['type'] ?? null) === $argsFrame)), $argsKey)))->toBe('{"q":"x"}');
+})->with([
+    'vercel' => ['vercel', 'tool-input-delta', 'inputTextDelta'],
+    'ag-ui' => ['ag-ui', 'TOOL_CALL_ARGS', 'delta'],
+]);
+
+test('the live switch off buffers a flagged final step exactly as an unflagged one (#649)', function () {
+    $flaggedOff = renderedProtocolContent(liveFinalAgentStream(liveFinalAgentEvents(), live: false)->usingVercelDataProtocol('ui-message', NativeProtocolProjection::FinalAgent));
+    $unflagged = renderedProtocolContent(nativeProtocolStream(liveFinalAgentEvents(flagged: false))->usingVercelDataProtocol('ui-message', NativeProtocolProjection::FinalAgent));
+    $live = renderedProtocolContent(liveFinalAgentStream(liveFinalAgentEvents())->usingVercelDataProtocol('ui-message', NativeProtocolProjection::FinalAgent));
+
+    $strip = fn (string $body): array => array_map(
+        fn (array $frame): array => array_diff_key($frame, ['timestamp' => true]),
+        VercelDataStreamClient::consume($body),
+    );
+
+    expect($flaggedOff)->not->toContain('live_final_step')
+        ->and($strip($flaggedOff))->toBe($strip($unflagged))
+        // ...and live order differs: content arrives before the step completes.
+        ->and($strip($live))->not->toBe($strip($unflagged));
+});
+
+test('a failure after live frames ends with an error terminal and no success frames (#649)', function () {
+    $events = array_slice(liveFinalAgentEvents(), 0, 6);
+    $events[] = new SwarmStreamError('error', 'swarm-run-1', 'provider failed', null, false, [], 7);
+
+    $parts = VercelDataStreamClient::consume(renderedProtocolContent(
+        liveFinalAgentStream($events)->usingVercelDataProtocol('ui-message', NativeProtocolProjection::FinalAgent),
+    ));
+    $types = array_column($parts, 'type');
+
+    expect($types)->toContain('text-delta')
+        ->and(end($types))->toBe('error')
+        ->and($types)->not->toContain('finish');
+});
+
+test('a step after the step marked final ends the projection with an error and reports it (#649)', function () {
+    $events = liveFinalAgentEvents();
+    array_splice($events, 9, 0, [new SwarmStepStart('step-2', 'swarm-run-1', 1, 'Agent', 'Agent', null, 9)]);
+    $reported = [];
+
+    $stream = new StreamableSwarmResponse(
+        runId: 'swarm-run-1',
+        generator: fn (): Generator => yield from $events,
+        topology: 'sequential',
+        nativeChatProtocolsEnabled: true,
+        onNativeProtocolFailure: function (string $runId, string $protocol, NativeProtocolProjection $projection, string $reason) use (&$reported): void {
+            $reported[] = $reason;
+        },
+        liveFinalAgent: true,
+    );
+
+    $parts = VercelDataStreamClient::consume(renderedProtocolContent($stream->usingVercelDataProtocol('ui-message', NativeProtocolProjection::FinalAgent)));
+
+    expect(end($parts)['type'])->toBe('error')
+        ->and(json_encode($parts))->toContain('swarm_final_step_not_final')
+        ->and($reported)->toBe(['swarm_final_step_not_final']);
+});
+
+test('a stale event from an earlier step is not released during a live final step (#649)', function () {
+    $events = liveFinalAgentEvents();
+    array_splice($events, 3, 0, [new SwarmTextDelta('stale', 'swarm-run-1', 7, 'Agent', 'stale-step-text', 3, 'block-stale', payloadAvailability: PayloadAvailability::Available)]);
+
+    $body = renderedProtocolContent(liveFinalAgentStream($events)->usingVercelDataProtocol('ui-message', NativeProtocolProjection::FinalAgent));
+
+    expect($body)->not->toContain('stale-step-text')
+        ->and($body)->toContain('Checking');
+});
+
+test('a client that disconnects mid live answer abandons the run, which goes no further (#649)', function () {
+    $abandoned = false;
+    $advancedPastArgs = false;
+    $events = liveFinalAgentEvents();
+    $stream = new StreamableSwarmResponse(
+        runId: 'swarm-run-1',
+        generator: function () use ($events, &$advancedPastArgs): Generator {
+            foreach ($events as $index => $event) {
+                if ($index > 5) {
+                    $advancedPastArgs = true;
+                }
+
+                yield $event;
+            }
+        },
+        onAbandoned: function () use (&$abandoned): void {
+            $abandoned = true;
+        },
+        topology: 'sequential',
+        nativeChatProtocolsEnabled: true,
+        liveFinalAgent: true,
+    );
+
+    $_SERVER['LARAVEL_OCTANE'] = true;
+    $chunks = ($stream->usingVercelDataProtocol('ui-message', NativeProtocolProjection::FinalAgent)->toResponse(request())->getCallback())();
+
+    // Read until the first live text frame, then disconnect.
+    while ($chunks->valid() && ! str_contains((string) $chunks->current(), '"text-delta"')) {
+        $chunks->next();
+    }
+
+    unset($chunks);
+    gc_collect_cycles();
+    unset($_SERVER['LARAVEL_OCTANE']);
+
+    expect($abandoned)->toBeTrue()
+        ->and($advancedPastArgs)->toBeFalse();
+});
+
+test('a consumed live stream projected again replays its cached events buffered, not live (#649)', function () {
+    $stream = liveFinalAgentStream(liveFinalAgentEvents());
+    iterator_to_array($stream);
+
+    expect($stream->streamsFinalAgentLive())->toBeFalse();
+
+    $replayed = renderedProtocolContent($stream->usingVercelDataProtocol('ui-message', NativeProtocolProjection::FinalAgent));
+    $buffered = renderedProtocolContent(nativeProtocolStream(liveFinalAgentEvents(flagged: false))->usingVercelDataProtocol('ui-message', NativeProtocolProjection::FinalAgent));
+    $strip = fn (string $body): array => array_map(
+        fn (array $frame): array => array_diff_key($frame, ['timestamp' => true]),
+        VercelDataStreamClient::consume($body),
+    );
+
+    expect($replayed)->not->toContain('live_final_step')
+        ->and($strip($replayed))->toBe($strip($buffered));
 });

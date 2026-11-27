@@ -39,12 +39,22 @@ class DurableSwarmStarter
         protected DurableRunContext $runs,
         protected DurableJobDispatcher $jobs,
         protected SwarmAttributeResolver $resolver,
+        protected DurableBranchAdmission $admission,
     ) {}
 
     public function start(Swarm $swarm, RunContext $context, Topology $topology, int $timeoutSeconds, int $totalSteps, DurableParallelFailurePolicy $parallelFailurePolicy = DurableParallelFailurePolicy::CollectFailures): DurableSwarmStart
     {
         $this->limits->checkInput($context->input);
         $this->limits->checkMetadata($context->metadata);
+
+        // The branch fan-out cap fails loudly here, before anything is persisted: an
+        // invalid value for every durable run, an unsupported persistence pairing for
+        // the hierarchical topologies the cap applies to.
+        if (in_array($topology, [Topology::Hierarchical, Topology::StaticHierarchical], true)) {
+            $this->admission->capForFanOut();
+        } else {
+            $this->admission->cap();
+        }
 
         return $this->connection->transaction(function () use ($swarm, $context, $topology, $timeoutSeconds, $totalSteps, $parallelFailurePolicy): DurableSwarmStart {
             $contextTtl = $this->runs->ttlSeconds();

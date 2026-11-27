@@ -7,6 +7,9 @@ namespace BuiltByBerry\LaravelSwarm\Streaming;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmProviderToolEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolCall;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputDelta;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputError;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputStart;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
 
 /** @internal Storage identity selection without changing native public event IDs. */
@@ -36,7 +39,9 @@ final class StreamEventIdentity
             return $event->causalId();
         }
 
-        if (($event instanceof SwarmToolCall || $event instanceof SwarmToolResult)
+        if (($event instanceof SwarmToolCall || $event instanceof SwarmToolResult
+            || $event instanceof SwarmToolInputStart || $event instanceof SwarmToolInputDelta
+            || $event instanceof SwarmToolInputError)
             && $event->nodeId !== null && $event->attemptEpoch !== null) {
             return 'function:'.hash('sha256', serialize([$event->type(), $event->runId,
                 $event->stepIndex, $event->nodeId, $event->attemptEpoch, $event->invocationId, $event->id]));

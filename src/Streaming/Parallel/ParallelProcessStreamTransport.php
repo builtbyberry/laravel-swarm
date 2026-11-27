@@ -7,10 +7,12 @@ namespace BuiltByBerry\LaravelSwarm\Streaming\Parallel;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Runners\ParallelAgentResolver;
 use BuiltByBerry\LaravelSwarm\Runners\ParallelStreamBranchWorker;
+use Illuminate\Concurrency\Console\InvokeSerializedClosureCommand;
 use Illuminate\Container\Container;
 use Illuminate\Process\Factory as ProcessFactory;
 use Illuminate\Support\Facades\Context;
 use Laravel\SerializableClosure\SerializableClosure;
+use ReflectionClass;
 
 use function Illuminate\Support\artisan_binary;
 use function Illuminate\Support\php_binary;
@@ -76,14 +78,23 @@ final class ParallelProcessStreamTransport
         // PHP worker itself instead of orphaning it on cancellation.
         $command = [php_binary(), artisan_binary(), 'invoke-serialized-closure'];
         $running = [];
+        // Feature detection includes security backports. The owning wire protocol is
+        // linked in ParallelProcessResultEnvelope; never infer signed mode from stdout.
+        $resultKeys = (new ReflectionClass(InvokeSerializedClosureCommand::class))->hasMethod('frameEnvelope') ? [] : null;
 
         try {
             foreach ($workers as $branchId => $worker) {
+                $resultKey = bin2hex(random_bytes(32));
+                if ($resultKeys !== null) {
+                    $resultKeys[$branchId] = $resultKey;
+                }
+                // Keep the result key out of the serialized task and its context.
                 $task = static fn (): array => $worker($endpoint, $token, $deadline, $maxFrameBytes);
                 $remainingSeconds = max(1, (int) ceil(($deadline - (float) hrtime(true)) / 1_000_000_000));
                 $running[$branchId] = $this->processes->newPendingProcess()
                     ->path(base_path())
                     ->env([
+                        'LARAVEL_CONCURRENCY_HMAC_KEY' => $resultKey,
                         '__LARAVEL_CONTEXT' => json_encode(Context::dehydrate()),
                         'LARAVEL_INVOKABLE_CLOSURE' => base64_encode(serialize(new SerializableClosure($task))),
                     ])
@@ -109,6 +120,7 @@ final class ParallelProcessStreamTransport
             maxFrameBytes: $maxFrameBytes,
             deadline: $deadline,
             cancelGraceMilliseconds: $cancelGraceMilliseconds,
+            resultKeys: $resultKeys,
         );
     }
 

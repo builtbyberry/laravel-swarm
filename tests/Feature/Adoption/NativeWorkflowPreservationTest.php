@@ -272,7 +272,8 @@ it('passes native structured JSON through route validation before worker invocat
             ->and($response->usage['input_tokens'])->toBe(4);
     } else {
         expect($run)->toThrow(SwarmException::class, match ($case) {
-            'malformed', 'shape' => 'non-empty [start_at]',
+            'malformed' => 'must be valid JSON matching the declared route-plan schema',
+            'shape' => 'non-empty [start_at]',
             'unknown' => 'references unknown worker agent class',
             'cycle' => 'must be acyclic',
         });

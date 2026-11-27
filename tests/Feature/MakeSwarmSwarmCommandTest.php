@@ -91,13 +91,8 @@ test('make:swarm:swarm rejects an unknown --topology value', function () {
 });
 
 test('make:swarm:swarm uses a published custom stub when present', function () {
-    $path = app_path('Ai/Swarms/CustomStubGenSwarm.php');
-    $stubPath = base_path('stubs/swarm.stub');
-    $original = File::exists($stubPath) ? File::get($stubPath) : null;
-
-    File::ensureDirectoryExists(dirname($path));
-    File::ensureDirectoryExists(dirname($stubPath));
-    File::put($stubPath, <<<'STUB'
+    withIsolatedBasePath(function () {
+        File::put(base_path('stubs/swarm.stub'), <<<'STUB'
 <?php
 
 namespace {{ namespace }};
@@ -108,17 +103,10 @@ class {{ class }}
 }
 STUB);
 
-    try {
         Artisan::call('make:swarm:swarm', ['name' => 'CustomStubGenSwarm']);
 
-        expect(File::get($path))->toContain('public const CUSTOM_SWARM_STUB = true;');
-    } finally {
-        if ($original === null) {
-            File::delete($stubPath);
-        } else {
-            File::put($stubPath, $original);
-        }
-    }
+        expect(File::get(app_path('Ai/Swarms/CustomStubGenSwarm.php')))->toContain('public const CUSTOM_SWARM_STUB = true;');
+    });
 });
 
 test('make:swarm:swarm defaults to sequential when run non-interactively without --topology', function () {

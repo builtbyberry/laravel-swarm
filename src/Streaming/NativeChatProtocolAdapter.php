@@ -26,6 +26,9 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamStart;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolCall;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputDelta;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputError;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputStart;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
 use BuiltByBerry\LaravelSwarm\Streaming\Protocols\SwarmProtocolEvent;
 use Closure;
@@ -162,6 +165,13 @@ final class NativeChatProtocolAdapter
         $ended = false;
         $errored = false;
         $openStepIndex = null;
+        // Live: the open step whose content is released as it arrives, whether one
+        // has been seen (it must be the last step), and its text state.
+        $mayStreamLive = $source->streamsFinalAgentLive();
+        $liveStepIndex = null;
+        $liveSeen = false;
+        $liveOpenMessages = [];
+        $liveSuppressedMessages = [];
 
         try {
             foreach ($source as $event) {
@@ -176,11 +186,36 @@ final class NativeChatProtocolAdapter
                 }
 
                 if ($event instanceof SwarmStepStart) {
+                    if ($liveSeen) {
+                        $reason = 'swarm_final_step_not_final';
+                        $this->reportFailure($onFailure, $source, NativeProtocolProjection::FinalAgent, $protocol, $reason);
+                        yield $this->failureProgress($source, NativeProtocolProjection::FinalAgent, $reason, $event);
+                        yield new Error(
+                            id: $event->id,
+                            type: $reason,
+                            message: 'The swarm stream began a step after the step it marked final.',
+                            recoverable: false,
+                            timestamp: $event->timestamp,
+                        );
+                        $errored = true;
+
+                        continue;
+                    }
+
                     $steps++;
                     $current = [];
                     $openStepIndex = $event->stepIndex;
 
-                    yield $this->custom($event, $this->finalAgentProgressPayload($event, 'step_started'));
+                    if ($mayStreamLive && $event->liveFinalStep) {
+                        $liveStepIndex = $event->stepIndex;
+                        $liveSeen = true;
+                    }
+
+                    // A live final step says so, so a client stops showing "buffering".
+                    yield $this->custom($event, [
+                        ...$this->finalAgentProgressPayload($event, 'step_started'),
+                        ...($liveStepIndex === $event->stepIndex ? ['live_final_step' => true] : []),
+                    ]);
 
                     continue;
                 }
@@ -193,6 +228,7 @@ final class NativeChatProtocolAdapter
                     $last = $current;
                     $lastNativeResult = $event->nativeResult;
                     $openStepIndex = null;
+                    $liveStepIndex = null;
 
                     yield $this->custom($event, $this->finalAgentProgressPayload($event, 'step_completed'));
 
@@ -232,7 +268,11 @@ final class NativeChatProtocolAdapter
                         'event_type' => 'projection',
                         'projection' => NativeProtocolProjection::FinalAgent->value,
                     ]);
-                    yield from $this->finalAgentEvents($last);
+
+                    // A live final step already sent its content; close what it left open.
+                    yield from $liveSeen
+                        ? $this->closeOpenMessages($liveOpenMessages)
+                        : $this->finalAgentEvents($last);
                     yield $this->withInvocation(new StreamEnd(
                         id: $event->id,
                         reason: 'stop',
@@ -245,7 +285,20 @@ final class NativeChatProtocolAdapter
                 }
 
                 if ($this->isFinalAgentCandidate($event)) {
-                    $current[] = $event;
+                    if ($liveStepIndex !== null) {
+                        // Only the open live step's own content goes out: an event that
+                        // names another step is dropped (the buffered path keeps whatever
+                        // arrives inside its open step, as it always has).
+                        if (($event->stepIndex ?? null) === $liveStepIndex) {
+                            yield from $this->finalAgentEvents([$event], $liveOpenMessages, $liveSuppressedMessages, close: false);
+                        }
+
+                        continue;
+                    }
+
+                    if (! $liveSeen) {
+                        $current[] = $event;
+                    }
                 }
             }
         } catch (Throwable $exception) {
@@ -279,14 +332,18 @@ final class NativeChatProtocolAdapter
     }
 
     /**
+     * Project final-agent content to native frames. The buffered path passes the
+     * whole step at completion and lets it close what it opened; the live path
+     * passes one event at a time with the same text state and closes at the end,
+     * so an event is projected the same way on either path.
+     *
      * @param  array<int, SwarmStreamEvent>  $events
+     * @param  array<string, true>  $openMessages
+     * @param  array<string, true>  $suppressedMessages
      * @return \Generator<int, StreamEvent>
      */
-    private function finalAgentEvents(array $events): \Generator
+    private function finalAgentEvents(array $events, array &$openMessages = [], array &$suppressedMessages = [], bool $close = true): \Generator
     {
-        $openMessages = [];
-        $suppressedMessages = [];
-
         foreach ($events as $event) {
             if ($event instanceof SwarmTextDelta) {
                 if ($event->payloadAvailability !== PayloadAvailability::Available) {
@@ -355,6 +412,16 @@ final class NativeChatProtocolAdapter
                 continue;
             }
 
+            if ($event instanceof SwarmToolInputStart || $event instanceof SwarmToolInputDelta || $event instanceof SwarmToolInputError) {
+                $native = $event->payloadAvailability === PayloadAvailability::Available
+                    ? $this->nativeToolInput($event)
+                    : null;
+
+                yield $native ?? $this->custom($event, $this->workflowPayload($event));
+
+                continue;
+            }
+
             if ($event instanceof SwarmProviderToolEvent) {
                 if ($event->payload->status === 'available' && $event->provider !== null) {
                     yield $this->withInvocation(new ProviderToolEvent(
@@ -399,9 +466,22 @@ final class NativeChatProtocolAdapter
             }
         }
 
+        if ($close) {
+            yield from $this->closeOpenMessages($openMessages);
+        }
+    }
+
+    /**
+     * @param  array<string, true>  $openMessages
+     * @return \Generator<int, StreamEvent>
+     */
+    private function closeOpenMessages(array &$openMessages): \Generator
+    {
         foreach (array_keys($openMessages) as $messageId) {
             yield new TextEnd(SwarmStreamEvent::newId(), $messageId, SwarmStreamEvent::timestamp());
         }
+
+        $openMessages = [];
     }
 
     private function isFinalAgentCandidate(SwarmStreamEvent $event): bool
@@ -410,6 +490,9 @@ final class NativeChatProtocolAdapter
             || $event instanceof SwarmTextEnd
             || $event instanceof SwarmToolCall
             || $event instanceof SwarmToolResult
+            || $event instanceof SwarmToolInputStart
+            || $event instanceof SwarmToolInputDelta
+            || $event instanceof SwarmToolInputError
             || $event instanceof SwarmProviderToolEvent
             || $event instanceof SwarmCitation
             || $event instanceof SwarmReasoningDelta
@@ -463,6 +546,29 @@ final class NativeChatProtocolAdapter
                 'denied' => $event->denied,
                 'payload_status' => $event->payloadAvailability->value,
                 ...($this->mayExposePayload($event->payloadAvailability) ? ['result' => $event->toolResult->result] : []),
+                ...($event->error === null ? [] : ['error' => $event->error]),
+            ],
+            $event instanceof SwarmToolInputStart => [
+                'event_type' => 'tool_input_started',
+                'step_index' => $event->stepIndex,
+                'tool_call_id' => $event->toolId,
+                'tool_name' => $event->toolName,
+                'payload_status' => $event->payloadAvailability->value,
+            ],
+            $event instanceof SwarmToolInputDelta => [
+                'event_type' => 'tool_input_delta',
+                'step_index' => $event->stepIndex,
+                'tool_call_id' => $event->toolId,
+                'payload_status' => $event->payloadAvailability->value,
+                ...($this->mayExposePayload($event->payloadAvailability) ? ['delta' => $event->delta] : []),
+            ],
+            $event instanceof SwarmToolInputError => [
+                'event_type' => 'tool_input_error',
+                'step_index' => $event->stepIndex,
+                'tool_call_id' => $event->toolId,
+                'tool_name' => $event->toolName,
+                'payload_status' => $event->payloadAvailability->value,
+                ...($this->mayExposePayload($event->payloadAvailability) ? ['input' => $event->input] : []),
                 ...($event->error === null ? [] : ['error' => $event->error]),
             ],
             $event instanceof SwarmProviderToolEvent => [
@@ -599,6 +705,42 @@ final class NativeChatProtocolAdapter
         }
 
         return $event->messageId;
+    }
+
+    /**
+     * The laravel/ai event for a captured tool-input event, or null when the
+     * installed laravel/ai predates its tool-input events (v1.4.2), for example a
+     * log replayed after a dependency rollback; the caller then sends the custom
+     * workflow frame. The class name is assembled at runtime so it is never a
+     * reference to a class the minimum laravel/ai lacks.
+     */
+    private function nativeToolInput(SwarmToolInputStart|SwarmToolInputDelta|SwarmToolInputError $event): ?StreamEvent
+    {
+        [$name, $arguments] = match (true) {
+            $event instanceof SwarmToolInputStart => ['ToolInputStart', [$event->id, $event->toolId, $event->toolName, $event->timestamp]],
+            $event instanceof SwarmToolInputDelta => ['ToolInputDelta', [$event->id, $event->toolId, (string) $event->delta, $event->timestamp]],
+            default => ['ToolInputError', [$event->id, $event->toolId, $event->toolName, (string) $event->input, (string) $event->error, $event->timestamp]],
+        };
+
+        return $this->upstreamEvent($name, $arguments, $event->invocationId);
+    }
+
+    /**
+     * Build the laravel/ai stream event `$name` when the installed laravel/ai has it.
+     *
+     * @param  list<mixed>  $arguments
+     */
+    private function upstreamEvent(string $name, array $arguments, ?string $invocationId): ?StreamEvent
+    {
+        $class = 'Laravel\\Ai\\Streaming\\Events\\'.$name;
+
+        if (! class_exists($class)) {
+            return null;
+        }
+
+        $event = new $class(...$arguments);
+
+        return $event instanceof StreamEvent ? $this->withInvocation($event, $invocationId) : null;
     }
 
     private function mayExposePayload(PayloadAvailability $availability): bool

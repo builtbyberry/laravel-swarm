@@ -158,13 +158,8 @@ test('make:memory-tool --vector errors when the companion package is absent', fu
 });
 
 test('make:memory-tool uses a published custom stub when present', function () {
-    $path = app_path('Ai/Tools/CustomStubTool.php');
-    $stubPath = base_path('stubs/swarm.memory-tool.stub');
-    $original = File::exists($stubPath) ? File::get($stubPath) : null;
-
-    File::ensureDirectoryExists(dirname($path));
-    File::ensureDirectoryExists(dirname($stubPath));
-    File::put($stubPath, <<<'STUB'
+    withIsolatedBasePath(function () {
+        File::put(base_path('stubs/swarm.memory-tool.stub'), <<<'STUB'
 <?php
 
 namespace {{ namespace }};
@@ -175,17 +170,10 @@ class {{ class }}
 }
 STUB);
 
-    try {
         Artisan::call('make:memory-tool', ['name' => 'CustomStubTool']);
 
-        expect(File::get($path))->toContain('public const CUSTOM_TOOL_STUB = true;');
-    } finally {
-        if ($original === null) {
-            File::delete($stubPath);
-        } else {
-            File::put($stubPath, $original);
-        }
-    }
+        expect(File::get(app_path('Ai/Tools/CustomStubTool.php')))->toContain('public const CUSTOM_TOOL_STUB = true;');
+    });
 });
 
 test('make:memory-tool generated class shape matches the shipped Recall tool', function () {

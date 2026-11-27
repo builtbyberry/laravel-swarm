@@ -154,6 +154,16 @@ actual provider-free child bootstrap and authenticated loopback handshake. Once
 the feature flag is enabled, bare `swarm:health` includes the same check and
 exits nonzero when the process transport is unavailable.
 
+The process transport follows the installed Laravel command's result protocol.
+On Laravel versions that sign concurrency results, each child receives its own
+random signing key through its launch environment, and Swarm verifies the
+result frame before reading the serialized terminal marker. A missing key or
+invalid signature fails the stream; it never falls back to unsigned JSON.
+Older supported Laravel versions retain their plain-JSON result format. In both
+paths, child stdout cannot instantiate application classes, and process failures withhold
+raw diagnostics. After updating Laravel, run this health probe and your parallel
+stream smoke tests again.
+
 `max_branches` is a per-stream branch-process admission limit, not a raw
 file-descriptor or application-wide ceiling. Each branch owns process pipes and
 a loopback socket. Budget aggregate capacity as concurrent live streams times
@@ -329,10 +339,11 @@ Swarm streams emit typed events, including:
 | Type | Role |
 | --- | --- |
 | `swarm_stream_start` | Run metadata and captured input. |
-| `swarm_step_start` | Step lifecycle start with captured step input. |
+| `swarm_step_start` | Step lifecycle start with captured step input; `live_final_step: true` on a live sequential stream's final step when `swarm.streaming.native_protocols.final_agent_live` is enabled (opt-in) and no step or output guardrail applies (see [native chat protocols](native-chat-protocols.md#choose-a-projection)). |
 | `swarm_text_delta` / `swarm_text_end` | Final-agent text chunks and close marker with native content-block `message_id` and explicit `payload_status` when known. |
 | `swarm_reasoning_delta` / `swarm_reasoning_end` | Final-agent reasoning stream events. |
 | `swarm_tool_call` / `swarm_tool_result` | Final-agent tool invocation and results with explicit `payload_status` when known. |
+| `swarm_tool_input_start` / `swarm_tool_input_delta` / `swarm_tool_input_error` | A tool call's input as the model writes it: the start (`tool_id`, `tool_name`), each fragment of the arguments text (`delta`), and a call whose input never completed (`input`, `error`), whose tool was not executed. Streamed when `swarm.streaming.tool_input.enabled` is on (opt-in) and Laravel AI emits them (v1.4.2 and later). |
 | `swarm_provider_tool_event` | Captured native [provider-tool activity](provider-tool-events.md) with identity and explicit data availability. |
 | `swarm_provider_tool_attempt_invalidated` | Durable control marker invalidating older provider activity for one node. |
 | `swarm_citation` | Native source occurrence with captured [citation evidence and availability](citations.md). |
@@ -390,6 +401,34 @@ back to the raw event shape, preserving backward compatibility. Protocol clients
 still receive an explicit unavailable status through custom progress and never a
 standard content/tool frame. See [Vercel and AG-UI protocol projection](native-chat-protocols.md#tools-text-reasoning-citations-and-capture).
 
+### Tool input as it is written
+
+From `laravel/ai` v1.4.2, a provider stream reports a tool call's input while the
+model writes it. This is opt-in: set `swarm.streaming.tool_input.enabled`
+(`SWARM_STREAMING_TOOL_INPUT=true`). Off (the default), Swarm skips those events
+and nothing about a stream changes. On, Swarm streams it live through every
+streaming path (sequential, hierarchical, static hierarchical, process-parallel
+and durable per-node streaming), persists it for replay, and broadcasts it:
+
+- `swarm_tool_input_start` opens the input for `tool_id` / `tool_name`.
+- `swarm_tool_input_delta` carries one fragment of the arguments text. Joining a
+  tool's fragments gives the arguments the matching `swarm_tool_call` carries
+  decoded.
+- `swarm_tool_input_error` reports a call whose input never completed, for
+  example one the token limit cut off. Its tool was **not executed**: no
+  `swarm_tool_call` or `swarm_tool_result` follows for that `tool_id`, and the
+  step's memory snapshot records only the calls that ran.
+
+Fragments and the partial `input` follow output capture. Under Full they are
+kept as written, including the partial arguments of a tool that never ran.
+Under Redact and Skip they are `null` with `payload_status` `redacted` or
+`omitted`: a fragment can end inside a key, so it cannot be redacted key by key
+the way decoded arguments are. The `error` text follows the tool-result error
+policy. Tool-input deltas are frequent; a swarm can keep them off the broadcast
+channel with `#[WithoutBroadcasting(SwarmToolInputDelta::class)]` while the
+stream and replay keep them. Durable stream batching holds them like text
+deltas.
+
 ### Tool calls (including MCP tools)
 
 Swarm's tool model is **pure passthrough**. A `laravel/ai` `ToolCall` /
@@ -406,9 +445,11 @@ redacted and skipped capture, including database replay. Redaction removes paylo
 values, not these outcome flags. The native streamed `successful`
 classification remains unchanged; error text still follows the capture policy
 (unchanged under Full, redacted under Redact, absent under Skip). Swarm does not
-classify an error-looking result string as an exception. In official Laravel AI, tool validation errors and caught nested
-`AgentTool` failures can be ordinary text results, while a max-step result can be
-failed without invoking the tool. Unsupported native approvals still fail at the
+classify an error-looking result string as an exception. In official Laravel AI, tool validation errors can be ordinary text results, as
+can a nested `AgentTool` child-run failure while upstream still catches it (it
+did up to v1.4.0; v1.4.1 does not — see
+[Error Handling](error-handling.md#a-sub-agents-own-run-failure)), while a
+max-step result can be failed without invoking the tool. Unsupported native approvals still fail at the
 [approval boundary](native-outcome-boundary.md).
 
 Laravel AI 1.0 can emit several cumulative results for the same tool call.
@@ -505,6 +546,13 @@ return SwarmHistory::replay($runId);
 stored order as the response is iterated. If the original stream **failed**,
 replay emits stored events through `swarm_stream_error` and completes **without**
 re-throwing the original exception (informational playback).
+
+Replay reads only what has been written. A durable run with
+`#[DurableStreaming]` writes its node events as they are emitted. With
+`swarm.durable.stream_batching` on, it writes deltas in batches, so a replay read
+while a node is still streaming can trail the provider by a held batch. See
+[batched causal-log writes](durable-execution.md#batched-causal-log-writes) for
+what such a reader is guaranteed to see.
 
 Configuration for replay storage drivers and prefixes lives under
 `swarm.streaming.replay` in `config/swarm.php`. See

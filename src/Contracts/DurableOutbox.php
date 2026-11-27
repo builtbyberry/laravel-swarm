@@ -10,16 +10,23 @@ use BuiltByBerry\LaravelSwarm\Responses\DrainResult;
 interface DurableOutbox
 {
     /**
-     * Enqueue a step dispatch. Must be called inside the same DB transaction
-     * as the state change it accompanies so the write is atomic.
+     * Enqueue a step dispatch and return the new entry's id. Must be called inside
+     * the same DB transaction as the state change it accompanies so the write is atomic.
+     *
+     * Pass $directDispatch = true only when the caller will push the advance job
+     * itself once the transaction commits: the entry is then written already
+     * reserved, so the relay leaves it alone until the reservation goes stale and
+     * recovers it only if the pushed job never settles it (see settle()).
      */
-    public function enqueueStep(string $runId, int $stepIndex, ?string $connection, ?string $queue): void;
+    public function enqueueStep(string $runId, int $stepIndex, ?string $connection, ?string $queue, bool $directDispatch = false): int;
 
     /**
-     * Enqueue a branch dispatch. Must be called inside the same DB transaction
-     * as the state change it accompanies so the write is atomic.
+     * Enqueue a branch dispatch and return the new entry's id. Must be called inside
+     * the same DB transaction as the state change it accompanies so the write is atomic.
+     *
+     * $directDispatch has the same meaning as on enqueueStep().
      */
-    public function enqueueBranch(string $runId, string $branchId, ?string $connection, ?string $queue): void;
+    public function enqueueBranch(string $runId, string $branchId, ?string $connection, ?string $queue, bool $directDispatch = false): int;
 
     /**
      * Enqueue a queued-hierarchical-parallel resume. Must be called inside the
@@ -28,9 +35,18 @@ interface DurableOutbox
     public function enqueueQueuedResume(string $runId, ?string $connection, ?string $queue): void;
 
     /**
+     * Delete one entry by id once the job it describes has been delivered, so the
+     * relay never dispatches it again. Deleting an entry that no longer exists is
+     * a no-op. $runId is context for reporting a failure only. Implementations must
+     * not throw: a missed settle only costs one duplicate, no-op dispatch once the
+     * entry's reservation goes stale.
+     */
+    public function settle(int $entryId, ?string $runId = null): void;
+
+    /**
      * Claim and dispatch pending outbox entries, then delete successfully dispatched rows.
      *
-     * Returns a DrainResult with five counters:
+     * Returns a DrainResult with six counters:
      *   - dispatched: entries sent to a queue driver and deleted from the outbox.
      *   - skipped:    entries permanently invalid (unknown dispatch_type, unknown
      *                 queue_connection, or malformed payload) and deleted without dispatch.
@@ -41,9 +57,15 @@ interface DurableOutbox
      *                 timeout. Each is reported via report() so the outage is visible.
      *   - claimed:    total rows atomically reserved in phase 1 of this drain call.
      *   - reclaimed:  subset of claimed rows whose reserved_at was already set (non-null)
-     *                 before being overwritten — indicates the relay previously claimed but
+     *                 before being overwritten — either a relay previously claimed but
      *                 did not complete these entries (e.g. the relay process was killed or
-     *                 timed out mid-run). A non-zero value signals a falling-behind relay.
+     *                 timed out mid-run), or they were written for direct dispatch and the
+     *                 pushed job did not settle them before the reservation went stale.
+     *                 A non-zero value signals a falling-behind relay or lost/slow direct pushes.
+     *   - reclaimedDirect: the part of reclaimed that are direct-dispatch entries reclaimed
+     *                 for the first time (a lost push, a queue wait longer than the
+     *                 reservation timeout, or a pushed job that found nothing to do).
+     *                 reclaimed minus reclaimedDirect is the relay-health signal.
      *
      * @param  array<DurableDispatchType>  $types  Restrict to these types; empty means all.
      * @param  int  $limit  Maximum rows to claim per call. Values < 1 return an empty DrainResult immediately.

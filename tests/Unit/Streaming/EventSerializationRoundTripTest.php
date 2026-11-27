@@ -22,6 +22,9 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamStart;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolCall;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputDelta;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputError;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputStart;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmUnknownEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\StreamEventIdentity;
@@ -75,6 +78,9 @@ const ROUND_TRIP_EVENT_CLASSES = [
     SwarmTextDelta::class,
     SwarmTextEnd::class,
     SwarmToolCall::class,
+    SwarmToolInputDelta::class,
+    SwarmToolInputError::class,
+    SwarmToolInputStart::class,
     SwarmToolResult::class,
     SwarmUnknownEvent::class,
 ];
@@ -217,6 +223,19 @@ function event_payload_cases(): array
         'input' => null,
         'timestamp' => 1_700_000_007,
     ]];
+    $cases['step_start live final step'] = [SwarmStepStart::class, [
+        'id' => 'evt-ss-3',
+        'invocation_id' => 'inv-ss-3',
+        'node_id' => null,
+        'type' => 'swarm_step_start',
+        'run_id' => 'run-1',
+        'step_index' => 2,
+        'agent_class' => 'App\\Agents\\Writer',
+        'agent' => 'writer',
+        'input' => 'finish it',
+        'live_final_step' => true,
+        'timestamp' => 1_700_000_008,
+    ]];
 
     // SwarmStreamEnd — full + null output / empty usage+metadata.
     $cases['stream_end full'] = [SwarmStreamEnd::class, [
@@ -317,6 +336,91 @@ function event_payload_cases(): array
         'agent_class' => 'App\\Agents\\Writer',
         'delta' => null,
         'timestamp' => 1_700_000_015,
+    ]];
+
+    // SwarmToolInputStart / Delta / Error — available payload with node, and
+    // withheld payload (null fragments, status) with node null.
+    $cases['tool_input_start full'] = [SwarmToolInputStart::class, [
+        'id' => 'evt-tis-1',
+        'invocation_id' => 'inv-tis-1',
+        'node_id' => 'node-tis-1',
+        'type' => 'swarm_tool_input_start',
+        'run_id' => 'run-1',
+        'step_index' => 1,
+        'agent_class' => 'App\\Agents\\Writer',
+        'tool_id' => 'tool-1',
+        'tool_name' => 'lookup',
+        'payload_status' => 'available',
+        'timestamp' => 1_700_000_040,
+    ]];
+    $cases['tool_input_start withheld'] = [SwarmToolInputStart::class, [
+        'id' => 'evt-tis-2',
+        'invocation_id' => 'inv-tis-2',
+        'node_id' => null,
+        'type' => 'swarm_tool_input_start',
+        'run_id' => 'run-1',
+        'step_index' => 0,
+        'agent_class' => 'App\\Agents\\Writer',
+        'tool_id' => 'tool-2',
+        'tool_name' => 'search',
+        'payload_status' => 'omitted',
+        'timestamp' => 1_700_000_041,
+    ]];
+    $cases['tool_input_delta full'] = [SwarmToolInputDelta::class, [
+        'id' => 'evt-tid-1',
+        'invocation_id' => 'inv-tid-1',
+        'node_id' => 'node-tid-1',
+        'type' => 'swarm_tool_input_delta',
+        'run_id' => 'run-1',
+        'step_index' => 1,
+        'agent_class' => 'App\\Agents\\Writer',
+        'tool_id' => 'tool-1',
+        'delta' => '{"query":',
+        'payload_status' => 'available',
+        'timestamp' => 1_700_000_042,
+    ]];
+    $cases['tool_input_delta withheld'] = [SwarmToolInputDelta::class, [
+        'id' => 'evt-tid-2',
+        'invocation_id' => 'inv-tid-2',
+        'node_id' => null,
+        'type' => 'swarm_tool_input_delta',
+        'run_id' => 'run-1',
+        'step_index' => 0,
+        'agent_class' => 'App\\Agents\\Writer',
+        'tool_id' => 'tool-2',
+        'delta' => null,
+        'payload_status' => 'redacted',
+        'timestamp' => 1_700_000_043,
+    ]];
+    $cases['tool_input_error full'] = [SwarmToolInputError::class, [
+        'id' => 'evt-tie-1',
+        'invocation_id' => 'inv-tie-1',
+        'node_id' => 'node-tie-1',
+        'type' => 'swarm_tool_input_error',
+        'run_id' => 'run-1',
+        'step_index' => 1,
+        'agent_class' => 'App\\Agents\\Writer',
+        'tool_id' => 'tool-3',
+        'tool_name' => 'lookup',
+        'input' => '{"query":"par',
+        'error' => 'This tool call was not executed because its input did not complete.',
+        'payload_status' => 'available',
+        'timestamp' => 1_700_000_044,
+    ]];
+    $cases['tool_input_error withheld'] = [SwarmToolInputError::class, [
+        'id' => 'evt-tie-2',
+        'invocation_id' => 'inv-tie-2',
+        'node_id' => null,
+        'type' => 'swarm_tool_input_error',
+        'run_id' => 'run-1',
+        'step_index' => 0,
+        'agent_class' => 'App\\Agents\\Writer',
+        'tool_id' => 'tool-4',
+        'tool_name' => 'search',
+        'input' => null,
+        'error' => null,
+        'payload_status' => 'omitted',
+        'timestamp' => 1_700_000_045,
     ]];
 
     // SwarmTextEnd — full (node set) + node-null variant (no other nullable fields).

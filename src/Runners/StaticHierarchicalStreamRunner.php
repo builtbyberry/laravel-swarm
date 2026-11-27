@@ -63,7 +63,9 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
 use BuiltByBerry\LaravelSwarm\Streaming\NativeProtocolFailureReporter;
 use BuiltByBerry\LaravelSwarm\Streaming\PayloadAvailability;
 use BuiltByBerry\LaravelSwarm\Streaming\ProviderToolEventMapper;
+use BuiltByBerry\LaravelSwarm\Streaming\ToolInputEventMapper;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
+use BuiltByBerry\LaravelSwarm\Support\AgentResponseOutput;
 use BuiltByBerry\LaravelSwarm\Support\DeclinedToolResults;
 use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
@@ -932,11 +934,11 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                                 $branchContext = RunContext::fromPayload($branchContextPayload, $branchRunId);
                                 $attempt = new NativeAgentSettingsAttempt($attemptIds);
                                 $invocation = $branchContext->nativeInvocation($nativeRecipientPrefix.$branchNodeId, $input, $attempt);
-                                $response = NativeAgentInvoker::prompt($worker, $invocation);
+                                $response = NativeAgentInvoker::prompt($worker, $invocation, $branchRunId);
                                 Container::getInstance()->make(NativeOutcomeValidator::class)->validateResponse($response);
 
                                 return [
-                                    'output' => (string) $response,
+                                    'output' => AgentResponseOutput::text($response),
                                     'citation_evidence' => NativeCitationEvidence::forConcurrentWorker($citationLimits)->response($response, $branchRunId, $branchStepIndex, $agentClass)->toArray(),
                                     'usage' => $response->usage->toArray(),
                                     'duration_ms' => MonotonicTime::elapsedMilliseconds($branchStartedAt),
@@ -954,7 +956,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                                 if ($coordinator !== null && $boundary !== null) {
                                     $coordinator->end($boundary);
                                 }
-                                ActiveRunContext::exit();
+                                ActiveRunContext::exit($branchRunId);
                             }
                         };
                     }
@@ -1176,7 +1178,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
         $nativeStreamFailure = null;
         try {
             $invocation = $context->nativeInvocation($this->nativeRecipientPrefix().($nodeId ?? $stepIndex), $input, $state->nativeSettingsAttempt);
-            $stream = NativeAgentInvoker::stream($agent, $invocation);
+            $stream = NativeAgentInvoker::stream($agent, $invocation, $context->runId);
             foreach ($stream as $event) {
                 $this->outcomes->validateEvent($event);
                 if ($event instanceof TextDelta) {
@@ -1314,6 +1316,12 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         timestamp: $event->timestamp,
                         providerErrorType: $event->type,
                     );
+                } elseif (ToolInputEventMapper::skips($event, $this->capture)) {
+                    continue;
+                } elseif (($toolInput = ToolInputEventMapper::map($event, $this->capture, $context, $stepIndex, $agent::class)) !== null) {
+                    $this->tagNode($toolInput, $nodeId);
+                    yield $toolInput;
+                    $this->recordStreamTelemetry($swarm, $state, $toolInput, $streamSequenceIndex, $streamTelemetryStart, false);
                 } else {
                     // An event type this chain does not map. Record its type
                     // (never its payload) so the silent snapshot drop becomes a
@@ -1365,7 +1373,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                 );
             } finally {
                 $this->coordinator->end($boundary);
-                ActiveRunContext::exit();
+                ActiveRunContext::exit($context->runId);
                 NativeOutcomeValidator::rethrowIfUnsupported($nativeStreamFailure);
             }
         }

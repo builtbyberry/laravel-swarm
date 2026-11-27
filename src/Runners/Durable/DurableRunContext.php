@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
 use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Persistence\DatabaseContextStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
@@ -54,8 +55,34 @@ class DurableRunContext
 
     public function loadContext(string $runId): RunContext
     {
-        $payload = $this->contextStore->find($runId);
+        return $this->contextFromPayload($runId, $this->contextStore->find($runId));
+    }
 
+    /**
+     * The context a caller writes back or publishes from: read with a locking read
+     * (DatabaseContextStore::findForUpdate()), so it is the latest committed row and not
+     * an application transaction's older MySQL snapshot. Call it inside the caller's
+     * transaction, once the run row is locked.
+     *
+     * Durable dispatch requires a DatabaseContextStore
+     * (DispatchValidator::ensureDatabaseDurableInfrastructure()), so every durable run
+     * reads this way. Any other ContextStore is read with find(), with no lock: that is
+     * safe only while durable dispatch keeps that requirement. A change that lets
+     * another ContextStore run durable swarms must give it a locking read here, or #636
+     * (a closer erasing a fan-out's context on MySQL) returns for it.
+     */
+    public function loadContextForUpdate(string $runId): RunContext
+    {
+        return $this->contextFromPayload($runId, $this->contextStore instanceof DatabaseContextStore
+            ? $this->contextStore->findForUpdate($runId)
+            : $this->contextStore->find($runId));
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $payload
+     */
+    private function contextFromPayload(string $runId, ?array $payload): RunContext
+    {
         if ($payload === null) {
             throw new SwarmException("Durable run [{$runId}] is missing its persisted context.");
         }

@@ -173,7 +173,10 @@ retry, but other effects may already have occurred; inspect before operator rest
 
 The [executed preservation limits](ai-0112-preservation-evidence.md#supported-combinations-and-operational-limits)
 remain: active-context capture is required for queued/durable execution; signal
-record-before-release and run/key idempotency leave a crash window; child recovery
+record-before-release and run/key idempotency leave a crash window (*update
+(realtime-dispatch, #611):* the database store now records a signal inside its
+acceptance transaction, so that window is closed there; a store without
+`Contracts\AcceptsDurableSignals` keeps it); child recovery
 needs captured input and claimed intents can strand; non-final stream checkpoints
 are best-effort, final/unfinished work may reexecute; cancellation is cooperative;
 durable stores have concrete database requirements. No child recovery repair,

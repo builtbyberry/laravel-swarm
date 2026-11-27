@@ -27,19 +27,30 @@ class AdvanceDurableBranch implements ShouldQueue
     use Queueable;
     use SerializesModels;
 
+    /**
+     * The outbox entry this job was pushed for directly on commit, deleted once
+     * the job acquires its lease. Null for relay and recovery pushes, which own
+     * no entry. A declared (not promoted) property so a payload queued without
+     * it restores to null: SerializesModels restores declared properties only
+     * and never runs the constructor.
+     */
+    public ?int $outboxEntryId = null;
+
     public function __construct(
         public string $runId,
         public string $branchId,
         ?int $enqueuedAtMs = null,
+        ?int $outboxEntryId = null,
     ) {
         $this->enqueuedAtMs = $enqueuedAtMs ?? self::telemetryEpochMilliseconds();
+        $this->outboxEntryId = $outboxEntryId;
         $this->applyDurableAdvanceJobTimeout();
     }
 
     public function handle(DurableSwarmManager $manager): void
     {
         $this->withoutNativeOutcomeRetry(fn () => $this->withSwarmJobTelemetry(function () use ($manager): void {
-            $manager->advanceBranch($this->runId, $this->branchId);
+            $manager->advanceBranch($this->runId, $this->branchId, $this->outboxEntryId);
         }));
     }
 

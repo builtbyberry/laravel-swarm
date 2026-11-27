@@ -10,6 +10,9 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmProviderToolAttemptInvalidat
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmProviderToolEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolCall;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputDelta;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputError;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolInputStart;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
 use BuiltByBerry\LaravelSwarm\Streaming\StreamEventIdentity;
 
@@ -172,7 +175,8 @@ final class CausalLogView
         foreach ($ordered as $event) {
             $id = $this->eventId($event);
             $annotation = $id !== null ? ($annotations[$id] ?? null) : null;
-            if (($event instanceof SwarmProviderToolEvent || $event instanceof SwarmToolCall || $event instanceof SwarmToolResult)
+            if (($event instanceof SwarmProviderToolEvent || $event instanceof SwarmToolCall || $event instanceof SwarmToolResult
+                || $event instanceof SwarmToolInputStart || $event instanceof SwarmToolInputDelta || $event instanceof SwarmToolInputError)
                 && $event->nodeId !== null && $event->attemptEpoch !== null
                 && $event->attemptEpoch < ($this->providerInvalidBefore[$event->nodeId] ?? 0)) {
                 $annotation = ['type' => CausalVoidEdgeType::NodeReexecuted,
